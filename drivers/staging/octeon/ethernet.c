@@ -863,8 +863,10 @@ static int cvm_oct_probe(struct platform_device *pdev)
 
 			case CVMX_HELPER_INTERFACE_MODE_SGMII:
 				priv->phy_mode = PHY_INTERFACE_MODE_SGMII;
-				dev->netdev_ops = &cvm_oct_sgmii_netdev_ops;
-				strscpy(dev->name, "eth%d", sizeof(dev->name));
+				if (of_device_is_available(priv->of_node)) {
+					dev->netdev_ops = &cvm_oct_sgmii_netdev_ops;
+					strscpy(dev->name, "eth%d", sizeof(dev->name));
+				}
 				break;
 
 			case CVMX_HELPER_INTERFACE_MODE_SPI:
