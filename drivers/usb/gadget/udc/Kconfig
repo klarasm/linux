@@ -222,6 +222,13 @@ config USB_PXA27X
 	   dynamically linked module called "pxa27x_udc" and force all
 	   gadget drivers to also be dynamically linked.
 
+config USB_K1X_UDC
+	tristate "Spacemit K1X USB2.0 Device Controller"
+	depends on HAS_DMA
+	help
+	  Include a high speed USB2.0 OTG controller, which can be configured 
+	  as high speed or full speed USB peripheral.
+
 config USB_SNP_CORE
 	depends on (USB_AMD5536UDC || USB_SNP_UDC_PLAT)
 	depends on HAS_DMA
