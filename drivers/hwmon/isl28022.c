@@ -438,7 +438,7 @@ static struct i2c_driver isl28022_driver = {
 	.driver = {
 		.name	= "isl28022",
 	},
-	.probe_new	= isl28022_probe,
+	.probe		= isl28022_probe,
 	.id_table	= isl28022_ids,
 };
 
