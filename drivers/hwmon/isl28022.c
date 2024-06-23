@@ -108,7 +108,7 @@ static int isl28022_read(struct device *dev, enum hwmon_sensor_types type,
 			*val = (long)(((u16)regval) & 0xFFFC);
 			break;
 		default:
-			return -EINVAL;
+			return -EOPNOTSUPP;
 		}
 		break;
 	case hwmon_curr:
@@ -118,8 +118,8 @@ static int isl28022_read(struct device *dev, enum hwmon_sensor_types type,
 					  ISL28022_REG_CURRENT, &regval);
 			if (err < 0)
 				return err;
-			*val = ((long)regval * 1250L * (long)data->gain) /
-				(long)data->shunt;
+			*val = (regval * 1250L * data->gain) /
+				data->shunt;
 			break;
 		default:
 			return -EINVAL;
@@ -132,8 +132,8 @@ static int isl28022_read(struct device *dev, enum hwmon_sensor_types type,
 					  ISL28022_REG_POWER, &regval);
 			if (err < 0)
 				return err;
-			*val = ((51200000L * ((long)data->gain)) /
-				(long)data->shunt) * (long)regval;
+			*val = ((51200000L * data->gain) /
+				data->shunt) * regval;
 			break;
 		default:
 			return -EINVAL;
@@ -375,17 +375,11 @@ static int isl28022_config(struct isl28022_data *data)
 			((ISL28022_ADC_15_1 + __ffs(data->average)) << ISL28022_SADC_SHIFT) |
 			((ISL28022_ADC_15_1 + __ffs(data->average)) << ISL28022_BADC_SHIFT);
 
-	data->calib = data->shunt ? 0x8000 / data->gain : 0;
-
 	err = regmap_write(data->regmap, ISL28022_REG_CONFIG, data->config);
 	if (err < 0)
 		return err;
 
-	err = regmap_write(data->regmap, ISL28022_REG_CALIB, data->calib);
-	if (err < 0)
-		return err;
-
-	return 0;
+	return regmap_write(data->regmap, ISL28022_REG_CALIB, data->calib);
 }
 
 static int isl28022_probe(struct i2c_client *client)
