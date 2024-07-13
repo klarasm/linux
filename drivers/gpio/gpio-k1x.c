@@ -61,16 +61,14 @@ struct k1x_gpio_chip {
 
 static int k1x_gpio_to_irq(struct gpio_chip *chip, unsigned offset)
 {
-	struct k1x_gpio_chip *k1x_chip =
-			container_of(chip, struct k1x_gpio_chip, chip);
+	struct k1x_gpio_chip *k1x_chip = gpiochip_get_data(chip);
 
 	return irq_create_mapping(k1x_chip->domain, offset);
 }
 
 static int k1x_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 {
-	struct k1x_gpio_chip *k1x_chip =
-			container_of(chip, struct k1x_gpio_chip, chip);
+	struct k1x_gpio_chip *k1x_chip = gpiochip_get_data(chip);
 	struct k1x_gpio_bank *bank =
 			&k1x_chip->banks[k1x_gpio_to_bank_idx(offset)];
 	u32 bit = (1 << k1x_gpio_to_bank_offset(offset));
@@ -83,8 +81,7 @@ static int k1x_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 static int k1x_gpio_direction_output(struct gpio_chip *chip,
 				     unsigned offset, int value)
 {
-	struct k1x_gpio_chip *k1x_chip =
-			container_of(chip, struct k1x_gpio_chip, chip);
+	struct k1x_gpio_chip *k1x_chip = gpiochip_get_data(chip);
 	struct k1x_gpio_bank *bank =
 			&k1x_chip->banks[k1x_gpio_to_bank_idx(offset)];
 	u32 bit = (1 << k1x_gpio_to_bank_offset(offset));
@@ -99,8 +96,7 @@ static int k1x_gpio_direction_output(struct gpio_chip *chip,
 
 static int k1x_gpio_get(struct gpio_chip *chip, unsigned offset)
 {
-	struct k1x_gpio_chip *k1x_chip =
-			container_of(chip, struct k1x_gpio_chip, chip);
+	struct k1x_gpio_chip *k1x_chip = gpiochip_get_data(chip);
 	struct k1x_gpio_bank *bank =
 			&k1x_chip->banks[k1x_gpio_to_bank_idx(offset)];
 	u32 bit = (1 << k1x_gpio_to_bank_offset(offset));
@@ -113,8 +109,7 @@ static int k1x_gpio_get(struct gpio_chip *chip, unsigned offset)
 
 static void k1x_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 {
-	struct k1x_gpio_chip *k1x_chip =
-			container_of(chip, struct k1x_gpio_chip, chip);
+	struct k1x_gpio_chip *k1x_chip = gpiochip_get_data(chip);
 	struct k1x_gpio_bank *bank =
 			&k1x_chip->banks[k1x_gpio_to_bank_idx(offset)];
 	u32 bit = (1 << k1x_gpio_to_bank_offset(offset));
@@ -131,8 +126,7 @@ static int k1x_gpio_of_xlate(struct gpio_chip *chip,
 			     const struct of_phandle_args *gpiospec,
 			     u32 *flags)
 {
-	struct k1x_gpio_chip *k1x_chip =
-			container_of(chip, struct k1x_gpio_chip, chip);
+	struct k1x_gpio_chip *k1x_chip = gpiochip_get_data(chip);
 
 	/* GPIO index start from 0. */
 	if (gpiospec->args[0] >= k1x_chip->ngpio)
@@ -392,7 +386,7 @@ static int k1x_gpio_probe(struct platform_device *pdev)
 		goto err;
 	}
 
-	gpiochip_add(&k1x_chip->chip);
+	gpiochip_add_data(&k1x_chip->chip, k1x_chip);
 
 	/* clear all GPIO edge detects */
 	for (i = 0; i < k1x_chip->nbank; i++) {
