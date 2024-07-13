@@ -298,7 +298,7 @@ static int k1x_thermal_probe(struct platform_device *pdev)
 		}
 		tzd->tzp->no_hwmon = false;
 
-		ret = devm_thermal_add_hwmon_sysfs(tzd);
+		ret = devm_thermal_add_hwmon_sysfs(dev, tzd);
 		if (ret < 0) {
 			dev_err_probe(dev, ret, "failed to register the hwmon entry");
 			return ret;
