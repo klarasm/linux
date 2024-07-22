@@ -23,6 +23,7 @@
 #include <linux/pm_qos.h>
 #include <linux/clk.h>
 #include <linux/reset.h>
+#include <linux/vmalloc.h>
 #include "jpuconfig.h"
 #include "regdefine.h"
 #include "jpu.h"
