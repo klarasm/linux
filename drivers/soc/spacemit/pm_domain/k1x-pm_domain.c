@@ -20,6 +20,7 @@
 #include <linux/mfd/syscon.h>
 #include <linux/spinlock_types.h>
 #include <linux/regulator/consumer.h>
+#include <linux/platform_device.h>
 #include <dt-bindings/pmu/k1x_pmu.h>
 #include <linux/syscore_ops.h>
 #include "atomic_qos.h"
