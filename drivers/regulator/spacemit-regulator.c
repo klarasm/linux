@@ -15,6 +15,7 @@
 #include <linux/regulator/driver.h>
 #include <linux/regulator/of_regulator.h>
 #include <linux/gpio/consumer.h>
+#include <linux/platform_device.h>
 #include <linux/mfd/spacemit/spacemit_pmic.h>
 
 static struct regulator_match_data *match_data;
