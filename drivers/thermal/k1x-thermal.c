@@ -11,6 +11,7 @@
 #include <linux/reset.h>
 #include "thermal_hwmon.h"
 #include "k1x-thermal.h"
+#include "thermal_core.h"
 #include "thermal_hwmon.h"
 
 #define MAX_SENSOR_NUMBER		5
