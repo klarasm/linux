@@ -294,7 +294,7 @@ err_match_data:
 	return ret;
 }
 
-static int spacemit_dwmac_remove(struct platform_device *pdev)
+static void spacemit_dwmac_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct stmmac_priv *priv = netdev_priv(ndev);
@@ -303,8 +303,6 @@ static int spacemit_dwmac_remove(struct platform_device *pdev)
 	stmmac_pltfr_remove(pdev);
 	reset_control_assert(spacemit_plat_dat->gmac_dma_rstc);
 	reset_control_assert(spacemit_plat_dat->gmac_csr_rstc);
-
-	return 0;
 }
 
 static struct platform_driver spacemit_dwmac_driver = {
