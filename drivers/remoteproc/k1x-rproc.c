@@ -25,6 +25,7 @@
 #include <linux/delay.h>
 #include <linux/syscore_ops.h>
 #include <linux/pm_domain.h>
+#include <linux/platform_device.h>
 #include <linux/spacemit/platform_pm_ops.h>
 #include "remoteproc_internal.h"
 
