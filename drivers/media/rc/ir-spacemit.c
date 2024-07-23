@@ -9,6 +9,7 @@
 #include <linux/module.h>
 #include <linux/of_platform.h>
 #include <linux/reset.h>
+#include <linux/platform_device.h>
 #include <media/rc-core.h>
 #include <linux/rpmsg.h>
 
