@@ -15,6 +15,9 @@ config SPACEMIT_PM_DOMAINS
 
 endif
 
+config SPACEMIT_SUSPEND
+	def_bool SUSPEND && CPU_PM
+
 config SPACEMIT_REBOOT_CONTROL
 	tristate "Spacemit k1x reboot handler"
 	depends on SOC_SPACEMIT_K1X
