@@ -138,8 +138,7 @@ static int __init spacemit_system_suspend_init(void)
 	if (sbi_spec_version >= sbi_mk_version(1, 0) &&
 	    sbi_probe_extension(SBI_EXT_SUSP) > 0) {
 		pr_info("SBI SUSP extension detected\n");
-		if (IS_ENABLED(CONFIG_SUSPEND))
-			suspend_set_ops(&spacemit_system_suspend_ops);
+		suspend_set_ops(&spacemit_system_suspend_ops);
 	}
 
 	return 0;
