@@ -45,6 +45,7 @@ static void _suspend_restore_csrs(struct suspend_context *context)
 #endif
 }
 
+#ifdef SUSPEND
 static int spacemit_cpu_suspend(unsigned long arg,
 		int (*finish)(unsigned long arg,
 			      unsigned long entry,
@@ -90,6 +91,7 @@ static int spacemit_cpu_suspend(unsigned long arg,
 
 	return rc;
 }
+#endif
 
 #ifdef CONFIG_RISCV_SBI
 static int spacemit_system_suspend(unsigned long sleep_type,
@@ -106,26 +108,34 @@ static int spacemit_system_suspend(unsigned long sleep_type,
 	return ret.value;
 }
 
+#ifdef SUSPEND
 static int spacemit_system_suspend_enter(suspend_state_t state)
 {
 	return spacemit_cpu_suspend(SBI_SUSP_SLEEP_TYPE_SUSPEND_TO_RAM, spacemit_system_suspend);
 }
+#endif
 
+#ifdef SUSPEND
 static int spacemit_prepare_late(void)
 {
 	return platform_pm_prepare_late_suspend();
 }
+#endif
 
+#ifdef SUSPEND
 static void spacemit_wake(void)
 {
 	platform_pm_resume_wake();
 }
+#endif
 
 static const struct platform_suspend_ops spacemit_system_suspend_ops ={
 	.valid = suspend_valid_only_mem,
+#ifdef SUSPEND
 	.enter = spacemit_system_suspend_enter,
 	.prepare_late = spacemit_prepare_late,
 	.wake = spacemit_wake,
+#endif
 };
 
 extern unsigned long sbi_spec_version;
