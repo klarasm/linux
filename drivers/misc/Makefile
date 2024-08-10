@@ -72,3 +72,6 @@ obj-$(CONFIG_TPS6594_PFSM)	+= tps6594-pfsm.o
 obj-$(CONFIG_NSM)		+= nsm.o
 obj-$(CONFIG_MARVELL_CN10K_DPI)	+= mrvl_cn10k_dpi.o
 obj-y				+= keba/
+obj-$(CONFIG_SPACEMIT_TCM)	+= tcm.o
+obj-$(CONFIG_OCP2138)	+= ocp2138.o
+obj-$(CONFIG_ICM42607)		+= icm42607.o input-polldev.o
