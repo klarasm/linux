@@ -105,6 +105,33 @@ static int riscv_ext_zicboz_validate(const struct riscv_isa_ext_data *data,
 	return 0;
 }
 
+struct cpumask ai_core_mask_get(void)
+{
+	struct device_node *node;
+	const char *cpu_ai;
+	struct cpumask	cpu_mask;
+	unsigned long hartid;
+	int rc;
+
+	cpumask_clear(&cpu_mask);
+
+	for_each_of_cpu_node(node) {
+		rc = riscv_of_processor_hartid(node, &hartid);
+		if (rc < 0)
+			continue;
+
+		if (of_property_read_string(node, "cpu-ai", &cpu_ai)) {
+			continue;
+		}
+
+		if(!strcmp(cpu_ai, "true")) {
+			cpumask_set_cpu(hartid, &cpu_mask);
+		}
+	}
+
+	return cpu_mask;
+}
+
 static int riscv_ext_zca_depends(const struct riscv_isa_ext_data *data,
 				 const unsigned long *isa_bitmap)
 {
