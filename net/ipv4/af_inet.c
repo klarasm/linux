@@ -2025,7 +2025,7 @@ out_unregister_tcp_proto:
 	goto out;
 }
 
-fs_initcall(inet_init);
+subsys_initcall(inet_init);
 
 /* ------------------------------------------------------------------------ */
 
