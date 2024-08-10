@@ -15,3 +15,23 @@ config PINCTRL_SPACEMIT_K1
 	  This pin controller allows selecting the mux function for
 	  each pin. This driver can also be built as a module called
 	  pinctrl-k1.
+
+config PINCTRL_SPACEMIT
+	tristate
+	depends on OF
+	select GENERIC_PINCTRL_GROUPS
+	select GENERIC_PINMUX_FUNCTIONS
+	select GENERIC_PINCONF
+	help
+	  Say Y to select the pinctrl driver for K1 SoC.
+	  This pin controller allows selecting the mux function for
+	  each pin. This driver can also be built as a module called
+	  pinctrl-k1.
+
+config PINCTRL_K1PRO
+	bool "Spacemit K1PRO pinctrl driver"
+	depends on OF
+	depends on SOC_SPACEMIT_K1_FPGA
+	select PINCTRL_SPACEMIT
+	help
+	  Say Y here to enable the k1-pro pinctrl driver
