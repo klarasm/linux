@@ -31,12 +31,10 @@
 		};
 
 		cpu_2: cpu@2 {
-			reg = <2>;
 			cpu-ai = "true";
 		};
 
 		cpu_3: cpu@3 {
-			reg = <3>;
 			cpu-ai = "true";
 		};
 
