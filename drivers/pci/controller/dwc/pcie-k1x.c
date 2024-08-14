@@ -1154,8 +1154,8 @@ int k1x_pcie_msi_host_init(struct dw_pcie_rp *pp)
 }
 
 static const struct dw_pcie_host_ops k1x_pcie_host_ops = {
-	.host_init = k1x_pcie_host_init,
-	.msi_host_init = k1x_pcie_msi_host_init,
+	.init = k1x_pcie_host_init,
+	.msi_init = k1x_pcie_msi_host_init,
 };
 
 static void (*k1x_pcie_irq_callback)(int);
@@ -1280,24 +1280,20 @@ __maybe_unused static void k1x_pcie_ep_disable_irq(struct dw_pcie_ep *ep)
 }
 
 static int k1x_pcie_raise_irq(struct dw_pcie_ep *ep, u8 func_no,
-				 enum pci_epc_irq_type type, u16 interrupt_num)
+				 unsigned int type, u16 interrupt_num)
 {
 	struct dw_pcie *pci = to_dw_pcie_from_ep(ep);
-	//struct k1x_pcie *k1x = to_k1x_pcie(pci);
 
 	switch (type) {
-	case PCI_EPC_IRQ_LEGACY:
-		dev_err(pci->dev, "UNKNOWN IRQ type\n");
-		//k1x_pcie_raise_legacy_irq(k1x);
-		return -EINVAL;
-	case PCI_EPC_IRQ_MSI:
+	case PCI_IRQ_MSI:
 		dw_pcie_ep_raise_msi_irq(ep, func_no, interrupt_num);
 		break;
-	case PCI_EPC_IRQ_MSIX:
+	case PCI_IRQ_MSIX:
 		dw_pcie_ep_raise_msix_irq(ep, func_no, interrupt_num);
 		break;
 	default:
 		dev_err(pci->dev, "UNKNOWN IRQ type\n");
+		return -EINVAL;
 	}
 
 	return 0;
@@ -1316,7 +1312,7 @@ k1x_pcie_get_features(struct dw_pcie_ep *ep)
 }
 
 static struct dw_pcie_ep_ops pcie_ep_ops = {
-	.ep_init = k1x_pcie_ep_init,
+	.init = k1x_pcie_ep_init,
 	.raise_irq = k1x_pcie_raise_irq,
 	//.enable_irq = k1x_pcie_ep_enable_irq,
 	//.disable_irq = k1x_pcie_ep_disable_irq,
