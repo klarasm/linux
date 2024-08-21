@@ -3212,7 +3212,7 @@ void dcn10_set_drr(struct pipe_ctx **pipe_ctx,
 	 * as well.
 	 */
 	for (i = 0; i < num_pipes; i++) {
-		if ((pipe_ctx[i]->stream_res.tg != NULL) && pipe_ctx[i]->stream_res.tg->funcs) {
+		if ((pipe_ctx[i] != NULL) && (pipe_ctx[i]->stream_res.tg != NULL) && pipe_ctx[i]->stream_res.tg->funcs) {
 			if (pipe_ctx[i]->stream_res.tg->funcs->set_drr)
 				pipe_ctx[i]->stream_res.tg->funcs->set_drr(
 					pipe_ctx[i]->stream_res.tg, &params);
