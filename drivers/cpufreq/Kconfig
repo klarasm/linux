@@ -331,7 +331,7 @@ config SPACEMIT_K1X_CPUFREQ
 	select CPUFREQ_DT
 	select CPUFREQ_DT_PLATDEV
 	help
-	  This adds the CPUFreq driver support for Freescale QorIQ SoCs
+	  This adds the CPUFreq driver support for Spacemit K1 SoCs
 	  which are capable of changing the CPU's frequency dynamically.
 
 config ACPI_CPPC_CPUFREQ
