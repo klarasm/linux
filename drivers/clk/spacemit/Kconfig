@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config SPACEMIT_CCU
+	tristate "Clock support for Spacemit SoCs"
+	depends on ARCH_SPACEMIT || COMPILE_TEST
+	default y
+	select MFD_SYSCON
+	help
+	  This driver supports clock controllers integrated in Spacemit K1
+	  SoC. If unsure, say N.
