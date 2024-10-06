@@ -113,7 +113,7 @@ extern int smb3_query_mf_symlink(unsigned int xid, struct cifs_tcon *tcon,
 			  unsigned int *pbytes_read);
 int smb2_fix_symlink_target_type(char **target, bool directory, struct cifs_sb_info *cifs_sb);
 int smb2_parse_native_symlink(char **target, const char *buf, unsigned int len,
-			      bool unicode, bool relative,
+			      bool relative,
 			      const char *full_path,
 			      struct cifs_sb_info *cifs_sb);
 int smb2_parse_symlink_response(struct cifs_sb_info *cifs_sb,
