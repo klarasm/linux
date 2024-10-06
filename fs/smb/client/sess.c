@@ -526,6 +526,7 @@ cifs_ses_add_channel(struct cifs_ses *ses,
 	ctx->password = ses->password;
 	ctx->sectype = ses->sectype;
 	ctx->sign = ses->sign;
+	ctx->unicode = ses->unicode;
 
 	/* UNC and paths */
 	/* XXX: Use ses->server->hostname? */

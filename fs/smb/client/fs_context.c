@@ -133,6 +133,7 @@ const struct fs_parameter_spec smb3_fs_parameters[] = {
 	fsparam_flag("rootfs", Opt_rootfs),
 	fsparam_flag("compress", Opt_compress),
 	fsparam_flag("witness", Opt_witness),
+	fsparam_flag_no("unicode", Opt_unicode),
 
 	/* Mount options which take uid or gid */
 	fsparam_uid("backupuid", Opt_backupuid),
@@ -960,6 +961,10 @@ static int smb3_verify_reconfigure_ctx(struct fs_context *fc,
 		cifs_errorf(fc, "can not change iocharset during remount\n");
 		return -EINVAL;
 	}
+	if (new_ctx->unicode != old_ctx->unicode) {
+		cifs_errorf(fc, "can not change unicode during remount\n");
+		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -1621,6 +1626,10 @@ static int smb3_fs_context_parse_param(struct fs_context *fc,
 		ctx->witness = true;
 		pr_warn_once("Witness protocol support is experimental\n");
 		break;
+	case Opt_unicode:
+		ctx->unicode = !result.negated;
+		cifs_dbg(FYI, "unicode set to %d\n", ctx->unicode);
+		break;
 	case Opt_rootfs:
 #ifndef CONFIG_CIFS_ROOT
 		cifs_dbg(VFS, "rootfs support requires CONFIG_CIFS_ROOT config option\n");
@@ -1921,6 +1930,8 @@ int smb3_init_fs_context(struct fs_context *fc)
 	ctx->reparse_type = CIFS_REPARSE_TYPE_DEFAULT;
 	ctx->symlink_type = CIFS_SYMLINK_TYPE_DEFAULT;
 	ctx->nonativesocket = 0;
+
+	ctx->unicode = -1; /* autodetect, but prefer UNICODE mode */
 
 /*
  *	short int override_uid = -1;
