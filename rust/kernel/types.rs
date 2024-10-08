@@ -7,6 +7,7 @@ use alloc::boxed::Box;
 use core::{
     cell::UnsafeCell,
     marker::PhantomPinned,
+    marker::PhantomData,
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
     pin::Pin,
