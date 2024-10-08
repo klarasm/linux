@@ -299,7 +299,7 @@ static irqreturn_t timer_interrupt(int irq, void *dev_id)
 	return IRQ_NONE;
 }
 
-static int timer_shutdown(struct clock_event_device *dev)
+static int k1x_timer_shutdown(struct clock_event_device *dev)
 {
 	struct spacemit_timer_evt *evt;
 	unsigned long flags;
@@ -524,7 +524,7 @@ int __init spacemit_timer_setup(struct spacemit_timer_evt *evt)
 	evt->ced.features = CLOCK_EVT_FEAT_ONESHOT;
 	evt->ced.rating = 200;
 	evt->ced.set_next_event = timer_set_next_event;
-	evt->ced.set_state_shutdown = timer_shutdown;
+	evt->ced.set_state_shutdown = k1x_timer_shutdown;
 	evt->ced.tick_resume = timer_resume;
 	evt->ced.irq = evt->irq;
 
