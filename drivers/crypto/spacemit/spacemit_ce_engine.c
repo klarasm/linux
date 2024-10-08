@@ -727,9 +727,8 @@ static void spacemit_crypto_start_test(struct crypto_larval *larval)
 	}
 
 	larval->test_started = true;
+	crypto_schedule_test(larval);
 	up_write(&crypto_alg_sem);
-
-	crypto_wait_for_test(larval);
 }
 
 static struct crypto_alg *spacemit_crypto_larval_wait(struct crypto_alg *alg)
