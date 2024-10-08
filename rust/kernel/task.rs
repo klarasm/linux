@@ -7,7 +7,8 @@
 use crate::{
     bindings,
     pid_namespace::PidNamespace,
-    types::{ARef, NotThreadSafe, Opaque},
+    types::{ NotThreadSafe, Opaque},
+    sync::aref::ARef,
 };
 use core::{
     cmp::{Eq, PartialEq},

@@ -9,7 +9,8 @@
 
 use crate::{
     bindings,
-    types::{AlwaysRefCounted, Opaque},
+    types::Opaque,
+    sync::aref::AlwaysRefCounted,
 };
 use core::ptr;
 

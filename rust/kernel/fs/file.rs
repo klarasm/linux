@@ -11,7 +11,8 @@ use crate::{
     bindings,
     cred::Credential,
     error::{code::*, Error, Result},
-    types::{ARef, AlwaysRefCounted, NotThreadSafe, Opaque},
+    types::{NotThreadSafe, Opaque},
+    sync::aref::{ARef, AlwaysRefCounted},
 };
 use core::ptr;
 
