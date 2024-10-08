@@ -145,7 +145,7 @@ config REALTEK_OTTO_TIMER
 	  such as RTL9301, RTL9302 or RTL9303.
 
 config SPACEMIT_K1X_TIMER
-	bool "Spacemit k1x timer driver" if COMPILE_TEST
+	bool "Spacemit k1x timer driver" if (COMPILE_TEST || SOC_SPACEMIT_K1X)
 	select CLKSRC_MMIO
 	select TIMER_OF
 	help
