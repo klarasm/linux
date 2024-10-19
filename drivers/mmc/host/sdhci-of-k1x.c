@@ -1214,6 +1214,7 @@ static int spacemit_sdhci_execute_sw_tuning(struct sdhci_host *host, u32 opcode)
 		return 0;
 	}
 
+#ifdef CPU_FREQ
 	/* specify cpu freq during tuning rx windows if current cpufreq exceed 1.6G */
 	if (pdata->rx_tuning_freq) {
 		clk_rate = cpufreq_generic_get(0);
@@ -1229,6 +1230,7 @@ static int spacemit_sdhci_execute_sw_tuning(struct sdhci_host *host, u32 opcode)
 			}
 		}
 	}
+#endif
 
 	rxtuning->select_delay_num = 0;
 	rxtuning->current_delay_index = 0;
