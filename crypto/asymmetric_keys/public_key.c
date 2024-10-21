@@ -165,14 +165,22 @@ static int software_key_query(const struct kernel_pkey_params *params,
 {
 	struct crypto_akcipher *tfm;
 	struct public_key *pkey = params->key->payload.data[asym_crypto];
+	const char *hash_algo = params->hash_algo;
 	char alg_name[CRYPTO_MAX_ALG_NAME];
 	struct crypto_sig *sig;
 	u8 *key, *ptr;
 	int ret, len;
 	bool issig;
 
+	/*
+	 * Specifying hash_algo has historically been optional for pkcs1,
+	 * so use an arbitrary algorithm for backward compatibility.
+	 */
+	if (strcmp(params->encoding, "pkcs1") == 0 && !hash_algo)
+		hash_algo = "sha256";
+
 	ret = software_key_determine_akcipher(pkey, params->encoding,
-					      params->hash_algo, alg_name,
+					      hash_algo, alg_name,
 					      &issig, kernel_pkey_sign);
 	if (ret < 0)
 		return ret;
