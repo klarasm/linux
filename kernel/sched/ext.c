@@ -7140,7 +7140,7 @@ __bpf_kfunc_start_defs();
 /**
  * scx_bpf_exit_bstr - Gracefully exit the BPF scheduler.
  * @exit_code: Exit value to pass to user space via struct scx_exit_info.
- * @fmt: error message format string
+ * @fmt__str: error message format string
  * @data: format string parameters packaged using ___bpf_fill() macro
  * @data__sz: @data len, must end in '__sz' for the verifier
  *
@@ -7161,7 +7161,7 @@ __bpf_kfunc void scx_bpf_exit_bstr(s64 exit_code, char *fmt,
 
 /**
  * scx_bpf_error_bstr - Indicate fatal error
- * @fmt: error message format string
+ * @fmt__str: error message format string
  * @data: format string parameters packaged using ___bpf_fill() macro
  * @data__sz: @data len, must end in '__sz' for the verifier
  *
@@ -7182,7 +7182,7 @@ __bpf_kfunc void scx_bpf_error_bstr(char *fmt, unsigned long long *data,
 
 /**
  * scx_bpf_dump - Generate extra debug dump specific to the BPF scheduler
- * @fmt: format string
+ * @fmt__str: format string
  * @data: format string parameters packaged using ___bpf_fill() macro
  * @data__sz: @data len, must end in '__sz' for the verifier
  *
