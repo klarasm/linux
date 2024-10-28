@@ -66,6 +66,13 @@ enum bmi270_scan {
 	BMI270_SCAN_GYRO_Z,
 };
 
+const struct bmi270_chip_info bmi270_chip_info = {
+	.name = "bmi270",
+	.chip_id = BMI270_CHIP_ID_VAL,
+	.fw_name = BMI270_INIT_DATA_FILE,
+};
+EXPORT_SYMBOL_NS_GPL(bmi270_chip_info, IIO_BMI270);
+
 static int bmi270_get_data(struct bmi270_data *bmi270_device,
 			   int chan_type, int axis, int *val)
 {
@@ -121,8 +128,6 @@ static const struct iio_info bmi270_info = {
 	.modified = 1,						\
 	.channel2 = IIO_MOD_##_axis,				\
 	.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),		\
-	.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE) |	\
-		BIT(IIO_CHAN_INFO_FREQUENCY),			\
 }
 
 #define BMI270_ANG_VEL_CHANNEL(_axis) {				\
@@ -130,8 +135,6 @@ static const struct iio_info bmi270_info = {
 	.modified = 1,						\
 	.channel2 = IIO_MOD_##_axis,				\
 	.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),		\
-	.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE) |	\
-		BIT(IIO_CHAN_INFO_FREQUENCY),			\
 }
 
 static const struct iio_chan_spec bmi270_channels[] = {
@@ -154,7 +157,7 @@ static int bmi270_validate_chip_id(struct bmi270_data *bmi270_device)
 	if (ret)
 		return dev_err_probe(dev, ret, "Failed to read chip id");
 
-	if (chip_id != BMI270_CHIP_ID_VAL)
+	if (chip_id != bmi270_device->chip_info->chip_id)
 		dev_info(dev, "Unknown chip id 0x%x", chip_id);
 
 	return 0;
@@ -187,7 +190,8 @@ static int bmi270_write_calibration_data(struct bmi270_data *bmi270_device)
 		return dev_err_probe(dev, ret,
 				     "Failed to prepare device to load init data");
 
-	ret = request_firmware(&init_data, BMI270_INIT_DATA_FILE, dev);
+	ret = request_firmware(&init_data,
+			       bmi270_device->chip_info->fw_name, dev);
 	if (ret)
 		return dev_err_probe(dev, ret, "Failed to load init data file");
 
@@ -274,7 +278,8 @@ static int bmi270_chip_init(struct bmi270_data *bmi270_device)
 	return bmi270_configure_imu(bmi270_device);
 }
 
-int bmi270_core_probe(struct device *dev, struct regmap *regmap)
+int bmi270_core_probe(struct device *dev, struct regmap *regmap,
+		      const struct bmi270_chip_info *chip_info)
 {
 	int ret;
 	struct bmi270_data *bmi270_device;
@@ -287,6 +292,7 @@ int bmi270_core_probe(struct device *dev, struct regmap *regmap)
 	bmi270_device = iio_priv(indio_dev);
 	bmi270_device->dev = dev;
 	bmi270_device->regmap = regmap;
+	bmi270_device->chip_info = chip_info;
 
 	ret = bmi270_chip_init(bmi270_device);
 	if (ret)
@@ -294,7 +300,7 @@ int bmi270_core_probe(struct device *dev, struct regmap *regmap)
 
 	indio_dev->channels = bmi270_channels;
 	indio_dev->num_channels = ARRAY_SIZE(bmi270_channels);
-	indio_dev->name = "bmi270";
+	indio_dev->name = chip_info->name;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->info = &bmi270_info;
 
