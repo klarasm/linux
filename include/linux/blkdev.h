@@ -25,6 +25,7 @@
 #include <linux/uuid.h>
 #include <linux/xarray.h>
 #include <linux/file.h>
+#include <linux/lockdep.h>
 
 struct module;
 struct request_queue;
@@ -349,6 +350,9 @@ typedef unsigned int __bitwise blk_flags_t;
 /* I/O topology is misaligned */
 #define BLK_FLAG_MISALIGNED		((__force blk_flags_t)(1u << 1))
 
+/* passthrough command IO accounting */
+#define BLK_FLAG_IOSTATS_PASSTHROUGH	((__force blk_flags_t)(1u << 2))
+
 struct queue_limits {
 	blk_features_t		features;
 	blk_flags_t		flags;
@@ -471,6 +475,11 @@ struct request_queue {
 	struct xarray		hctx_table;
 
 	struct percpu_ref	q_usage_counter;
+	struct lock_class_key	io_lock_cls_key;
+	struct lockdep_map	io_lockdep_map;
+
+	struct lock_class_key	q_lock_cls_key;
+	struct lockdep_map	q_lockdep_map;
 
 	struct request		*last_merge;
 
@@ -617,6 +626,8 @@ void blk_queue_flag_clear(unsigned int flag, struct request_queue *q);
 	test_bit(QUEUE_FLAG_NOXMERGES, &(q)->queue_flags)
 #define blk_queue_nonrot(q)	(!((q)->limits.features & BLK_FEAT_ROTATIONAL))
 #define blk_queue_io_stat(q)	((q)->limits.features & BLK_FEAT_IO_STAT)
+#define blk_queue_passthrough_stat(q)	\
+	((q)->limits.flags & BLK_FLAG_IOSTATS_PASSTHROUGH)
 #define blk_queue_dax(q)	((q)->limits.features & BLK_FEAT_DAX)
 #define blk_queue_pci_p2pdma(q)	((q)->limits.features & BLK_FEAT_PCI_P2PDMA)
 #ifdef CONFIG_BLK_RQ_ALLOC_TIME
@@ -725,6 +736,9 @@ static inline unsigned int blk_queue_depth(struct request_queue *q)
 #define for_each_bio(_bio)		\
 	for (; _bio; _bio = _bio->bi_next)
 
+int __must_check add_disk_fwnode(struct device *parent, struct gendisk *disk,
+				 const struct attribute_group **groups,
+				 struct fwnode_handle *fwnode);
 int __must_check device_add_disk(struct device *parent, struct gendisk *disk,
 				 const struct attribute_group **groups);
 static inline int __must_check add_disk(struct gendisk *disk)
@@ -1672,6 +1686,22 @@ static inline bool bdev_can_atomic_write(struct block_device *bdev)
 	}
 
 	return true;
+}
+
+static inline unsigned int
+bdev_atomic_write_unit_min_bytes(struct block_device *bdev)
+{
+	if (!bdev_can_atomic_write(bdev))
+		return 0;
+	return queue_atomic_write_unit_min_bytes(bdev_get_queue(bdev));
+}
+
+static inline unsigned int
+bdev_atomic_write_unit_max_bytes(struct block_device *bdev)
+{
+	if (!bdev_can_atomic_write(bdev))
+		return 0;
+	return queue_atomic_write_unit_max_bytes(bdev_get_queue(bdev));
 }
 
 #define DEFINE_IO_COMP_BATCH(name)	struct io_comp_batch name = { }
