@@ -140,11 +140,12 @@ struct nfs4_cpntf_state {
 struct nfs4_cb_fattr {
 	struct nfsd4_callback ncf_getattr;
 	u32 ncf_cb_status;
-	u32 ncf_cb_bmap[1];
 
 	/* from CB_GETATTR reply */
 	u64 ncf_cb_change;
 	u64 ncf_cb_fsize;
+	struct timespec64 ncf_cb_mtime;
+	struct timespec64 ncf_cb_atime;
 
 	unsigned long ncf_cb_flags;
 	bool ncf_file_modified;
@@ -192,6 +193,22 @@ struct nfs4_delegation {
 	/* for CB_GETATTR */
 	struct nfs4_cb_fattr    dl_cb_fattr;
 };
+
+static inline bool deleg_is_read(u32 dl_type)
+{
+	return (dl_type == OPEN_DELEGATE_READ || dl_type == OPEN_DELEGATE_READ_ATTRS_DELEG);
+}
+
+static inline bool deleg_is_write(u32 dl_type)
+{
+	return (dl_type == OPEN_DELEGATE_WRITE || dl_type == OPEN_DELEGATE_WRITE_ATTRS_DELEG);
+}
+
+static inline bool deleg_attrs_deleg(u32 dl_type)
+{
+	return dl_type == OPEN_DELEGATE_READ_ATTRS_DELEG ||
+	       dl_type == OPEN_DELEGATE_WRITE_ATTRS_DELEG;
+}
 
 #define cb_to_delegation(cb) \
 	container_of(cb, struct nfs4_delegation, dl_recall)
@@ -305,7 +322,6 @@ struct nfsd4_session {
 	struct nfs4_client	*se_client;
 	struct nfs4_sessionid	se_sessionid;
 	struct nfsd4_channel_attrs se_fchannel;
-	struct nfsd4_channel_attrs se_bchannel;
 	struct nfsd4_cb_sec	se_cb_sec;
 	struct list_head	se_conns;
 	u32			se_cb_prog;
@@ -784,5 +800,5 @@ static inline bool try_to_expire_client(struct nfs4_client *clp)
 }
 
 extern __be32 nfsd4_deleg_getattr_conflict(struct svc_rqst *rqstp,
-		struct dentry *dentry, bool *file_modified, u64 *size);
+		struct dentry *dentry, struct nfs4_delegation **pdp);
 #endif   /* NFSD4_STATE_H */
