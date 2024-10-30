@@ -3,12 +3,13 @@
  * Copyright © 2023 Intel Corporation
  */
 
-#include <drm/intel/i915_pciids.h>
+#include <drm/intel/pciids.h>
 #include <drm/drm_color_mgmt.h>
 #include <linux/pci.h>
 
 #include "i915_drv.h"
 #include "i915_reg.h"
+#include "intel_cx0_phy_regs.h"
 #include "intel_de.h"
 #include "intel_display.h"
 #include "intel_display_device.h"
@@ -1252,6 +1253,10 @@ static const struct platform_desc bmg_desc = {
 	PLATFORM(BATTLEMAGE),
 };
 
+static const struct platform_desc ptl_desc = {
+	PLATFORM(PANTHERLAKE),
+};
+
 __diag_pop();
 
 /*
@@ -1322,6 +1327,7 @@ static const struct {
 	INTEL_MTL_IDS(INTEL_DISPLAY_DEVICE, &mtl_desc),
 	INTEL_LNL_IDS(INTEL_DISPLAY_DEVICE, &lnl_desc),
 	INTEL_BMG_IDS(INTEL_DISPLAY_DEVICE, &bmg_desc),
+	INTEL_PTL_IDS(INTEL_DISPLAY_DEVICE, &ptl_desc),
 };
 
 static const struct {
@@ -1332,6 +1338,7 @@ static const struct {
 	{ 14,  0, &xe_lpdp_display },
 	{ 14,  1, &xe2_hpd_display },
 	{ 20,  0, &xe2_lpd_display },
+	{ 30,  0, &xe2_lpd_display },
 };
 
 static const struct intel_display_device_info *
@@ -1678,6 +1685,10 @@ static void __intel_display_device_info_runtime_init(struct drm_i915_private *i9
 					display_runtime->num_scalers[pipe] = 1;
 		}
 	}
+
+	if (DISPLAY_VER(i915) >= 30)
+		display_runtime->edp_typec_support =
+			intel_de_read(display, PICA_PHY_CONFIG_CONTROL) & EDP_ON_TYPEC;
 
 	display_runtime->rawclk_freq = intel_read_rawclk(display);
 	drm_dbg_kms(&i915->drm, "rawclk rate: %d kHz\n", display_runtime->rawclk_freq);
