@@ -883,7 +883,7 @@ static struct file *__get_file_rcu(struct file __rcu **f)
 	if (!file)
 		return NULL;
 
-	if (unlikely(!file_ref_get(&file->f_ref)))
+	if (unlikely(!atomic_long_inc_not_zero(&file->f_count)))
 		return ERR_PTR(-EAGAIN);
 
 	file_reloaded = rcu_dereference_raw(*f);
@@ -897,8 +897,8 @@ static struct file *__get_file_rcu(struct file __rcu **f)
 	OPTIMIZER_HIDE_VAR(file_reloaded_cmp);
 
 	/*
-	 * file_ref_get() above provided a full memory barrier when we
-	 * acquired a reference.
+	 * atomic_long_inc_not_zero() above provided a full memory
+	 * barrier when we acquired a reference.
 	 *
 	 * This is paired with the write barrier from assigning to the
 	 * __rcu protected file pointer so that if that pointer still
@@ -996,11 +996,11 @@ static inline struct file *__fget_files_rcu(struct files_struct *files,
 		 * We need to confirm it by incrementing the refcount
 		 * and then check the lookup again.
 		 *
-		 * file_ref_get() gives us a full memory barrier. We
-		 * only really need an 'acquire' one to protect the
-		 * loads below, but we don't have that.
+		 * atomic_long_inc_not_zero() gives us a full memory
+		 * barrier. We only really need an 'acquire' one to
+		 * protect the loads below, but we don't have that.
 		 */
-		if (unlikely(!file_ref_get(&file->f_ref)))
+		if (unlikely(!atomic_long_inc_not_zero(&file->f_count)))
 			continue;
 
 		/*

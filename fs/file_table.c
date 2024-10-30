@@ -168,35 +168,16 @@ static int init_file(struct file *f, int flags, const struct cred *cred)
 	 * the respective member when opening the file.
 	 */
 	mutex_init(&f->f_pos_lock);
-	memset(&f->f_path, 0, sizeof(f->f_path));
-	memset(&f->f_ra, 0, sizeof(f->f_ra));
-
-	f->f_flags	= flags;
-	f->f_mode	= OPEN_FMODE(flags);
-
-	f->f_op		= NULL;
-	f->f_mapping	= NULL;
-	f->private_data = NULL;
-	f->f_inode	= NULL;
-	f->f_owner	= NULL;
-#ifdef CONFIG_EPOLL
-	f->f_ep		= NULL;
-#endif
-#ifdef CONFIG_SECURITY
-	f->f_security	= NULL;
-#endif
-
-	f->f_iocb_flags = 0;
-	f->f_pos	= 0;
-	f->f_wb_err	= 0;
-	f->f_sb_err	= 0;
+	f->f_flags = flags;
+	f->f_mode = OPEN_FMODE(flags);
+	/* f->f_version: 0 */
 
 	/*
 	 * We're SLAB_TYPESAFE_BY_RCU so initialize f_count last. While
 	 * fget-rcu pattern users need to be able to handle spurious
 	 * refcount bumps we should reinitialize the reused file first.
 	 */
-	file_ref_init(&f->f_ref, 1);
+	atomic_long_set(&f->f_count, 1);
 	return 0;
 }
 
@@ -228,7 +209,7 @@ struct file *alloc_empty_file(int flags, const struct cred *cred)
 			goto over;
 	}
 
-	f = kmem_cache_alloc(filp_cachep, GFP_KERNEL);
+	f = kmem_cache_zalloc(filp_cachep, GFP_KERNEL);
 	if (unlikely(!f))
 		return ERR_PTR(-ENOMEM);
 
@@ -262,7 +243,7 @@ struct file *alloc_empty_file_noaccount(int flags, const struct cred *cred)
 	struct file *f;
 	int error;
 
-	f = kmem_cache_alloc(filp_cachep, GFP_KERNEL);
+	f = kmem_cache_zalloc(filp_cachep, GFP_KERNEL);
 	if (unlikely(!f))
 		return ERR_PTR(-ENOMEM);
 
@@ -289,7 +270,7 @@ struct file *alloc_empty_backing_file(int flags, const struct cred *cred)
 	struct backing_file *ff;
 	int error;
 
-	ff = kmem_cache_alloc(bfilp_cachep, GFP_KERNEL);
+	ff = kmem_cache_zalloc(bfilp_cachep, GFP_KERNEL);
 	if (unlikely(!ff))
 		return ERR_PTR(-ENOMEM);
 
@@ -501,7 +482,7 @@ static DECLARE_DELAYED_WORK(delayed_fput_work, delayed_fput);
 
 void fput(struct file *file)
 {
-	if (file_ref_put(&file->f_ref)) {
+	if (atomic_long_dec_and_test(&file->f_count)) {
 		struct task_struct *task = current;
 
 		if (unlikely(!(file->f_mode & (FMODE_BACKING | FMODE_OPENED)))) {
@@ -534,7 +515,7 @@ void fput(struct file *file)
  */
 void __fput_sync(struct file *file)
 {
-	if (file_ref_put(&file->f_ref))
+	if (atomic_long_dec_and_test(&file->f_count))
 		__fput(file);
 }
 
