@@ -743,6 +743,8 @@ bool of_pci_supply_present(struct device_node *np)
 	struct property *prop;
 	char *supply;
 
+	if (!np) return false;
+
 	for_each_property_of_node(np, prop) {
 		supply = strrchr(prop->name, '-');
 		if (supply && !strcmp(supply, "-supply"))
