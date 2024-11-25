@@ -5734,7 +5734,7 @@ static int ext4_meta_trans_blocks(struct inode *inode, int lblocks,
 	 * Now let's see how many group bitmaps and group descriptors need
 	 * to account
 	 */
-	groups = idxblocks + pextents;
+	groups = idxblocks;
 	gdpblocks = groups;
 	if (groups > ngroups)
 		groups = ngroups;
