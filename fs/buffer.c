@@ -2361,7 +2361,7 @@ int block_read_full_folio(struct folio *folio, get_block_t *get_block)
 {
 	struct inode *inode = folio->mapping->host;
 	sector_t iblock, lblock;
-	struct buffer_head *bh, *head, *arr[MAX_BUF_PER_PAGE];
+	struct buffer_head *bh, *head;
 	size_t blocksize;
 	int nr, i;
 	int fully_mapped = 1;
@@ -2371,8 +2371,6 @@ int block_read_full_folio(struct folio *folio, get_block_t *get_block)
 	/* This is needed for ext4. */
 	if (IS_ENABLED(CONFIG_FS_VERITY) && IS_VERITY(inode))
 		limit = inode->i_sb->s_maxbytes;
-
-	VM_BUG_ON_FOLIO(folio_test_large(folio), folio);
 
 	head = folio_create_buffers(folio, inode, 0);
 	blocksize = head->b_size;
@@ -2411,7 +2409,10 @@ int block_read_full_folio(struct folio *folio, get_block_t *get_block)
 			if (buffer_uptodate(bh))
 				continue;
 		}
-		arr[nr++] = bh;
+		/* lock the buffer */
+		lock_buffer(bh);
+		mark_buffer_async_read(bh);
+		nr++;
 	} while (i++, iblock++, (bh = bh->b_this_page) != head);
 
 	if (fully_mapped)
@@ -2426,25 +2427,24 @@ int block_read_full_folio(struct folio *folio, get_block_t *get_block)
 		return 0;
 	}
 
-	/* Stage two: lock the buffers */
-	for (i = 0; i < nr; i++) {
-		bh = arr[i];
-		lock_buffer(bh);
-		mark_buffer_async_read(bh);
-	}
-
 	/*
-	 * Stage 3: start the IO.  Check for uptodateness
-	 * inside the buffer lock in case another process reading
-	 * the underlying blockdev brought it uptodate (the sct fix).
+	 * Start the IO.  Check for uptodateness inside the buffer lock
+	 * in case another process reading the underlying blockdev brought
+	 * it uptodate (the sct fix).
 	 */
-	for (i = 0; i < nr; i++) {
-		bh = arr[i];
+	bh = head;
+	do {
+		if (!buffer_async_read(bh))
+			continue;
+
 		if (buffer_uptodate(bh))
 			end_buffer_async_read(bh, 1);
 		else
 			submit_bh(REQ_OP_READ, bh);
-	}
+
+		nr--;
+	} while (nr && (bh = bh->b_this_page) != head);
+
 	return 0;
 }
 EXPORT_SYMBOL(block_read_full_folio);
