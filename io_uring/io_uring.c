@@ -121,6 +121,7 @@
 
 #define IO_COMPL_BATCH			32
 #define IO_REQ_ALLOC_BATCH		8
+#define IO_LOCAL_TW_DEFAULT_MAX		20
 
 struct io_defer_entry {
 	struct list_head	list;
@@ -1255,12 +1256,14 @@ static void __cold io_move_task_work_from_local(struct io_ring_ctx *ctx)
 	struct llist_node *node = llist_del_all(&ctx->work_llist);
 
 	__io_fallback_tw(node, false);
+	node = llist_del_all(&ctx->retry_llist);
+	__io_fallback_tw(node, false);
 }
 
 static bool io_run_local_work_continue(struct io_ring_ctx *ctx, int events,
 				       int min_events)
 {
-	if (llist_empty(&ctx->work_llist))
+	if (!io_local_work_pending(ctx))
 		return false;
 	if (events < min_events)
 		return true;
@@ -1269,37 +1272,55 @@ static bool io_run_local_work_continue(struct io_ring_ctx *ctx, int events,
 	return false;
 }
 
+static int __io_run_local_work_loop(struct llist_node **node,
+				    struct io_tw_state *ts,
+				    int events)
+{
+	while (*node) {
+		struct llist_node *next = (*node)->next;
+		struct io_kiocb *req = container_of(*node, struct io_kiocb,
+						    io_task_work.node);
+		INDIRECT_CALL_2(req->io_task_work.func,
+				io_poll_task_func, io_req_rw_complete,
+				req, ts);
+		*node = next;
+		if (--events <= 0)
+			break;
+	}
+
+	return events;
+}
+
 static int __io_run_local_work(struct io_ring_ctx *ctx, struct io_tw_state *ts,
 			       int min_events)
 {
 	struct llist_node *node;
 	unsigned int loops = 0;
-	int ret = 0;
+	int ret, limit;
 
 	if (WARN_ON_ONCE(ctx->submitter_task != current))
 		return -EEXIST;
 	if (ctx->flags & IORING_SETUP_TASKRUN_FLAG)
 		atomic_andnot(IORING_SQ_TASKRUN, &ctx->rings->sq_flags);
+	limit = max(IO_LOCAL_TW_DEFAULT_MAX, min_events);
 again:
+	ret = __io_run_local_work_loop(&ctx->retry_llist.first, ts, limit);
+	if (ctx->retry_llist.first)
+		goto retry_done;
+
 	/*
 	 * llists are in reverse order, flip it back the right way before
 	 * running the pending items.
 	 */
 	node = llist_reverse_order(llist_del_all(&ctx->work_llist));
-	while (node) {
-		struct llist_node *next = node->next;
-		struct io_kiocb *req = container_of(node, struct io_kiocb,
-						    io_task_work.node);
-		INDIRECT_CALL_2(req->io_task_work.func,
-				io_poll_task_func, io_req_rw_complete,
-				req, ts);
-		ret++;
-		node = next;
-	}
+	ret = __io_run_local_work_loop(&node, ts, ret);
+	ctx->retry_llist.first = node;
 	loops++;
 
+	ret = limit - ret;
 	if (io_run_local_work_continue(ctx, ret, min_events))
 		goto again;
+retry_done:
 	io_submit_flush_completions(ctx);
 	if (io_run_local_work_continue(ctx, ret, min_events))
 		goto again;
@@ -1313,7 +1334,7 @@ static inline int io_run_local_work_locked(struct io_ring_ctx *ctx,
 {
 	struct io_tw_state ts = {};
 
-	if (llist_empty(&ctx->work_llist))
+	if (!io_local_work_pending(ctx))
 		return 0;
 	return __io_run_local_work(ctx, &ts, min_events);
 }
@@ -2328,7 +2349,7 @@ static int io_wake_function(struct wait_queue_entry *curr, unsigned int mode,
 
 int io_run_task_work_sig(struct io_ring_ctx *ctx)
 {
-	if (!llist_empty(&ctx->work_llist)) {
+	if (io_local_work_pending(ctx)) {
 		__set_current_state(TASK_RUNNING);
 		if (io_run_local_work(ctx, INT_MAX) > 0)
 			return 0;
@@ -2459,7 +2480,7 @@ static inline int io_cqring_wait_schedule(struct io_ring_ctx *ctx,
 {
 	if (unlikely(READ_ONCE(ctx->check_cq)))
 		return 1;
-	if (unlikely(!llist_empty(&ctx->work_llist)))
+	if (unlikely(io_local_work_pending(ctx)))
 		return 1;
 	if (unlikely(task_work_pending(current)))
 		return 1;
@@ -2493,7 +2514,7 @@ static int io_cqring_wait(struct io_ring_ctx *ctx, int min_events, u32 flags,
 
 	if (!io_allowed_run_tw(ctx))
 		return -EEXIST;
-	if (!llist_empty(&ctx->work_llist))
+	if (io_local_work_pending(ctx))
 		io_run_local_work(ctx, min_events);
 	io_run_task_work();
 
@@ -2564,7 +2585,7 @@ static int io_cqring_wait(struct io_ring_ctx *ctx, int min_events, u32 flags,
 		 * If we got woken because of task_work being processed, run it
 		 * now rather than let the caller do another wait loop.
 		 */
-		if (!llist_empty(&ctx->work_llist))
+		if (io_local_work_pending(ctx))
 			io_run_local_work(ctx, nr_wait);
 		io_run_task_work();
 
@@ -3158,7 +3179,7 @@ __cold void io_uring_cancel_generic(bool cancel_all, struct io_sq_data *sqd)
 		io_run_task_work();
 		io_uring_drop_tctx_refs(current);
 		xa_for_each(&tctx->xa, index, node) {
-			if (!llist_empty(&node->ctx->work_llist)) {
+			if (io_local_work_pending(node->ctx)) {
 				WARN_ON_ONCE(node->ctx->submitter_task &&
 					     node->ctx->submitter_task != current);
 				goto end_wait;
