@@ -3038,32 +3038,27 @@ out:
 static int __f2fs_ioc_move_range(struct file *filp,
 				struct f2fs_move_range *range)
 {
-	struct fd dst;
 	int err;
 
 	if (!(filp->f_mode & FMODE_READ) ||
 			!(filp->f_mode & FMODE_WRITE))
 		return -EBADF;
 
-	dst = fdget(range->dst_fd);
-	if (!fd_file(dst))
+	CLASS(fd, dst)(range->dst_fd);
+	if (fd_empty(dst))
 		return -EBADF;
 
-	if (!(fd_file(dst)->f_mode & FMODE_WRITE)) {
-		err = -EBADF;
-		goto err_out;
-	}
+	if (!(fd_file(dst)->f_mode & FMODE_WRITE))
+		return -EBADF;
 
 	err = mnt_want_write_file(filp);
 	if (err)
-		goto err_out;
+		return err;
 
 	err = f2fs_move_file_range(filp, range->pos_in, fd_file(dst),
 					range->pos_out, range->len);
 
 	mnt_drop_write_file(filp);
-err_out:
-	fdput(dst);
 	return err;
 }
 
@@ -4647,7 +4642,8 @@ static ssize_t f2fs_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 					iov_iter_count(to), READ);
 
 	/* In LFS mode, if there is inflight dio, wait for its completion */
-	if (f2fs_lfs_mode(F2FS_I_SB(inode)))
+	if (f2fs_lfs_mode(F2FS_I_SB(inode)) &&
+	    get_pages(F2FS_I_SB(inode), F2FS_DIO_WRITE))
 		inode_dio_wait(inode);
 
 	if (f2fs_should_use_dio(inode, iocb, to)) {
