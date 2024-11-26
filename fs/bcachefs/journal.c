@@ -217,6 +217,12 @@ void bch2_journal_buf_put_final(struct journal *j, u64 seq)
 	if (__bch2_journal_pin_put(j, seq))
 		bch2_journal_reclaim_fast(j);
 	bch2_journal_do_writes(j);
+
+	/*
+	 * for __bch2_next_write_buffer_flush_journal_buf(), when quiescing an
+	 * open journal entry
+	 */
+	wake_up(&j->wait);
 }
 
 /*
@@ -250,6 +256,9 @@ static void __journal_entry_close(struct journal *j, unsigned closed_val, bool t
 
 	if (!__journal_entry_is_open(old))
 		return;
+
+	if (old.cur_entry_offset == JOURNAL_ENTRY_BLOCKED_VAL)
+		old.cur_entry_offset = j->cur_entry_offset_if_blocked;
 
 	/* Close out old buffer: */
 	buf->data->u64s		= cpu_to_le32(old.cur_entry_offset);
@@ -831,19 +840,14 @@ out:
 	return ret;
 }
 
-int bch2_journal_meta(struct journal *j)
+static int __bch2_journal_meta(struct journal *j)
 {
-	struct journal_buf *buf;
-	struct journal_res res;
-	int ret;
-
-	memset(&res, 0, sizeof(res));
-
-	ret = bch2_journal_res_get(j, &res, jset_u64s(0), 0);
+	struct journal_res res = {};
+	int ret = bch2_journal_res_get(j, &res, jset_u64s(0), 0);
 	if (ret)
 		return ret;
 
-	buf = j->buf + (res.seq & JOURNAL_BUF_MASK);
+	struct journal_buf *buf = j->buf + (res.seq & JOURNAL_BUF_MASK);
 	buf->must_flush = true;
 
 	if (!buf->flush_time) {
@@ -856,27 +860,70 @@ int bch2_journal_meta(struct journal *j)
 	return bch2_journal_flush_seq(j, res.seq, TASK_UNINTERRUPTIBLE);
 }
 
+int bch2_journal_meta(struct journal *j)
+{
+	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+
+	if (!bch2_write_ref_tryget(c, BCH_WRITE_REF_journal))
+		return -EROFS;
+
+	int ret = __bch2_journal_meta(j);
+	bch2_write_ref_put(c, BCH_WRITE_REF_journal);
+	return ret;
+}
+
 /* block/unlock the journal: */
 
 void bch2_journal_unblock(struct journal *j)
 {
 	spin_lock(&j->lock);
-	j->blocked--;
+	if (!--j->blocked &&
+	    j->cur_entry_offset_if_blocked < JOURNAL_ENTRY_CLOSED_VAL &&
+	    j->reservations.cur_entry_offset == JOURNAL_ENTRY_BLOCKED_VAL) {
+		union journal_res_state old, new;
+
+		old.v = atomic64_read(&j->reservations.counter);
+		do {
+			new.v = old.v;
+			new.cur_entry_offset = j->cur_entry_offset_if_blocked;
+		} while (!atomic64_try_cmpxchg(&j->reservations.counter, &old.v, new.v));
+	}
 	spin_unlock(&j->lock);
 
 	journal_wake(j);
 }
 
+static void __bch2_journal_block(struct journal *j)
+{
+	if (!j->blocked++) {
+		union journal_res_state old, new;
+
+		old.v = atomic64_read(&j->reservations.counter);
+		do {
+			j->cur_entry_offset_if_blocked = old.cur_entry_offset;
+
+			if (j->cur_entry_offset_if_blocked >= JOURNAL_ENTRY_CLOSED_VAL)
+				break;
+
+			new.v = old.v;
+			new.cur_entry_offset = JOURNAL_ENTRY_BLOCKED_VAL;
+		} while (!atomic64_try_cmpxchg(&j->reservations.counter, &old.v, new.v));
+
+		journal_cur_buf(j)->data->u64s = cpu_to_le32(old.cur_entry_offset);
+	}
+}
+
 void bch2_journal_block(struct journal *j)
 {
 	spin_lock(&j->lock);
-	j->blocked++;
+	__bch2_journal_block(j);
 	spin_unlock(&j->lock);
 
 	journal_quiesce(j);
 }
 
-static struct journal_buf *__bch2_next_write_buffer_flush_journal_buf(struct journal *j, u64 max_seq)
+static struct journal_buf *__bch2_next_write_buffer_flush_journal_buf(struct journal *j,
+						u64 max_seq, bool *blocked)
 {
 	struct journal_buf *ret = NULL;
 
@@ -893,13 +940,17 @@ static struct journal_buf *__bch2_next_write_buffer_flush_journal_buf(struct jou
 		struct journal_buf *buf = j->buf + idx;
 
 		if (buf->need_flush_to_write_buffer) {
-			if (seq == journal_cur_seq(j))
-				__journal_entry_close(j, JOURNAL_ENTRY_CLOSED_VAL, true);
-
 			union journal_res_state s;
 			s.v = atomic64_read_acquire(&j->reservations.counter);
 
-			ret = journal_state_count(s, idx)
+			unsigned open = seq == journal_cur_seq(j) && __journal_entry_is_open(s);
+
+			if (open && !*blocked) {
+				__bch2_journal_block(j);
+				*blocked = true;
+			}
+
+			ret = journal_state_count(s, idx) > open
 				? ERR_PTR(-EAGAIN)
 				: buf;
 			break;
@@ -912,11 +963,17 @@ static struct journal_buf *__bch2_next_write_buffer_flush_journal_buf(struct jou
 	return ret;
 }
 
-struct journal_buf *bch2_next_write_buffer_flush_journal_buf(struct journal *j, u64 max_seq)
+struct journal_buf *bch2_next_write_buffer_flush_journal_buf(struct journal *j,
+							     u64 max_seq, bool *blocked)
 {
 	struct journal_buf *ret;
+	*blocked = false;
 
-	wait_event(j->wait, (ret = __bch2_next_write_buffer_flush_journal_buf(j, max_seq)) != ERR_PTR(-EAGAIN));
+	wait_event(j->wait, (ret = __bch2_next_write_buffer_flush_journal_buf(j,
+						max_seq, blocked)) != ERR_PTR(-EAGAIN));
+	if (IS_ERR_OR_NULL(ret) && *blocked)
+		bch2_journal_unblock(j);
+
 	return ret;
 }
 
@@ -1193,7 +1250,7 @@ void bch2_fs_journal_stop(struct journal *j)
 	 * Always write a new journal entry, to make sure the clock hands are up
 	 * to date (and match the superblock)
 	 */
-	bch2_journal_meta(j);
+	__bch2_journal_meta(j);
 
 	journal_quiesce(j);
 	cancel_delayed_work_sync(&j->write_work);
@@ -1473,6 +1530,9 @@ void __bch2_journal_debug_to_text(struct printbuf *out, struct journal *j)
 		break;
 	case JOURNAL_ENTRY_CLOSED_VAL:
 		prt_printf(out, "closed\n");
+		break;
+	case JOURNAL_ENTRY_BLOCKED_VAL:
+		prt_printf(out, "blocked\n");
 		break;
 	default:
 		prt_printf(out, "%u/%u\n", s.cur_entry_offset, j->cur_entry_u64s);
