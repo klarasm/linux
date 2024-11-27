@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "bcachefs.h"
+#include "btree_cache.h"
 #include "btree_iter.h"
 #include "error.h"
 #include "journal.h"
@@ -33,7 +34,7 @@ bool bch2_inconsistent_error(struct bch_fs *c)
 int bch2_topology_error(struct bch_fs *c)
 {
 	set_bit(BCH_FS_topology_error, &c->flags);
-	if (!test_bit(BCH_FS_fsck_running, &c->flags)) {
+	if (!test_bit(BCH_FS_recovery_running, &c->flags)) {
 		bch2_inconsistent_error(c);
 		return -BCH_ERR_btree_need_topology_repair;
 	} else {
@@ -256,9 +257,10 @@ int __bch2_fsck_err(struct bch_fs *c,
 		!trans &&
 		bch2_current_has_btree_trans(c));
 
-	if ((flags & FSCK_CAN_FIX) &&
-	    test_bit(err, c->sb.errors_silent))
-		return -BCH_ERR_fsck_fix;
+	if (test_bit(err, c->sb.errors_silent))
+		return flags & FSCK_CAN_FIX
+			? -BCH_ERR_fsck_fix
+			: -BCH_ERR_fsck_ignore;
 
 	bch2_sb_error_count(c, err);
 
@@ -385,9 +387,7 @@ int __bch2_fsck_err(struct bch_fs *c,
 			prt_str(out, ", not ");
 			prt_actioning(out, action);
 		}
-	} else if (flags & FSCK_NEED_FSCK) {
-		prt_str(out, " (run fsck to correct)");
-	} else {
+	} else if (!(flags & FSCK_CAN_IGNORE)) {
 		prt_str(out, " (repair unimplemented)");
 	}
 
@@ -424,11 +424,18 @@ int __bch2_fsck_err(struct bch_fs *c,
 	if (inconsistent)
 		bch2_inconsistent_error(c);
 
-	if (ret == -BCH_ERR_fsck_fix) {
-		set_bit(BCH_FS_errors_fixed, &c->flags);
-	} else {
-		set_bit(BCH_FS_errors_not_fixed, &c->flags);
-		set_bit(BCH_FS_error, &c->flags);
+	/*
+	 * We don't yet track whether the filesystem currently has errors, for
+	 * log_fsck_err()s: that would require us to track for every error type
+	 * which recovery pass corrects it, to get the fsck exit status correct:
+	 */
+	if (flags & FSCK_CAN_FIX) {
+		if (ret == -BCH_ERR_fsck_fix) {
+			set_bit(BCH_FS_errors_fixed, &c->flags);
+		} else {
+			set_bit(BCH_FS_errors_not_fixed, &c->flags);
+			set_bit(BCH_FS_error, &c->flags);
+		}
 	}
 err:
 	if (action != action_orig)
@@ -437,23 +444,34 @@ err:
 	return ret;
 }
 
+static const char * const bch2_bkey_validate_contexts[] = {
+#define x(n) #n,
+	BKEY_VALIDATE_CONTEXTS()
+#undef x
+	NULL
+};
+
 int __bch2_bkey_fsck_err(struct bch_fs *c,
 			 struct bkey_s_c k,
-			 enum bch_validate_flags validate_flags,
+			 struct bkey_validate_context from,
 			 enum bch_sb_error_id err,
 			 const char *fmt, ...)
 {
-	if (validate_flags & BCH_VALIDATE_silent)
+	if (from.flags & BCH_VALIDATE_silent)
 		return -BCH_ERR_fsck_delete_bkey;
 
 	unsigned fsck_flags = 0;
-	if (!(validate_flags & (BCH_VALIDATE_write|BCH_VALIDATE_commit)))
+	if (!(from.flags & (BCH_VALIDATE_write|BCH_VALIDATE_commit)))
 		fsck_flags |= FSCK_AUTOFIX|FSCK_CAN_FIX;
 
 	struct printbuf buf = PRINTBUF;
 	va_list args;
 
-	prt_str(&buf, "invalid bkey ");
+	prt_printf(&buf, "invalid bkey in %s btree=",
+		   bch2_bkey_validate_contexts[from.from]);
+	bch2_btree_id_to_text(&buf, from.btree);
+	prt_printf(&buf, " level=%u: ", from.level);
+
 	bch2_bkey_val_to_text(&buf, c, k);
 	prt_str(&buf, "\n  ");
 	va_start(args, fmt);

@@ -38,6 +38,9 @@ unsigned bch2_journal_dev_buckets_available(struct journal *j,
 					    struct journal_device *ja,
 					    enum journal_space_from from)
 {
+	if (!ja->nr)
+		return 0;
+
 	unsigned available = (journal_space_from(ja, from) -
 			      ja->cur_idx - 1 + ja->nr) % ja->nr;
 
@@ -758,10 +761,12 @@ static int bch2_journal_reclaim_thread(void *arg)
 			journal_empty = fifo_empty(&j->pin);
 			spin_unlock(&j->lock);
 
+			long timeout = j->next_reclaim - jiffies;
+
 			if (journal_empty)
 				schedule();
-			else if (time_after(j->next_reclaim, jiffies))
-				schedule_timeout(j->next_reclaim - jiffies);
+			else if (timeout > 0)
+				schedule_timeout(timeout);
 			else
 				break;
 		}
