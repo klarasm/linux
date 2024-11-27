@@ -5,9 +5,8 @@
 enum bch_fsck_flags {
 	FSCK_CAN_FIX		= 1 << 0,
 	FSCK_CAN_IGNORE		= 1 << 1,
-	FSCK_NEED_FSCK		= 1 << 2,
-	FSCK_NO_RATELIMIT	= 1 << 3,
-	FSCK_AUTOFIX		= 1 << 4,
+	FSCK_NO_RATELIMIT	= 1 << 2,
+	FSCK_AUTOFIX		= 1 << 3,
 };
 
 #define BCH_SB_ERRS()									\
@@ -69,16 +68,16 @@ enum bch_fsck_flags {
 	x(btree_node_bkey_bad_format,				 55,	0)		\
 	x(btree_node_bad_bkey,					 56,	0)		\
 	x(btree_node_bkey_out_of_order,				 57,	0)		\
-	x(btree_root_bkey_invalid,				 58,	0)		\
-	x(btree_root_read_error,				 59,	0)		\
+	x(btree_root_bkey_invalid,				 58,	FSCK_AUTOFIX)	\
+	x(btree_root_read_error,				 59,	FSCK_AUTOFIX)	\
 	x(btree_root_bad_min_key,				 60,	0)		\
 	x(btree_root_bad_max_key,				 61,	0)		\
-	x(btree_node_read_error,				 62,	0)		\
-	x(btree_node_topology_bad_min_key,			 63,	0)		\
-	x(btree_node_topology_bad_max_key,			 64,	0)		\
-	x(btree_node_topology_overwritten_by_prev_node,		 65,	0)		\
-	x(btree_node_topology_overwritten_by_next_node,		 66,	0)		\
-	x(btree_node_topology_interior_node_empty,		 67,	0)		\
+	x(btree_node_read_error,				 62,	FSCK_AUTOFIX)	\
+	x(btree_node_topology_bad_min_key,			 63,	FSCK_AUTOFIX)	\
+	x(btree_node_topology_bad_max_key,			 64,	FSCK_AUTOFIX)	\
+	x(btree_node_topology_overwritten_by_prev_node,		 65,	FSCK_AUTOFIX)	\
+	x(btree_node_topology_overwritten_by_next_node,		 66,	FSCK_AUTOFIX)	\
+	x(btree_node_topology_interior_node_empty,		 67,	FSCK_AUTOFIX)	\
 	x(fs_usage_hidden_wrong,				 68,	FSCK_AUTOFIX)	\
 	x(fs_usage_btree_wrong,					 69,	FSCK_AUTOFIX)	\
 	x(fs_usage_data_wrong,					 70,	FSCK_AUTOFIX)	\
@@ -139,9 +138,10 @@ enum bch_fsck_flags {
 	x(discarding_bucket_not_in_need_discard_btree,		291,	0)		\
 	x(backpointer_bucket_offset_wrong,			125,	0)		\
 	x(backpointer_level_bad,				294,	0)		\
+	x(backpointer_dev_bad,					297,	0)		\
 	x(backpointer_to_missing_device,			126,	0)		\
 	x(backpointer_to_missing_alloc,				127,	0)		\
-	x(backpointer_to_missing_ptr,				128,	0)		\
+	x(backpointer_to_missing_ptr,				128,	FSCK_AUTOFIX)	\
 	x(lru_entry_at_time_0,					129,	FSCK_AUTOFIX)	\
 	x(lru_entry_to_invalid_bucket,				130,	FSCK_AUTOFIX)	\
 	x(lru_entry_bad,					131,	FSCK_AUTOFIX)	\
@@ -306,7 +306,9 @@ enum bch_fsck_flags {
 	x(accounting_key_replicas_devs_unsorted,		280,	FSCK_AUTOFIX)	\
 	x(accounting_key_version_0,				282,	FSCK_AUTOFIX)	\
 	x(logged_op_but_clean,					283,	FSCK_AUTOFIX)	\
-	x(MAX,							295,	0)
+	x(compression_opt_not_marked_in_sb,			295,	FSCK_AUTOFIX)	\
+	x(compression_type_not_marked_in_sb,			296,	FSCK_AUTOFIX)	\
+	x(MAX,							298,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
