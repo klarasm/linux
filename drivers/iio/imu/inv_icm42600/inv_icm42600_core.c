@@ -100,7 +100,7 @@ const struct regmap_config inv_icm42600_spi_regmap_config = {
 	.cache_type = REGCACHE_RBTREE,
 	.use_single_write = true,
 };
-EXPORT_SYMBOL_NS_GPL(inv_icm42600_spi_regmap_config, IIO_ICM42600);
+EXPORT_SYMBOL_NS_GPL(inv_icm42600_spi_regmap_config, "IIO_ICM42600");
 
 struct inv_icm42600_hw {
 	uint8_t whoami;
