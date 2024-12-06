@@ -1236,7 +1236,7 @@ const struct kx022a_chip_info kx134_chip_info = {
 	.xout_l			  = KX132_REG_XOUT_L,
 	.get_fifo_bytes_available = kx132_get_fifo_bytes_available,
 };
-EXPORT_SYMBOL_NS_GPL(kx134_chip_info, IIO_KX022A);
+EXPORT_SYMBOL_NS_GPL(kx134_chip_info, "IIO_KX022A");
 
 
 /*
@@ -1300,7 +1300,7 @@ const struct kx022a_chip_info kx134acr_chip_info = {
 	.xout_l				= KX022A_REG_XOUT_L,
 	.get_fifo_bytes_available	= kx022a_get_fifo_bytes_available,
 };
-EXPORT_SYMBOL_NS_GPL(kx134acr_chip_info, IIO_KX022A);
+EXPORT_SYMBOL_NS_GPL(kx134acr_chip_info, "IIO_KX022A");
 
 int kx022a_probe_internal(struct device *dev, const struct kx022a_chip_info *chip_info)
 {
