@@ -525,7 +525,7 @@ MODULE_DEVICE_TABLE(of, extcon_cros_ec_of_match);
 
 static struct platform_driver extcon_cros_ec_driver = {
 	.driver = {
-		.name  = "extcon-usbc-cros-ec",
+		.name = "extcon-usbc-cros-ec",
 		.of_match_table = of_match_ptr(extcon_cros_ec_of_match),
 		.pm = DEV_PM_OPS,
 	},
