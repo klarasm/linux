@@ -639,6 +639,7 @@ static int gfx_v11_0_init_toc_microcode(struct amdgpu_device *adev, const char *
 	int err = 0;
 
 	err = amdgpu_ucode_request(adev, &adev->psp.toc_fw,
+				   AMDGPU_UCODE_REQUIRED,
 				   "amdgpu/%s_toc.bin", ucode_prefix);
 	if (err)
 		goto out;
@@ -688,6 +689,7 @@ static int gfx_v11_0_init_microcode(struct amdgpu_device *adev)
 
 	amdgpu_ucode_ip_version_decode(adev, GC_HWIP, ucode_prefix, sizeof(ucode_prefix));
 	err = amdgpu_ucode_request(adev, &adev->gfx.pfp_fw,
+				   AMDGPU_UCODE_REQUIRED,
 				   "amdgpu/%s_pfp.bin", ucode_prefix);
 	if (err)
 		goto out;
@@ -705,6 +707,7 @@ static int gfx_v11_0_init_microcode(struct amdgpu_device *adev)
 	}
 
 	err = amdgpu_ucode_request(adev, &adev->gfx.me_fw,
+				   AMDGPU_UCODE_REQUIRED,
 				   "amdgpu/%s_me.bin", ucode_prefix);
 	if (err)
 		goto out;
@@ -720,9 +723,11 @@ static int gfx_v11_0_init_microcode(struct amdgpu_device *adev)
 		if (amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(11, 0, 0) &&
 		    adev->pdev->revision == 0xCE)
 			err = amdgpu_ucode_request(adev, &adev->gfx.rlc_fw,
+						   AMDGPU_UCODE_REQUIRED,
 						   "amdgpu/gc_11_0_0_rlc_1.bin");
 		else
 			err = amdgpu_ucode_request(adev, &adev->gfx.rlc_fw,
+						   AMDGPU_UCODE_REQUIRED,
 						   "amdgpu/%s_rlc.bin", ucode_prefix);
 		if (err)
 			goto out;
@@ -735,6 +740,7 @@ static int gfx_v11_0_init_microcode(struct amdgpu_device *adev)
 	}
 
 	err = amdgpu_ucode_request(adev, &adev->gfx.mec_fw,
+				   AMDGPU_UCODE_REQUIRED,
 				   "amdgpu/%s_mec.bin", ucode_prefix);
 	if (err)
 		goto out;
@@ -3918,9 +3924,7 @@ static void gfx_v11_0_kiq_setting(struct amdgpu_ring *ring)
 	tmp = RREG32_SOC15(GC, 0, regRLC_CP_SCHEDULERS);
 	tmp &= 0xffffff00;
 	tmp |= (ring->me << 5) | (ring->pipe << 3) | (ring->queue);
-	WREG32_SOC15(GC, 0, regRLC_CP_SCHEDULERS, tmp);
-	tmp |= 0x80;
-	WREG32_SOC15(GC, 0, regRLC_CP_SCHEDULERS, tmp);
+	WREG32_SOC15(GC, 0, regRLC_CP_SCHEDULERS, tmp | 0x80);
 }
 
 static void gfx_v11_0_cp_set_doorbell_range(struct amdgpu_device *adev)
@@ -5458,10 +5462,10 @@ static void gfx_v11_cntl_pg(struct amdgpu_device *adev, bool enable)
 	amdgpu_gfx_rlc_exit_safe_mode(adev, 0);
 }
 
-static int gfx_v11_0_set_powergating_state(void *handle,
+static int gfx_v11_0_set_powergating_state(struct amdgpu_ip_block *ip_block,
 					   enum amd_powergating_state state)
 {
-	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
+	struct amdgpu_device *adev = ip_block->adev;
 	bool enable = (state == AMD_PG_STATE_GATE);
 
 	if (amdgpu_sriov_vf(adev))
@@ -5494,10 +5498,10 @@ static int gfx_v11_0_set_powergating_state(void *handle,
 	return 0;
 }
 
-static int gfx_v11_0_set_clockgating_state(void *handle,
+static int gfx_v11_0_set_clockgating_state(struct amdgpu_ip_block *ip_block,
 					  enum amd_clockgating_state state)
 {
-	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
+	struct amdgpu_device *adev = ip_block->adev;
 
 	if (amdgpu_sriov_vf(adev))
 	        return 0;
