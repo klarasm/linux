@@ -14,21 +14,29 @@
 	int atomic = 1;							\
 	union { __unqual_scalar_typeof(*__x) __val; char __c[1]; } __u;	\
 	switch (sizeof(x)) {						\
+	case 1:								\
+		asm volatile ("lb	%0, %1"				\
+				"\n\tfence	r, rw"			\
+				: "=r" (*(__u8 *)__u.__c)		\
+				: "A" (*__x) : "memory");		\
+		break;							\
+	case 2:								\
+		asm volatile ("lh	%0, %1"				\
+				"\n\tfence	r, rw"			\
+				: "=r" (*(__u16 *)__u.__c)		\
+				: "A" (*__x) : "memory");		\
+		break;							\
 	case 4:								\
-		asm volatile (						\
-			"lr.w %0, 0(%1)"				\
-			: "=r" (*(__u32 *)__u.__c)			\
-			: "r" (__x)					\
-			: "memory"					\
-		);							\
+		asm volatile ("lw	%0, %1"				\
+				"\n\tfence	r, rw"			\
+				: "=r" (*(__u32 *)__u.__c)		\
+				: "A" (*__x) : "memory");		\
 		break;							\
 	case 8:								\
-		asm volatile (						\
-			"lr.d %0, 0(%1)"				\
-			: "=r" (*(__u64 *)__u.__c)			\
-			: "r" (__x)					\
-			: "memory"					\
-		);							\
+		asm volatile ("ld	%0, %1"				\
+				"\n\tfence	r, rw"			\
+				: "=r" (*(__u64 *)__u.__c)		\
+				: "A" (*__x) : "memory");		\
 		break;							\
 	default:							\
 		asm volatile ("fence	rw, rw" ::: "memory");		\
