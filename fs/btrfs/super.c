@@ -961,7 +961,7 @@ static int btrfs_fill_super(struct super_block *sb,
 #endif
 	sb->s_xattr = btrfs_xattr_handlers;
 	sb->s_time_gran = 1;
-	sb->s_iflags |= SB_I_CGROUPWB;
+	sb->s_iflags |= SB_I_CGROUPWB | SB_I_ALLOW_HSM;
 
 	err = super_setup_bdi(sb);
 	if (err) {
@@ -971,7 +971,7 @@ static int btrfs_fill_super(struct super_block *sb,
 
 	err = open_ctree(sb, fs_devices);
 	if (err) {
-		btrfs_err(fs_info, "open_ctree failed");
+		btrfs_err(fs_info, "open_ctree failed: %d", err);
 		return err;
 	}
 
@@ -2465,8 +2465,23 @@ static int __init btrfs_print_mod_info(void)
 #else
 			", fsverity=no"
 #endif
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+			", experimental=yes"
+#else
+			", experimental=no"
+#endif
 			;
-	pr_info("Btrfs loaded%s\n", options);
+
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+	if (btrfs_get_raid1_balancing() == NULL)
+		pr_info("Btrfs loaded%s\n", options);
+	else
+		pr_info("Btrfs loaded%s, raid1_balancing=%s\n",
+			 options, btrfs_get_raid1_balancing());
+#else
+		pr_info("Btrfs loaded%s\n", options);
+#endif
+
 	return 0;
 }
 
@@ -2524,6 +2539,11 @@ static const struct init_sequence mod_init_seq[] = {
 	}, {
 		.init_func = extent_map_init,
 		.exit_func = extent_map_exit,
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+	}, {
+		.init_func = btrfs_raid1_balancing_init,
+		.exit_func = NULL,
+#endif
 	}, {
 		.init_func = ordered_data_init,
 		.exit_func = ordered_data_exit,
