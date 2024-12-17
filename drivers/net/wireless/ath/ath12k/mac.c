@@ -708,8 +708,8 @@ static struct ath12k *ath12k_mac_get_ar_by_chan(struct ieee80211_hw *hw,
 		return ar;
 
 	for_each_ar(ah, ar, i) {
-		if (channel->center_freq >= ar->freq_low &&
-		    channel->center_freq <= ar->freq_high)
+		if (channel->center_freq >= KHZ_TO_MHZ(ar->freq_range.start_freq) &&
+		    channel->center_freq <= KHZ_TO_MHZ(ar->freq_range.end_freq))
 			return ar;
 	}
 	return NULL;
@@ -4000,22 +4000,9 @@ void __ath12k_mac_scan_finish(struct ath12k *ar)
 			ieee80211_remain_on_channel_expired(hw);
 		fallthrough;
 	case ATH12K_SCAN_STARTING:
-		if (!ar->scan.is_roc) {
-			struct cfg80211_scan_info info = {
-				.aborted = ((ar->scan.state ==
-					    ATH12K_SCAN_ABORTING) ||
-					    (ar->scan.state ==
-					    ATH12K_SCAN_STARTING)),
-			};
-
-			ieee80211_scan_completed(hw, &info);
-		}
-
-		ar->scan.state = ATH12K_SCAN_IDLE;
-		ar->scan_channel = NULL;
-		ar->scan.roc_freq = 0;
 		cancel_delayed_work(&ar->scan.timeout);
 		complete(&ar->scan.completed);
+		wiphy_work_queue(ar->ah->hw->wiphy, &ar->scan.vdev_clean_wk);
 		break;
 	}
 }
@@ -4056,15 +4043,15 @@ static int ath12k_scan_stop(struct ath12k *ar)
 	}
 
 out:
-	/* Scan state should be updated upon scan completion but in case
-	 * firmware fails to deliver the event (for whatever reason) it is
-	 * desired to clean up scan state anyway. Firmware may have just
-	 * dropped the scan completion event delivery due to transport pipe
-	 * being overflown with data and/or it can recover on its own before
-	 * next scan request is submitted.
+	/* Scan state should be updated in scan completion worker but in
+	 * case firmware fails to deliver the event (for whatever reason)
+	 * it is desired to clean up scan state anyway. Firmware may have
+	 * just dropped the scan completion event delivery due to transport
+	 * pipe being overflown with data and/or it can recover on its own
+	 * before next scan request is submitted.
 	 */
 	spin_lock_bh(&ar->data_lock);
-	if (ar->scan.state != ATH12K_SCAN_IDLE)
+	if (ret)
 		__ath12k_mac_scan_finish(ar);
 	spin_unlock_bh(&ar->data_lock);
 
@@ -4113,6 +4100,53 @@ static void ath12k_scan_timeout_work(struct work_struct *work)
 	wiphy_lock(ath12k_ar_to_hw(ar)->wiphy);
 	ath12k_scan_abort(ar);
 	wiphy_unlock(ath12k_ar_to_hw(ar)->wiphy);
+}
+
+static void ath12k_scan_vdev_clean_work(struct wiphy *wiphy, struct wiphy_work *work)
+{
+	struct ath12k *ar = container_of(work, struct ath12k,
+					 scan.vdev_clean_wk);
+	struct ath12k_hw *ah = ar->ah;
+	struct ath12k_link_vif *arvif;
+
+	lockdep_assert_wiphy(wiphy);
+
+	arvif = ar->scan.arvif;
+
+	/* The scan vdev has already been deleted. This can occur when a
+	 * new scan request is made on the same vif with a different
+	 * frequency, causing the scan arvif to move from one radio to
+	 * another. Or, scan was abrupted and via remove interface, the
+	 * arvif is already deleted. Alternatively, if the scan vdev is not
+	 * being used as an actual vdev, then do not delete it.
+	 */
+	if (!arvif || arvif->is_started)
+		goto work_complete;
+
+	ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "mac clean scan vdev (link id %u)",
+		   arvif->link_id);
+
+	ath12k_mac_remove_link_interface(ah->hw, arvif);
+	ath12k_mac_unassign_link_vif(arvif);
+
+work_complete:
+	spin_lock_bh(&ar->data_lock);
+	ar->scan.arvif = NULL;
+	if (!ar->scan.is_roc) {
+		struct cfg80211_scan_info info = {
+			.aborted = ((ar->scan.state ==
+				    ATH12K_SCAN_ABORTING) ||
+				    (ar->scan.state ==
+				    ATH12K_SCAN_STARTING)),
+		};
+
+		ieee80211_scan_completed(ar->ah->hw, &info);
+	}
+
+	ar->scan.state = ATH12K_SCAN_IDLE;
+	ar->scan_channel = NULL;
+	ar->scan.roc_freq = 0;
+	spin_unlock_bh(&ar->data_lock);
 }
 
 static int ath12k_start_scan(struct ath12k *ar,
@@ -4208,6 +4242,9 @@ static int ath12k_mac_op_hw_scan(struct ieee80211_hw *hw,
 	link_id = ath12k_mac_find_link_id_by_ar(ahvif, ar);
 	arvif = ath12k_mac_assign_link_vif(ah, vif, link_id);
 
+	ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "mac link ID %d selected for scan",
+		   arvif->link_id);
+
 	/* If the vif is already assigned to a specific vdev of an ar,
 	 * check whether its already started, vdev which is started
 	 * are not allowed to switch to a new radio.
@@ -4231,6 +4268,7 @@ static int ath12k_mac_op_hw_scan(struct ieee80211_hw *hw,
 			create = false;
 		}
 	}
+
 	if (create) {
 		/* Previous arvif would've been cleared in radio switch block
 		 * above, assign arvif again for create.
@@ -4251,7 +4289,7 @@ static int ath12k_mac_op_hw_scan(struct ieee80211_hw *hw,
 		reinit_completion(&ar->scan.completed);
 		ar->scan.state = ATH12K_SCAN_STARTING;
 		ar->scan.is_roc = false;
-		ar->scan.vdev_id = arvif->vdev_id;
+		ar->scan.arvif = arvif;
 		ret = 0;
 		break;
 	case ATH12K_SCAN_STARTING:
@@ -4313,6 +4351,8 @@ static int ath12k_mac_op_hw_scan(struct ieee80211_hw *hw,
 		spin_unlock_bh(&ar->data_lock);
 	}
 
+	ath12k_dbg(ar->ab, ATH12K_DBG_MAC, "mac scan started");
+
 	/* As per cfg80211/mac80211 scan design, it allows only one
 	 * scan at a time. Hence last_scan link id is used for
 	 * tracking the link id on which the scan is been done on
@@ -4346,7 +4386,7 @@ static void ath12k_mac_op_cancel_hw_scan(struct ieee80211_hw *hw,
 	lockdep_assert_wiphy(hw->wiphy);
 
 	arvif = wiphy_dereference(hw->wiphy, ahvif->link[link_id]);
-	if (!arvif || !arvif->is_created)
+	if (!arvif || arvif->is_started)
 		return;
 
 	ar = arvif->ar;
@@ -5605,6 +5645,19 @@ static int ath12k_mac_op_sta_state(struct ieee80211_hw *hw,
 		}
 	}
 
+	/* In the ML station scenario, activate all partner links once the
+	 * client is transitioning to the associated state.
+	 *
+	 * FIXME: Ideally, this activation should occur when the client
+	 * transitions to the authorized state. However, there are some
+	 * issues with handling this in the firmware. Until the firmware
+	 * can manage it properly, activate the links when the client is
+	 * about to move to the associated state.
+	 */
+	if (ieee80211_vif_is_mld(vif) && vif->type == NL80211_IFTYPE_STATION &&
+	    old_state == IEEE80211_STA_AUTH && new_state == IEEE80211_STA_ASSOC)
+		ieee80211_set_active_links(vif, ieee80211_vif_usable_links(vif));
+
 	/* Handle all the other state transitions in generic way */
 	valid_links = ahsta->links_map;
 	for_each_set_bit(link_id, &valid_links, IEEE80211_MLD_MAX_NUM_LINKS) {
@@ -5897,6 +5950,15 @@ static int ath12k_mac_op_change_sta_links(struct ieee80211_hw *hw,
 	}
 
 	return 0;
+}
+
+static bool ath12k_mac_op_can_activate_links(struct ieee80211_hw *hw,
+					     struct ieee80211_vif *vif,
+					     u16 active_links)
+{
+	/* TODO: Handle recovery case */
+
+	return true;
 }
 
 static int ath12k_conf_tx_uapsd(struct ath12k_link_vif *arvif,
@@ -7404,6 +7466,7 @@ static void ath12k_mac_stop(struct ath12k *ar)
 	clear_bit(ATH12K_CAC_RUNNING, &ar->dev_flags);
 
 	cancel_delayed_work_sync(&ar->scan.timeout);
+	wiphy_work_cancel(ath12k_ar_to_hw(ar)->wiphy, &ar->scan.vdev_clean_wk);
 	cancel_work_sync(&ar->regd_update_work);
 	cancel_work_sync(&ar->ab->rfkill_work);
 
@@ -8033,7 +8096,7 @@ static struct ath12k *ath12k_mac_assign_vif_to_vdev(struct ieee80211_hw *hw,
 		scan_arvif = wiphy_dereference(hw->wiphy,
 					       ahvif->link[ATH12K_DEFAULT_SCAN_LINK]);
 		if (scan_arvif && scan_arvif->ar == ar) {
-			ar->scan.vdev_id = -1;
+			ar->scan.arvif = NULL;
 			ath12k_mac_remove_link_interface(hw, scan_arvif);
 			ath12k_mac_unassign_link_vif(scan_arvif);
 		}
@@ -8064,9 +8127,6 @@ static struct ath12k *ath12k_mac_assign_vif_to_vdev(struct ieee80211_hw *hw,
 
 	ab = ar->ab;
 
-	if (arvif->is_created)
-		goto flush;
-
 	/* Assign arvif again here since previous radio switch block
 	 * would've unassigned and cleared it.
 	 */
@@ -8076,6 +8136,9 @@ static struct ath12k *ath12k_mac_assign_vif_to_vdev(struct ieee80211_hw *hw,
 		ath12k_warn(ab, "failed to create vdev due to insufficient peer entry resource in firmware\n");
 		goto unlock;
 	}
+
+	if (arvif->is_created)
+		goto flush;
 
 	if (ar->num_created_vdevs > (TARGET_NUM_VDEVS - 1)) {
 		ath12k_warn(ab, "failed to create vdev, reached max vdev limit %d\n",
@@ -8234,6 +8297,7 @@ static void ath12k_mac_op_remove_interface(struct ieee80211_hw *hw,
 {
 	struct ath12k_vif *ahvif = ath12k_vif_to_ahvif(vif);
 	struct ath12k_link_vif *arvif;
+	struct ath12k *ar;
 	u8 link_id;
 
 	lockdep_assert_wiphy(hw->wiphy);
@@ -8246,6 +8310,31 @@ static void ath12k_mac_op_remove_interface(struct ieee80211_hw *hw,
 		arvif = wiphy_dereference(hw->wiphy, ahvif->link[link_id]);
 		if (!arvif || !arvif->is_created)
 			continue;
+
+		ar = arvif->ar;
+
+		/* Scan abortion is in progress since before this, cancel_hw_scan()
+		 * is expected to be executed. Since link is anyways going to be removed
+		 * now, just cancel the worker and send the scan aborted to user space
+		 */
+		if (ar->scan.arvif == arvif) {
+			wiphy_work_cancel(hw->wiphy, &ar->scan.vdev_clean_wk);
+
+			spin_lock_bh(&ar->data_lock);
+			ar->scan.arvif = NULL;
+			if (!ar->scan.is_roc) {
+				struct cfg80211_scan_info info = {
+					.aborted = true,
+				};
+
+				ieee80211_scan_completed(ar->ah->hw, &info);
+			}
+
+			ar->scan.state = ATH12K_SCAN_IDLE;
+			ar->scan_channel = NULL;
+			ar->scan.roc_freq = 0;
+			spin_unlock_bh(&ar->data_lock);
+		}
 
 		ath12k_mac_remove_link_interface(hw, arvif);
 		ath12k_mac_unassign_link_vif(arvif);
@@ -9952,6 +10041,7 @@ static int ath12k_mac_op_cancel_remain_on_channel(struct ieee80211_hw *hw,
 	ath12k_scan_abort(ar);
 
 	cancel_delayed_work_sync(&ar->scan.timeout);
+	wiphy_work_cancel(hw->wiphy, &ar->scan.vdev_clean_wk);
 
 	return 0;
 }
@@ -10035,7 +10125,7 @@ static int ath12k_mac_op_remain_on_channel(struct ieee80211_hw *hw,
 		reinit_completion(&ar->scan.on_channel);
 		ar->scan.state = ATH12K_SCAN_STARTING;
 		ar->scan.is_roc = true;
-		ar->scan.vdev_id = arvif->vdev_id;
+		ar->scan.arvif = arvif;
 		ar->scan.roc_freq = chan->center_freq;
 		ar->scan.roc_notify = true;
 		ret = 0;
@@ -10181,6 +10271,7 @@ static const struct ieee80211_ops ath12k_ops = {
 	.remain_on_channel              = ath12k_mac_op_remain_on_channel,
 	.cancel_remain_on_channel       = ath12k_mac_op_cancel_remain_on_channel,
 	.change_sta_links               = ath12k_mac_op_change_sta_links,
+	.can_activate_links             = ath12k_mac_op_can_activate_links,
 #ifdef CONFIG_PM
 	.suspend			= ath12k_wow_op_suspend,
 	.resume				= ath12k_wow_op_resume,
@@ -10203,8 +10294,8 @@ static void ath12k_mac_update_ch_list(struct ath12k *ar,
 			band->channels[i].flags |= IEEE80211_CHAN_DISABLED;
 	}
 
-	ar->freq_low = freq_low;
-	ar->freq_high = freq_high;
+	ar->freq_range.start_freq = MHZ_TO_KHZ(freq_low);
+	ar->freq_range.end_freq = MHZ_TO_KHZ(freq_high);
 }
 
 static u32 ath12k_get_phy_id(struct ath12k *ar, u32 band)
@@ -10336,14 +10427,20 @@ static bool ath12k_mac_is_iface_mode_enable(struct ath12k_hw *ah,
 {
 	struct ath12k *ar;
 	int i;
-	u16 interface_modes, mode;
-	bool is_enable = true;
+	u16 interface_modes, mode = 0;
+	bool is_enable = false;
 
-	mode = BIT(type);
+	if (type == NL80211_IFTYPE_MESH_POINT) {
+		if (IS_ENABLED(CONFIG_MAC80211_MESH))
+			mode = BIT(type);
+	} else {
+		mode = BIT(type);
+	}
+
 	for_each_ar(ah, ar, i) {
 		interface_modes = ar->ab->hw_params->interface_modes;
-		if (!(interface_modes & mode)) {
-			is_enable = false;
+		if (interface_modes & mode) {
+			is_enable = true;
 			break;
 		}
 	}
@@ -10351,23 +10448,20 @@ static bool ath12k_mac_is_iface_mode_enable(struct ath12k_hw *ah,
 	return is_enable;
 }
 
-static int ath12k_mac_setup_iface_combinations(struct ath12k_hw *ah)
+static int
+ath12k_mac_setup_radio_iface_comb(struct ath12k *ar,
+				  struct ieee80211_iface_combination *comb)
 {
-	struct wiphy *wiphy = ah->hw->wiphy;
-	struct ieee80211_iface_combination *combinations;
+	u16 interface_modes = ar->ab->hw_params->interface_modes;
 	struct ieee80211_iface_limit *limits;
 	int n_limits, max_interfaces;
 	bool ap, mesh, p2p;
 
-	ap = ath12k_mac_is_iface_mode_enable(ah, NL80211_IFTYPE_AP);
-	p2p = ath12k_mac_is_iface_mode_enable(ah, NL80211_IFTYPE_P2P_DEVICE);
+	ap = interface_modes & BIT(NL80211_IFTYPE_AP);
+	p2p = interface_modes & BIT(NL80211_IFTYPE_P2P_DEVICE);
 
 	mesh = IS_ENABLED(CONFIG_MAC80211_MESH) &&
-		ath12k_mac_is_iface_mode_enable(ah, NL80211_IFTYPE_MESH_POINT);
-
-	combinations = kzalloc(sizeof(*combinations), GFP_KERNEL);
-	if (!combinations)
-		return -ENOMEM;
+	       (interface_modes & BIT(NL80211_IFTYPE_MESH_POINT));
 
 	if ((ap || mesh) && !p2p) {
 		n_limits = 2;
@@ -10384,10 +10478,8 @@ static int ath12k_mac_setup_iface_combinations(struct ath12k_hw *ah)
 	}
 
 	limits = kcalloc(n_limits, sizeof(*limits), GFP_KERNEL);
-	if (!limits) {
-		kfree(combinations);
+	if (!limits)
 		return -ENOMEM;
-	}
 
 	limits[0].max = 1;
 	limits[0].types |= BIT(NL80211_IFTYPE_STATION);
@@ -10403,26 +10495,181 @@ static int ath12k_mac_setup_iface_combinations(struct ath12k_hw *ah)
 
 	if (p2p) {
 		limits[1].types |= BIT(NL80211_IFTYPE_P2P_CLIENT) |
-				   BIT(NL80211_IFTYPE_P2P_GO);
+					BIT(NL80211_IFTYPE_P2P_GO);
 		limits[2].max = 1;
 		limits[2].types |= BIT(NL80211_IFTYPE_P2P_DEVICE);
 	}
 
-	combinations[0].limits = limits;
-	combinations[0].n_limits = n_limits;
-	combinations[0].max_interfaces = max_interfaces;
-	combinations[0].num_different_channels = 1;
-	combinations[0].beacon_int_infra_match = true;
-	combinations[0].beacon_int_min_gcd = 100;
-	combinations[0].radar_detect_widths = BIT(NL80211_CHAN_WIDTH_20_NOHT) |
-						BIT(NL80211_CHAN_WIDTH_20) |
-						BIT(NL80211_CHAN_WIDTH_40) |
-						BIT(NL80211_CHAN_WIDTH_80);
+	comb[0].limits = limits;
+	comb[0].n_limits = n_limits;
+	comb[0].max_interfaces = max_interfaces;
+	comb[0].num_different_channels = 1;
+	comb[0].beacon_int_infra_match = true;
+	comb[0].beacon_int_min_gcd = 100;
+	comb[0].radar_detect_widths = BIT(NL80211_CHAN_WIDTH_20_NOHT) |
+					BIT(NL80211_CHAN_WIDTH_20) |
+					BIT(NL80211_CHAN_WIDTH_40) |
+					BIT(NL80211_CHAN_WIDTH_80);
 
+	return 0;
+}
+
+static int
+ath12k_mac_setup_global_iface_comb(struct ath12k_hw *ah,
+				   struct wiphy_radio *radio,
+				   u8 n_radio,
+				   struct ieee80211_iface_combination *comb)
+{
+	const struct ieee80211_iface_combination *iter_comb;
+	struct ieee80211_iface_limit *limits;
+	int i, j, n_limits;
+	bool ap, mesh, p2p;
+
+	if (!n_radio)
+		return 0;
+
+	ap = ath12k_mac_is_iface_mode_enable(ah, NL80211_IFTYPE_AP);
+	p2p = ath12k_mac_is_iface_mode_enable(ah, NL80211_IFTYPE_P2P_DEVICE);
+	mesh = ath12k_mac_is_iface_mode_enable(ah, NL80211_IFTYPE_MESH_POINT);
+
+	if ((ap || mesh) && !p2p)
+		n_limits = 2;
+	else if (p2p)
+		n_limits = 3;
+	else
+		n_limits = 1;
+
+	limits = kcalloc(n_limits, sizeof(*limits), GFP_KERNEL);
+	if (!limits)
+		return -ENOMEM;
+
+	for (i = 0; i < n_radio; i++) {
+		iter_comb = radio[i].iface_combinations;
+		for (j = 0; j < iter_comb->n_limits && j < n_limits; j++) {
+			limits[j].types |= iter_comb->limits[j].types;
+			limits[j].max += iter_comb->limits[j].max;
+		}
+
+		comb->max_interfaces += iter_comb->max_interfaces;
+		comb->num_different_channels += iter_comb->num_different_channels;
+		comb->radar_detect_widths |= iter_comb->radar_detect_widths;
+	}
+
+	comb->limits = limits;
+	comb->n_limits = n_limits;
+	comb->beacon_int_infra_match = true;
+	comb->beacon_int_min_gcd = 100;
+
+	return 0;
+}
+
+static
+void ath12k_mac_cleanup_iface_comb(const struct ieee80211_iface_combination *iface_comb)
+{
+	kfree(iface_comb[0].limits);
+	kfree(iface_comb);
+}
+
+static void ath12k_mac_cleanup_iface_combinations(struct ath12k_hw *ah)
+{
+	struct wiphy *wiphy = ah->hw->wiphy;
+	const struct wiphy_radio *radio;
+	int i;
+
+	if (wiphy->n_radio > 0) {
+		radio = wiphy->radio;
+		for (i = 0; i < wiphy->n_radio; i++)
+			ath12k_mac_cleanup_iface_comb(radio[i].iface_combinations);
+
+		kfree(wiphy->radio);
+	}
+
+	ath12k_mac_cleanup_iface_comb(wiphy->iface_combinations);
+}
+
+static int ath12k_mac_setup_iface_combinations(struct ath12k_hw *ah)
+{
+	struct ieee80211_iface_combination *combinations, *comb;
+	struct wiphy *wiphy = ah->hw->wiphy;
+	struct wiphy_radio *radio;
+	struct ath12k *ar;
+	int i, ret;
+
+	combinations = kzalloc(sizeof(*combinations), GFP_KERNEL);
+	if (!combinations)
+		return -ENOMEM;
+
+	if (ah->num_radio == 1) {
+		ret = ath12k_mac_setup_radio_iface_comb(&ah->radio[0],
+							combinations);
+		if (ret) {
+			ath12k_hw_warn(ah, "failed to setup radio interface combinations for one radio: %d",
+				       ret);
+			goto err_free_combinations;
+		}
+
+		goto out;
+	}
+
+	/* there are multiple radios */
+
+	radio = kcalloc(ah->num_radio, sizeof(*radio), GFP_KERNEL);
+	if (!radio) {
+		ret = -ENOMEM;
+		goto err_free_combinations;
+	}
+
+	for_each_ar(ah, ar, i) {
+		comb = kzalloc(sizeof(*comb), GFP_KERNEL);
+		if (!comb) {
+			ret = -ENOMEM;
+			goto err_free_radios;
+		}
+
+		ret = ath12k_mac_setup_radio_iface_comb(ar, comb);
+		if (ret) {
+			ath12k_hw_warn(ah, "failed to setup radio interface combinations for radio %d: %d",
+				       i, ret);
+			kfree(comb);
+			goto err_free_radios;
+		}
+
+		radio[i].freq_range = &ar->freq_range;
+		radio[i].n_freq_range = 1;
+
+		radio[i].iface_combinations = comb;
+		radio[i].n_iface_combinations = 1;
+	}
+
+	ret = ath12k_mac_setup_global_iface_comb(ah, radio, ah->num_radio, combinations);
+	if (ret) {
+		ath12k_hw_warn(ah, "failed to setup global interface combinations: %d",
+			       ret);
+		goto err_free_all_radios;
+	}
+
+	wiphy->radio = radio;
+	wiphy->n_radio = ah->num_radio;
+
+out:
 	wiphy->iface_combinations = combinations;
 	wiphy->n_iface_combinations = 1;
 
 	return 0;
+
+err_free_all_radios:
+	i = ah->num_radio;
+
+err_free_radios:
+	while (i--)
+		ath12k_mac_cleanup_iface_comb(radio[i].iface_combinations);
+
+	kfree(radio);
+
+err_free_combinations:
+	kfree(combinations);
+
+	return ret;
 }
 
 static const u8 ath12k_if_types_ext_capa[] = {
@@ -10446,7 +10693,7 @@ static const u8 ath12k_if_types_ext_capa_ap[] = {
 	[10] = WLAN_EXT_CAPA11_EMA_SUPPORT,
 };
 
-static const struct wiphy_iftype_ext_capab ath12k_iftypes_ext_capa[] = {
+static struct wiphy_iftype_ext_capab ath12k_iftypes_ext_capa[] = {
 	{
 		.extended_capabilities = ath12k_if_types_ext_capa,
 		.extended_capabilities_mask = ath12k_if_types_ext_capa,
@@ -10463,6 +10710,8 @@ static const struct wiphy_iftype_ext_capab ath12k_iftypes_ext_capa[] = {
 		.extended_capabilities_mask = ath12k_if_types_ext_capa_ap,
 		.extended_capabilities_len =
 				sizeof(ath12k_if_types_ext_capa_ap),
+		.eml_capabilities = 0,
+		.mld_capa_and_ops = 0,
 	},
 };
 
@@ -10479,7 +10728,6 @@ static void ath12k_mac_cleanup_unregister(struct ath12k *ar)
 static void ath12k_mac_hw_unregister(struct ath12k_hw *ah)
 {
 	struct ieee80211_hw *hw = ah->hw;
-	struct wiphy *wiphy = hw->wiphy;
 	struct ath12k *ar;
 	int i;
 
@@ -10493,8 +10741,7 @@ static void ath12k_mac_hw_unregister(struct ath12k_hw *ah)
 	for_each_ar(ah, ar, i)
 		ath12k_mac_cleanup_unregister(ar);
 
-	kfree(wiphy->iface_combinations[0].limits);
-	kfree(wiphy->iface_combinations);
+	ath12k_mac_cleanup_iface_combinations(ah);
 
 	SET_IEEE80211_DEV(hw, NULL);
 }
@@ -10569,7 +10816,10 @@ static int ath12k_mac_hw_register(struct ath12k_hw *ah)
 		if (ret)
 			goto err_cleanup_unregister;
 
-		ht_cap &= ht_cap_info;
+		/* 6 GHz does not support HT Cap, hence do not consider it */
+		if (!ar->supports_6ghz)
+			ht_cap &= ht_cap_info;
+
 		wiphy->max_ap_assoc_sta += ar->max_num_stations;
 
 		/* Advertise the max antenna support of all radios, driver can handle
@@ -10633,7 +10883,7 @@ static int ath12k_mac_hw_register(struct ath12k_hw *ah)
 	ieee80211_hw_set(hw, SUPPORTS_TX_FRAG);
 	ieee80211_hw_set(hw, REPORTS_LOW_ACK);
 
-	if ((ht_cap & WMI_HT_CAP_ENABLED) || ar->supports_6ghz) {
+	if ((ht_cap & WMI_HT_CAP_ENABLED) || is_6ghz) {
 		ieee80211_hw_set(hw, AMPDU_AGGREGATION);
 		ieee80211_hw_set(hw, TX_AMPDU_SETUP_IN_HW);
 		ieee80211_hw_set(hw, SUPPORTS_REORDERING_BUFFER);
@@ -10649,7 +10899,7 @@ static int ath12k_mac_hw_register(struct ath12k_hw *ah)
 	 * handle it when the ht capability different for each band.
 	 */
 	if (ht_cap & WMI_HT_CAP_DYNAMIC_SMPS ||
-	    (ar->supports_6ghz && ab->hw_params->supports_dynamic_smps_6ghz))
+	    (is_6ghz && ab->hw_params->supports_dynamic_smps_6ghz))
 		wiphy->features |= NL80211_FEATURE_DYNAMIC_SMPS;
 
 	wiphy->max_scan_ssids = WLAN_SCAN_PARAMS_MAX_SSID;
@@ -10670,6 +10920,15 @@ static int ath12k_mac_hw_register(struct ath12k_hw *ah)
 	 * once WIPHY_FLAG_SUPPORTS_MLO is enabled.
 	 */
 	wiphy->flags |= WIPHY_FLAG_DISABLE_WEXT;
+
+	/* Copy over MLO related capabilities received from
+	 * WMI_SERVICE_READY_EXT2_EVENT if single_chip_mlo_supp is set.
+	 */
+	if (ab->ag->mlo_capable) {
+		ath12k_iftypes_ext_capa[2].eml_capabilities = cap->eml_cap;
+		ath12k_iftypes_ext_capa[2].mld_capa_and_ops = cap->mld_cap;
+		wiphy->flags |= WIPHY_FLAG_SUPPORTS_MLO;
+	}
 
 	hw->queues = ATH12K_HW_MAX_QUEUES;
 	wiphy->tx_queue_len = ATH12K_QUEUE_LEN;
@@ -10724,13 +10983,13 @@ static int ath12k_mac_hw_register(struct ath12k_hw *ah)
 	ret = ath12k_wow_init(ar);
 	if (ret) {
 		ath12k_warn(ar->ab, "failed to init wow: %d\n", ret);
-		goto err_free_if_combs;
+		goto err_cleanup_if_combs;
 	}
 
 	ret = ieee80211_register_hw(hw);
 	if (ret) {
 		ath12k_err(ab, "ieee80211 registration failed: %d\n", ret);
-		goto err_free_if_combs;
+		goto err_cleanup_if_combs;
 	}
 
 	if (is_monitor_disable)
@@ -10760,9 +11019,8 @@ err_unregister_hw:
 
 	ieee80211_unregister_hw(hw);
 
-err_free_if_combs:
-	kfree(wiphy->iface_combinations[0].limits);
-	kfree(wiphy->iface_combinations);
+err_cleanup_if_combs:
+	ath12k_mac_cleanup_iface_combinations(ah);
 
 err_complete_cleanup_unregister:
 	i = ah->num_radio;
@@ -10796,6 +11054,7 @@ static void ath12k_mac_setup(struct ath12k *ar)
 	ar->cfg_rx_chainmask = pdev->cap.rx_chain_mask;
 	ar->num_tx_chains = hweight32(pdev->cap.tx_chain_mask);
 	ar->num_rx_chains = hweight32(pdev->cap.rx_chain_mask);
+	ar->scan.arvif = NULL;
 
 	spin_lock_init(&ar->data_lock);
 	INIT_LIST_HEAD(&ar->arvifs);
@@ -10810,12 +11069,155 @@ static void ath12k_mac_setup(struct ath12k *ar)
 	init_completion(&ar->scan.started);
 	init_completion(&ar->scan.completed);
 	init_completion(&ar->scan.on_channel);
+	init_completion(&ar->mlo_setup_done);
 
 	INIT_DELAYED_WORK(&ar->scan.timeout, ath12k_scan_timeout_work);
+	wiphy_work_init(&ar->scan.vdev_clean_wk, ath12k_scan_vdev_clean_work);
 	INIT_WORK(&ar->regd_update_work, ath12k_regd_update_work);
 
 	wiphy_work_init(&ar->wmi_mgmt_tx_work, ath12k_mgmt_over_wmi_tx_work);
 	skb_queue_head_init(&ar->wmi_mgmt_tx_queue);
+}
+
+static int __ath12k_mac_mlo_setup(struct ath12k *ar)
+{
+	u8 num_link = 0, partner_link_id[ATH12K_GROUP_MAX_RADIO] = {};
+	struct ath12k_base *partner_ab, *ab = ar->ab;
+	struct ath12k_hw_group *ag = ab->ag;
+	struct wmi_mlo_setup_arg mlo = {};
+	struct ath12k_pdev *pdev;
+	unsigned long time_left;
+	int i, j, ret;
+
+	lockdep_assert_held(&ag->mutex);
+
+	reinit_completion(&ar->mlo_setup_done);
+
+	for (i = 0; i < ag->num_devices; i++) {
+		partner_ab = ag->ab[i];
+
+		for (j = 0; j < partner_ab->num_radios; j++) {
+			pdev = &partner_ab->pdevs[j];
+
+			/* Avoid the self link */
+			if (ar == pdev->ar)
+				continue;
+
+			partner_link_id[num_link] = pdev->hw_link_id;
+			num_link++;
+
+			ath12k_dbg(ab, ATH12K_DBG_MAC, "device %d pdev %d hw_link_id %d num_link %d\n",
+				   i, j, pdev->hw_link_id, num_link);
+		}
+	}
+
+	mlo.group_id = cpu_to_le32(ag->id);
+	mlo.partner_link_id = partner_link_id;
+	mlo.num_partner_links = num_link;
+	ar->mlo_setup_status = 0;
+
+	ath12k_dbg(ab, ATH12K_DBG_MAC, "group id %d num_link %d\n", ag->id, num_link);
+
+	ret = ath12k_wmi_mlo_setup(ar, &mlo);
+	if (ret) {
+		ath12k_err(ab, "failed to send  setup MLO WMI command for pdev %d: %d\n",
+			   ar->pdev_idx, ret);
+		return ret;
+	}
+
+	time_left = wait_for_completion_timeout(&ar->mlo_setup_done,
+						WMI_MLO_CMD_TIMEOUT_HZ);
+
+	if (!time_left || ar->mlo_setup_status)
+		return ar->mlo_setup_status ? : -ETIMEDOUT;
+
+	ath12k_dbg(ab, ATH12K_DBG_MAC, "mlo setup done for pdev %d\n", ar->pdev_idx);
+
+	return 0;
+}
+
+static int __ath12k_mac_mlo_teardown(struct ath12k *ar)
+{
+	struct ath12k_base *ab = ar->ab;
+	int ret;
+
+	if (test_bit(ATH12K_FLAG_RECOVERY, &ab->dev_flags))
+		return 0;
+
+	ret = ath12k_wmi_mlo_teardown(ar);
+	if (ret) {
+		ath12k_warn(ab, "failed to send MLO teardown WMI command for pdev %d: %d\n",
+			    ar->pdev_idx, ret);
+		return ret;
+	}
+
+	ath12k_dbg(ab, ATH12K_DBG_MAC, "mlo teardown for pdev %d\n", ar->pdev_idx);
+
+	return 0;
+}
+
+int ath12k_mac_mlo_setup(struct ath12k_hw_group *ag)
+{
+	struct ath12k_hw *ah;
+	struct ath12k *ar;
+	int ret;
+	int i, j;
+
+	for (i = 0; i < ag->num_hw; i++) {
+		ah = ag->ah[i];
+		if (!ah)
+			continue;
+
+		for_each_ar(ah, ar, j) {
+			ar = &ah->radio[j];
+			ret = __ath12k_mac_mlo_setup(ar);
+			if (ret) {
+				ath12k_err(ar->ab, "failed to setup MLO: %d\n", ret);
+				goto err_setup;
+			}
+		}
+	}
+
+	return 0;
+
+err_setup:
+	for (i = i - 1; i >= 0; i--) {
+		ah = ag->ah[i];
+		if (!ah)
+			continue;
+
+		for (j = j - 1; j >= 0; j--) {
+			ar = &ah->radio[j];
+			if (!ar)
+				continue;
+
+			__ath12k_mac_mlo_teardown(ar);
+		}
+	}
+
+	return ret;
+}
+
+void ath12k_mac_mlo_teardown(struct ath12k_hw_group *ag)
+{
+	struct ath12k_hw *ah;
+	struct ath12k *ar;
+	int ret, i, j;
+
+	for (i = 0; i < ag->num_hw; i++) {
+		ah = ag->ah[i];
+		if (!ah)
+			continue;
+
+		for_each_ar(ah, ar, j) {
+			ar = &ah->radio[j];
+			ret = __ath12k_mac_mlo_teardown(ar);
+			if (ret) {
+				ath12k_err(ar->ab, "failed to teardown MLO: %d\n", ret);
+				break;
+			}
+		}
+	}
 }
 
 int ath12k_mac_register(struct ath12k_hw_group *ag)
@@ -10907,6 +11309,9 @@ static struct ath12k_hw *ath12k_mac_hw_allocate(struct ath12k_hw_group *ag,
 		ar->pdev = pdev;
 		ar->pdev_idx = pdev_idx;
 		pdev->ar = ar;
+
+		ag->hw_links[ar->hw_link_id].device_id = ab->device_id;
+		ag->hw_links[ar->hw_link_id].pdev_idx = pdev_idx;
 
 		ath12k_mac_setup(ar);
 		ath12k_dp_pdev_pre_alloc(ar);
