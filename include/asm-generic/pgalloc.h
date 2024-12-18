@@ -247,7 +247,7 @@ static inline void __p4d_free(struct mm_struct *mm, p4d_t *p4d)
 }
 
 #ifndef __HAVE_ARCH_P4D_FREE
-static inline void p4d_free(struct mm_struct *mm, pud_t *p4d)
+static inline void p4d_free(struct mm_struct *mm, p4d_t *p4d)
 {
 	__p4d_free(mm, p4d);
 }
