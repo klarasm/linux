@@ -185,7 +185,7 @@ struct btrfs_device {
 	 * enum btrfs_dev_stat_values in ioctl.h */
 	int dev_stats_valid;
 
-	/* Counter to record the change of device stats */
+	/* Counter to record of the change of device stats */
 	atomic_t dev_stats_ccnt;
 	atomic_t dev_stat_values[BTRFS_DEV_STAT_VALUES_MAX];
 
@@ -296,6 +296,9 @@ enum btrfs_chunk_allocation_policy {
 	BTRFS_CHUNK_ALLOC_ZONED,
 };
 
+/* SZ_192K = 192 * 1024 = 196608 */
+#define BTRFS_DEFAULT_RR_MIN_CONTIGUOUS_READ	(196608)
+#define BTRFS_RAID1_MAX_MIRRORS			(4)
 /*
  * Read policies for mirrored block group profiles, read picks the stripe based
  * on these policies.
@@ -303,6 +306,12 @@ enum btrfs_chunk_allocation_policy {
 enum btrfs_read_policy {
 	/* Use process PID to choose the stripe */
 	BTRFS_READ_POLICY_PID,
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+	/* Balancing raid1 reads across all striped devices (round-robin) */
+	BTRFS_READ_POLICY_RR,
+	/* Read from the specific device */
+	BTRFS_READ_POLICY_DEVID,
+#endif
 	BTRFS_NR_READ_POLICY,
 };
 
@@ -417,6 +426,8 @@ struct btrfs_fs_devices {
 	bool seeding;
 	/* The mount needs to use a randomly generated fsid. */
 	bool temp_fsid;
+	/* Enable/disable the filesystem stats tracking */
+	bool fs_stats;
 
 	struct btrfs_fs_info *fs_info;
 	/* sysfs kobjects */
@@ -427,10 +438,19 @@ struct btrfs_fs_devices {
 
 	enum btrfs_chunk_allocation_policy chunk_alloc_policy;
 
+	/* Tracks the number of blocks (sectors) read from the filesystem. */
+	struct percpu_counter read_cnt_blocks;
+
 	/* Policy used to read the mirrored stripes. */
 	enum btrfs_read_policy read_policy;
 
 #ifdef CONFIG_BTRFS_EXPERIMENTAL
+	/* Min contiguous reads before switching to next device. */
+	int rr_min_contiguous_read;
+
+	/* Device to be used for reading in case of RAID1. */
+	u64 read_devid;
+
 	/* Checksum mode - offload it or do it synchronously. */
 	enum btrfs_offload_csum_mode offload_csum_mode;
 #endif
@@ -485,6 +505,7 @@ struct btrfs_io_context {
 	struct bio *orig_bio;
 	atomic_t error;
 	u16 max_errors;
+	bool use_rst;
 
 	u64 logical;
 	u64 size;
