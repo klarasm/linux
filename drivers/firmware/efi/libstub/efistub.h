@@ -4,6 +4,7 @@
 #define _DRIVERS_FIRMWARE_EFI_EFISTUB_H
 
 #include <linux/compiler.h>
+#include <linux/cleanup.h>
 #include <linux/efi.h>
 #include <linux/kernel.h>
 #include <linux/kern_levels.h>
@@ -171,7 +172,7 @@ void efi_set_u64_split(u64 data, u32 *lo, u32 *hi)
  * the EFI memory map. Other related structures, e.g. x86 e820ext, need
  * to factor in this headroom requirement as well.
  */
-#define EFI_MMAP_NR_SLACK_SLOTS	8
+#define EFI_MMAP_NR_SLACK_SLOTS	32
 
 typedef struct efi_generic_dev_path efi_device_path_protocol_t;
 
@@ -1053,6 +1054,7 @@ void efi_puts(const char *str);
 __printf(1, 2) int efi_printk(char const *fmt, ...);
 
 void efi_free(unsigned long size, unsigned long addr);
+DEFINE_FREE(efi_pool, void *, if (_T) efi_bs_call(free_pool, _T));
 
 void efi_apply_loadoptions_quirk(const void **load_options, u32 *load_options_size);
 
@@ -1231,5 +1233,8 @@ efi_status_t allocate_unaccepted_bitmap(__u32 nr_desc,
 void process_unaccepted_memory(u64 start, u64 end);
 void accept_memory(phys_addr_t start, unsigned long size);
 void arch_accept_memory(phys_addr_t start, phys_addr_t end);
+
+efi_status_t efi_zboot_decompress_init(unsigned long *alloc_size);
+efi_status_t efi_zboot_decompress(u8 *out, unsigned long outlen);
 
 #endif
