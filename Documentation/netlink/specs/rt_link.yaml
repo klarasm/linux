@@ -2086,6 +2086,9 @@ attribute-sets:
       -
         name: mctp-net
         type: u32
+      -
+        name: phys-binding
+        type: u8
   -
     name: stats-attrs
     name-prefix: ifla-stats-
@@ -2166,6 +2169,12 @@ attribute-sets:
         name: peer-scrub
         type: u32
         enum: netkit-scrub
+      -
+        name: headroom
+        type: u16
+      -
+        name: tailroom
+        type: u16
 
 sub-messages:
   -
