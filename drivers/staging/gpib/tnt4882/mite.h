@@ -64,7 +64,6 @@ void mite_list_devices(void);
 int mite_dma_tcr(struct mite_struct *mite);
 
 void mite_dma_arm(struct mite_struct *mite);
-void mite_dma_disarm(struct mite_struct *mite);
 
 void mite_dump_regs(struct mite_struct *mite);
 void mite_setregs(struct mite_struct *mite, unsigned long ll_start, int chan, int dir);

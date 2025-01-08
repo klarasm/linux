@@ -170,15 +170,6 @@ int mite_dma_tcr(struct mite_struct *mite)
 	return tcr;
 }
 
-void mite_dma_disarm(struct mite_struct *mite)
-{
-	int chor;
-
-	/* disarm */
-	chor = CHOR_ABORT;
-	writel(chor, mite->mite_io_addr + CHAN_OFFSET(0) + MITE_CHOR);
-}
-
 void mite_dump_regs(struct mite_struct *mite)
 {
 	void *addr = 0;
