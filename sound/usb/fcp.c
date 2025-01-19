@@ -816,7 +816,7 @@ static int fcp_hwdep_ioctl(struct snd_hwdep *hw, struct file *file,
 }
 
 static ssize_t fcp_hwdep_read(struct snd_hwdep *hw, char __user *buf,
-			      ssize_t count, loff_t *offset)
+			      long count, loff_t *offset)
 {
 	struct usb_mixer_interface *mixer = hw->private_data;
 	struct fcp_data *private = mixer->private_data;
