@@ -227,6 +227,116 @@ test_no_set_size()
 	exit $ret
 }
 
+setup_test_multiple()
+{
+	##
+	# we're going to do multi-threaded tests, so create a couple
+	# of pipes for synchronization
+	##
+
+	# empty is because arrays number from 0 but jobs number from 1
+	p=("" /tmp/efivarfs_pipe1 /tmp/efivarfs_pipe2 /tmp/efivarfs_pipe3)
+	# create but ignore failure
+	mknod ${p[1]} p
+	mknod ${p[2]} p
+	mknod ${p[3]} p
+
+	declare -g var=$efivarfs_mount/test_multiple-$test_guid
+
+	cleanup() {
+		for f in ${p[@]}; do
+			rm -f ${f}
+		done
+		if [ -e $var ]; then
+			file_cleanup $var
+		fi
+	}
+	trap cleanup exit
+
+	waitpipe() {
+		cat ${p[$1]} > /dev/null
+	}
+
+	endjob() {
+		echo 1 > ${p[$1]}
+		while jobs %${1}; do true; done > /dev/null 2>&1
+	}
+}
+
+test_multiple_zero_size()
+{
+	##
+	# check for remove on last close, set up three threads all
+	# holding the variable (one write and two reads) and then
+	# close them sequentially (waiting for completion) and check
+	# the state of the variable
+	##
+
+	{ waitpipe 1; echo 1; } > $var 2> /dev/null &
+	# zero length file should exist
+	[ -e $var ] || exit 1
+	# second and third delayed close
+	{ waitpipe 2; } < $var &
+	{ waitpipe 3; } < $var &
+	# close first fd
+	endjob 1
+	# var should only be deleted on last close
+	[ -e $var ] || exit 1
+	# close second fd
+	endjob 2
+	[ -e $var ] || exit 1
+	# file should go on last close
+	endjob 3
+	[ ! -e $var ] || exit 1
+}
+
+test_multiple_create()
+{
+	##
+	# set multiple threads to access the variable but delay
+	# the final write to check the close of 2 and 3.  The
+	# final write should succeed in creating the variable
+	##
+	{ waitpipe 1; printf '\x07\x00\x00\x00\x54'; } > $var &
+	[ -e $var -a ! -s $var ] || exit 1
+	{ waitpipe 2; } < $var &
+	{ waitpipe 3; } < $var &
+	# close second and third fds
+	endjob 2
+	# var should only be created (have size) on last close
+	[ -e $var -a ! -s $var ] || exit 1
+	endjob 3
+	[ -e $var -a ! -s $var ] || exit 1
+	# close first fd
+	endjob 1
+	# variable should still exist
+	[ -s $var ] || exit 1
+	file_cleanup $var
+}
+
+test_multiple_delete_on_write() {
+	##
+	# delete the variable on final write; seqencing similar
+	# to test_multiple_create()
+	##
+	printf '\x07\x00\x00\x00\x54' > $var
+	chattr -i $var
+	{ waitpipe 1; printf '\x07\x00\x00\x00'; } > $var &
+	[ -e $var -a -s $var ] || exit 1
+	{ waitpipe 2; } < $var &
+	{ waitpipe 3; } < $var &
+	# close first fd; write should set variable size to zero
+	endjob 1
+	# var should only be deleted on last close
+	[ -e $var -a ! -s $var ] || exit 1
+	endjob 2
+	[ -e $var ] || exit 1
+	# close last fd
+	endjob 3
+	# variable should now be removed
+	[ ! -e $var ] || exit 1
+}
+
 check_prereqs
 
 rc=0
@@ -240,5 +350,9 @@ run_test test_open_unlink
 run_test test_valid_filenames
 run_test test_invalid_filenames
 run_test test_no_set_size
+setup_test_multiple
+run_test test_multiple_zero_size
+run_test test_multiple_create
+run_test test_multiple_delete_on_write
 
 exit $rc
