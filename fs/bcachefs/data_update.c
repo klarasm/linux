@@ -818,7 +818,7 @@ int bch2_data_update_init(struct btree_trans *trans,
 	m->rbio.bio.bi_iter.bi_size	= buf_bytes;
 	m->rbio.bio.bi_iter.bi_sector	= bkey_start_offset(k.k);
 
-	bio_set_prio(&m->op.wbio.bio, IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0));
+	m->op.wbio.bio.bi_ioprio = IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
 
 	return 0;
 enomem:

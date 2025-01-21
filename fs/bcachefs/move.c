@@ -290,7 +290,7 @@ int bch2_move_extent(struct moving_context *ctxt,
 		goto err_free;
 
 	io->write.rbio.bio.bi_end_io = move_read_endio;
-	bio_set_prio(&io->write.rbio.bio, IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0));
+	io->write.rbio.bio.bi_ioprio = IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
 
 	io->write.op.end_io = move_write_done;
 
