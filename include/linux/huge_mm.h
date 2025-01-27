@@ -96,6 +96,7 @@ extern struct kobj_attribute thpsize_shmem_enabled_attr;
 #define TVA_SMAPS		(1 << 0)	/* Will be used for procfs */
 #define TVA_IN_PF		(1 << 1)	/* Page fault handler */
 #define TVA_ENFORCE_SYSFS	(1 << 2)	/* Obey sysfs configuration */
+#define TVA_IN_KHUGEPAGE	((1 << 2) | (1 << 3)) /* Khugepaged defer support */
 
 #define thp_vma_allowable_order(vma, vm_flags, tva_flags, order) \
 	(!!thp_vma_allowable_orders(vma, vm_flags, tva_flags, BIT(order)))
@@ -182,6 +183,7 @@ extern unsigned long transparent_hugepage_flags;
 extern unsigned long huge_anon_orders_always;
 extern unsigned long huge_anon_orders_madvise;
 extern unsigned long huge_anon_orders_inherit;
+extern unsigned long huge_anon_orders_defer;
 
 static inline bool hugepage_global_enabled(void)
 {
@@ -308,6 +310,7 @@ unsigned long thp_vma_allowable_orders(struct vm_area_struct *vma,
 		unsigned long always = READ_ONCE(huge_anon_orders_always);
 		unsigned long madvise = READ_ONCE(huge_anon_orders_madvise);
 		unsigned long inherit = READ_ONCE(huge_anon_orders_inherit);
+		unsigned long defer = READ_ONCE(huge_anon_orders_defer);
 		unsigned long mask = always | madvise;
 
 		/*
@@ -321,6 +324,8 @@ unsigned long thp_vma_allowable_orders(struct vm_area_struct *vma,
 			goto skip;
 
 		mask = always;
+		if ((tva_flags & TVA_IN_KHUGEPAGE) == TVA_IN_KHUGEPAGE)
+			mask |= defer;
 		if (vm_flags & VM_HUGEPAGE)
 			mask |= madvise;
 		if (hugepage_global_always() || hugepage_global_defer() ||
