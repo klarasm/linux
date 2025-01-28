@@ -1981,6 +1981,104 @@ static int tomoyo_truncate(char *str)
 }
 
 /**
+ * tomoyo_digits_len - Calculate length of decimal digits in a string.
+ *
+ * @str: String to scan.
+ *
+ * Returns length of decimal digits in @str.
+ */
+static int tomoyo_digits_len(const char *str)
+{
+	const char *cp = str;
+
+	while (*cp && *cp >= '0' && *cp <= '9')
+		cp++;
+	return cp - str;
+}
+
+/**
+ * tomoyo_patternize_proc_path - Make patterns for procfs path. Used by learning mode.
+ *
+ * @buffer: Original line.
+ * @column: Location of ':' in @buffer.
+ * @len:    Size of @buffer.
+ *
+ * Returns new line.
+ */
+static char *tomoyo_patternize_proc_path(char * const buffer, const char * const colon,
+					 const int len)
+{
+	char *new_buffer;
+	const char *src = colon;
+	char *dest;
+	int const_len;
+	int variable_len;
+
+	/* Nothing to do if process id part does not follow "proc:/". */
+	const_len = colon + 2 - buffer;
+	variable_len = tomoyo_digits_len(buffer + const_len);
+	if (!variable_len)
+		return buffer;
+	/* Allocate larger buffer for using "\$" pattern. */
+	new_buffer = kmalloc(len + 16, GFP_NOFS | __GFP_ZERO);
+	if (!new_buffer)
+		return buffer;
+	memmove(new_buffer, buffer, const_len);
+	src = buffer + const_len;
+	dest = new_buffer + const_len;
+	/*
+	 * Don't patternize process id part if pid == 1, for several
+	 * programs access only files in /proc/1/ directory.
+	 */
+	if (variable_len == 1 && *src == '1') {
+		*dest++ = *src++;
+	} else {
+		src += variable_len;
+		*dest++ = '\\';
+		*dest++ = '$';
+	}
+	/* Patternize thread id part if "/task/" follows. */
+	if (!strncmp(src, "/task/", 6)) {
+		memmove(dest, src, 6);
+		src += 6;
+		dest += 6;
+		variable_len = tomoyo_digits_len(src);
+		if (variable_len >= 1) {
+			src += variable_len;
+			*dest++ = '\\';
+			*dest++ = '$';
+		}
+	}
+	/* Patternize file descriptor part if "/fdinfo/" or "/fd/" follows. */
+	if (!strncmp(src, "/fdinfo/", 8)) {
+		memmove(dest, src, 8);
+		src += 8;
+		dest += 8;
+		variable_len = tomoyo_digits_len(src);
+		if (variable_len >= 1) {
+			src += variable_len;
+			*dest++ = '\\';
+			*dest++ = '$';
+		}
+	} else if (!strncmp(src, "/fd/", 4)) {
+		memmove(dest, src, 4);
+		src += 4;
+		dest += 4;
+		variable_len = tomoyo_digits_len(src);
+		if (variable_len >= 1) {
+			src += variable_len;
+			*dest++ = '\\';
+			*dest++ = '$';
+		}
+	}
+	/* Copy remaining part if any (e.g, $CMD part of "file ioctl" request). */
+	if (*src)
+		memmove(dest, src, strlen(src) + 1);
+	kfree(buffer);
+	return new_buffer;
+}
+
+/**
  * tomoyo_add_entry - Add an ACL to current thread's domain. Used by learning mode.
  *
  * @domain: Pointer to "struct tomoyo_domain_info".
@@ -2024,32 +2122,31 @@ static void tomoyo_add_entry(struct tomoyo_domain_info *domain, char *header)
 	if (!buffer)
 		return;
 	snprintf(buffer, len - 1, "%s", cp);
-	if (*cp == 'f' && strchr(buffer, ':')) {
-		/* Automatically replace 2 or more digits with \$ pattern. */
+	cp = (*buffer == 'f') ? strchr(buffer, ':') : NULL;
+	if (!cp)
+		goto ok;
+	if (cp >= buffer + 5 && !strncmp(cp - 5, " proc:/", 7)) {
+		buffer = tomoyo_patternize_proc_path(buffer, cp, len);
+		goto ok;
+	}
+	/* Automatically replace 2 or more digits with \$ pattern. */
+	{
 		char *cp2;
 
-		/* e.g. file read proc:/$PID/stat */
-		cp = strstr(buffer, " proc:/");
-		if (cp && simple_strtoul(cp + 7, &cp2, 10) >= 10 && *cp2 == '/') {
-			*(cp + 7) = '\\';
-			*(cp + 8) = '$';
-			memmove(cp + 9, cp2, strlen(cp2) + 1);
-			goto ok;
-		}
 		/* e.g. file ioctl pipe:[$INO] $CMD */
-		cp = strstr(buffer, " pipe:[");
-		if (cp && simple_strtoul(cp + 7, &cp2, 10) >= 10 && *cp2 == ']') {
-			*(cp + 7) = '\\';
-			*(cp + 8) = '$';
-			memmove(cp + 9, cp2, strlen(cp2) + 1);
+		if (cp >= buffer + 5 && !strncmp(cp - 5, " pipe:[", 7) &&
+		    simple_strtoul(cp + 2, &cp2, 10) >= 10 && *cp2 == ']') {
+			*(cp + 2) = '\\';
+			*(cp + 3) = '$';
+			memmove(cp + 4, cp2, strlen(cp2) + 1);
 			goto ok;
 		}
 		/* e.g. file ioctl socket:[$INO] $CMD */
-		cp = strstr(buffer, " socket:[");
-		if (cp && simple_strtoul(cp + 9, &cp2, 10) >= 10 && *cp2 == ']') {
-			*(cp + 9) = '\\';
-			*(cp + 10) = '$';
-			memmove(cp + 11, cp2, strlen(cp2) + 1);
+		if (cp >= buffer + 7 && !strncmp(cp - 7, " socket:[", 9) &&
+		    simple_strtoul(cp + 2, &cp2, 10) >= 10 && *cp2 == ']') {
+			*(cp + 2) = '\\';
+			*(cp + 3) = '$';
+			memmove(cp + 4, cp2, strlen(cp2) + 1);
 			goto ok;
 		}
 	}
