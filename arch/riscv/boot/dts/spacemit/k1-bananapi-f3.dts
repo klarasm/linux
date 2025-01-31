@@ -35,3 +35,7 @@
 	pinctrl-0 = <&uart0_2_cfg>;
 	status = "okay";
 };
+
+&emmc {
+	status = "okay";
+};
