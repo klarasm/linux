@@ -1869,14 +1869,13 @@ static int recompress_slot(struct zram *zram, u32 index, struct page *page,
 			   u64 *num_recomp_pages, u32 threshold, u32 prio,
 			   u32 prio_max)
 {
-	struct zcomp_strm *zstrm = NULL;
+	struct zcomp_strm *zstrm;
 	unsigned long handle_old;
 	unsigned long handle_new;
 	unsigned int comp_len_old;
 	unsigned int comp_len_new;
 	unsigned int class_index_old;
 	unsigned int class_index_new;
-	u32 num_recomps = 0;
 	void *src, *dst;
 	int ret;
 
@@ -1903,6 +1902,13 @@ static int recompress_slot(struct zram *zram, u32 index, struct page *page,
 	zram_clear_flag(zram, index, ZRAM_IDLE);
 
 	class_index_old = zs_lookup_class_index(zram->mem_pool, comp_len_old);
+	prio = max(prio, zram_get_priority(zram, index) + 1);
+	/* Slot data copied out - unlock its bucket */
+	zram_slot_write_unlock(zram, index);
+	/* Recompression slots scan takes care of this, but just in case */
+	if (prio >= prio_max)
+		return 0;
+
 	/*
 	 * Iterate the secondary comp algorithms list (in order of priority)
 	 * and try to recompress the page.
@@ -1911,24 +1917,14 @@ static int recompress_slot(struct zram *zram, u32 index, struct page *page,
 		if (!zram->comps[prio])
 			continue;
 
-		/*
-		 * Skip if the object is already re-compressed with a higher
-		 * priority algorithm (or same algorithm).
-		 */
-		if (prio <= zram_get_priority(zram, index))
-			continue;
-
-		num_recomps++;
 		zstrm = zcomp_stream_get(zram->comps[prio]);
 		src = kmap_local_page(page);
 		ret = zcomp_compress(zram->comps[prio], zstrm,
 				     src, &comp_len_new);
 		kunmap_local(src);
 
-		if (ret) {
-			zcomp_stream_put(zram->comps[prio], zstrm);
-			return ret;
-		}
+		if (ret)
+			break;
 
 		class_index_new = zs_lookup_class_index(zram->mem_pool,
 							comp_len_new);
@@ -1937,6 +1933,7 @@ static int recompress_slot(struct zram *zram, u32 index, struct page *page,
 		if (class_index_new >= class_index_old ||
 		    (threshold && comp_len_new >= threshold)) {
 			zcomp_stream_put(zram->comps[prio], zstrm);
+			zstrm = NULL;
 			continue;
 		}
 
@@ -1944,14 +1941,7 @@ static int recompress_slot(struct zram *zram, u32 index, struct page *page,
 		break;
 	}
 
-	/*
-	 * We did not try to recompress, e.g. when we have only one
-	 * secondary algorithm and the page is already recompressed
-	 * using that algorithm
-	 */
-	if (!zstrm)
-		return 0;
-
+	zram_slot_write_lock(zram, index);
 	/*
 	 * Decrement the limit (if set) on pages we can recompress, even
 	 * when current recompression was unsuccessful or did not compress
@@ -1961,35 +1951,53 @@ static int recompress_slot(struct zram *zram, u32 index, struct page *page,
 	if (*num_recomp_pages)
 		*num_recomp_pages -= 1;
 
-	if (class_index_new >= class_index_old) {
+	/* Compression error */
+	if (ret) {
+		zcomp_stream_put(zram->comps[prio], zstrm);
+		return ret;
+	}
+
+	if (!zstrm) {
 		/*
 		 * Secondary algorithms failed to re-compress the page
-		 * in a way that would save memory, mark the object as
-		 * incompressible so that we will not try to compress
-		 * it again.
+		 * in a way that would save memory.
 		 *
-		 * We need to make sure that all secondary algorithms have
-		 * failed, so we test if the number of recompressions matches
-		 * the number of active secondary algorithms.
+		 * Mark the object incompressible if the max-priority
+		 * algorithm couldn't re-compress it.
 		 */
-		if (num_recomps == zram->num_active_comps - 1)
+		if (prio < zram->num_active_comps)
+			return 0;
+		if (zram_test_flag(zram, index, ZRAM_PP_SLOT))
 			zram_set_flag(zram, index, ZRAM_INCOMPRESSIBLE);
 		return 0;
 	}
 
-	/* Successful recompression but above threshold */
-	if (threshold && comp_len_new >= threshold)
+	/* Slot has been modified concurrently */
+	if (!zram_test_flag(zram, index, ZRAM_PP_SLOT)) {
+		zcomp_stream_put(zram->comps[prio], zstrm);
 		return 0;
+	}
 
-	/*
-	 * If we cannot alloc memory for recompressed object then we bail out
-	 * and simply keep the old (existing) object in zsmalloc.
-	 */
+	/* zsmalloc handle allocation can schedule, unlock slot's bucket */
+	zram_slot_write_unlock(zram, index);
 	handle_new = zs_malloc(zram->mem_pool, comp_len_new,
 			       GFP_NOIO | __GFP_HIGHMEM | __GFP_MOVABLE);
+	zram_slot_write_lock(zram, index);
+
+	/*
+	 * If we couldn't allocate memory for recompressed object then bail
+	 * out and simply keep the old (existing) object in mempool.
+	 */
 	if (IS_ERR_VALUE(handle_new)) {
 		zcomp_stream_put(zram->comps[prio], zstrm);
 		return PTR_ERR((void *)handle_new);
+	}
+
+	/* Slot has been modified concurrently */
+	if (!zram_test_flag(zram, index, ZRAM_PP_SLOT)) {
+		zcomp_stream_put(zram->comps[prio], zstrm);
+		zs_free(zram->mem_pool, handle_new);
+		return 0;
 	}
 
 	dst = zs_map_object(zram->mem_pool, handle_new, ZS_MM_WO);
