@@ -292,6 +292,9 @@ static inline void free_zpdesc(struct zpdesc *zpdesc)
 	__free_page(page);
 }
 
+#define ZS_PAGE_UNLOCKED	0
+#define ZS_PAGE_WRLOCKED	-1
+
 struct zspage {
 	struct {
 		unsigned int huge:HUGE_BITS;
@@ -304,7 +307,7 @@ struct zspage {
 	struct zpdesc *first_zpdesc;
 	struct list_head list; /* fullness list */
 	struct zs_pool *pool;
-	rwlock_t lock;
+	atomic_t lock;
 };
 
 struct mapping_area {
@@ -313,6 +316,59 @@ struct mapping_area {
 	char *vm_addr; /* address of kmap_local_page()'ed pages */
 	enum zs_mapmode vm_mm; /* mapping mode */
 };
+
+static void zspage_lock_init(struct zspage *zspage)
+{
+	atomic_set(&zspage->lock, ZS_PAGE_UNLOCKED);
+}
+
+/*
+ * zspage lock permits preemption on the reader-side (there can be multiple
+ * readers).  Writers (exclusive zspage ownership), on the other hand, are
+ * always run in atomic context and cannot spin waiting for a (potentially
+ * preempted) reader to unlock zspage.  This, basically, means that writers
+ * can only call write-try-lock and must bail out if it didn't succeed.
+ *
+ * At the same time, writers cannot reschedule under zspage write-lock,
+ * so readers can spin waiting for the writer to unlock zspage.
+ */
+static void zspage_read_lock(struct zspage *zspage)
+{
+	atomic_t *lock = &zspage->lock;
+	int old = atomic_read(lock);
+
+	do {
+		if (old == ZS_PAGE_WRLOCKED) {
+			cpu_relax();
+			old = atomic_read(lock);
+			continue;
+		}
+	} while (!atomic_try_cmpxchg(lock, &old, old + 1));
+}
+
+static void zspage_read_unlock(struct zspage *zspage)
+{
+	atomic_dec(&zspage->lock);
+}
+
+static bool zspage_try_write_lock(struct zspage *zspage)
+{
+	atomic_t *lock = &zspage->lock;
+	int old = ZS_PAGE_UNLOCKED;
+
+	preempt_disable();
+	if (atomic_try_cmpxchg(lock, &old, ZS_PAGE_WRLOCKED))
+		return true;
+
+	preempt_enable();
+	return false;
+}
+
+static void zspage_write_unlock(struct zspage *zspage)
+{
+	atomic_set(&zspage->lock, ZS_PAGE_UNLOCKED);
+	preempt_enable();
+}
 
 /* huge object: pages_per_zspage == 1 && maxobj_per_zspage == 1 */
 static void SetZsHugePage(struct zspage *zspage)
@@ -324,12 +380,6 @@ static bool ZsHugePage(struct zspage *zspage)
 {
 	return zspage->huge;
 }
-
-static void lock_init(struct zspage *zspage);
-static void migrate_read_lock(struct zspage *zspage);
-static void migrate_read_unlock(struct zspage *zspage);
-static void migrate_write_lock(struct zspage *zspage);
-static void migrate_write_unlock(struct zspage *zspage);
 
 #ifdef CONFIG_COMPACTION
 static void kick_deferred_free(struct zs_pool *pool);
@@ -1026,7 +1076,7 @@ static struct zspage *alloc_zspage(struct zs_pool *pool,
 		return NULL;
 
 	zspage->magic = ZSPAGE_MAGIC;
-	lock_init(zspage);
+	zspage_lock_init(zspage);
 
 	for (i = 0; i < class->pages_per_zspage; i++) {
 		struct zpdesc *zpdesc;
@@ -1251,7 +1301,7 @@ void *zs_map_object(struct zs_pool *pool, unsigned long handle,
 	 * zs_unmap_object API so delegate the locking from class to zspage
 	 * which is smaller granularity.
 	 */
-	migrate_read_lock(zspage);
+	zspage_read_lock(zspage);
 	pool_read_unlock(pool);
 
 	class = zspage_class(pool, zspage);
@@ -1311,7 +1361,7 @@ void zs_unmap_object(struct zs_pool *pool, unsigned long handle)
 	}
 	local_unlock(&zs_map_area.lock);
 
-	migrate_read_unlock(zspage);
+	zspage_read_unlock(zspage);
 }
 EXPORT_SYMBOL_GPL(zs_unmap_object);
 
@@ -1705,18 +1755,18 @@ static void lock_zspage(struct zspage *zspage)
 	/*
 	 * Pages we haven't locked yet can be migrated off the list while we're
 	 * trying to lock them, so we need to be careful and only attempt to
-	 * lock each page under migrate_read_lock(). Otherwise, the page we lock
+	 * lock each page under zspage_read_lock(). Otherwise, the page we lock
 	 * may no longer belong to the zspage. This means that we may wait for
 	 * the wrong page to unlock, so we must take a reference to the page
-	 * prior to waiting for it to unlock outside migrate_read_lock().
+	 * prior to waiting for it to unlock outside zspage_read_lock().
 	 */
 	while (1) {
-		migrate_read_lock(zspage);
+		zspage_read_lock(zspage);
 		zpdesc = get_first_zpdesc(zspage);
 		if (zpdesc_trylock(zpdesc))
 			break;
 		zpdesc_get(zpdesc);
-		migrate_read_unlock(zspage);
+		zspage_read_unlock(zspage);
 		zpdesc_wait_locked(zpdesc);
 		zpdesc_put(zpdesc);
 	}
@@ -1727,40 +1777,15 @@ static void lock_zspage(struct zspage *zspage)
 			curr_zpdesc = zpdesc;
 		} else {
 			zpdesc_get(zpdesc);
-			migrate_read_unlock(zspage);
+			zspage_read_unlock(zspage);
 			zpdesc_wait_locked(zpdesc);
 			zpdesc_put(zpdesc);
-			migrate_read_lock(zspage);
+			zspage_read_lock(zspage);
 		}
 	}
-	migrate_read_unlock(zspage);
+	zspage_read_unlock(zspage);
 }
 #endif /* CONFIG_COMPACTION */
-
-static void lock_init(struct zspage *zspage)
-{
-	rwlock_init(&zspage->lock);
-}
-
-static void migrate_read_lock(struct zspage *zspage) __acquires(&zspage->lock)
-{
-	read_lock(&zspage->lock);
-}
-
-static void migrate_read_unlock(struct zspage *zspage) __releases(&zspage->lock)
-{
-	read_unlock(&zspage->lock);
-}
-
-static void migrate_write_lock(struct zspage *zspage)
-{
-	write_lock(&zspage->lock);
-}
-
-static void migrate_write_unlock(struct zspage *zspage)
-{
-	write_unlock(&zspage->lock);
-}
 
 #ifdef CONFIG_COMPACTION
 
@@ -1803,7 +1828,7 @@ static bool zs_page_isolate(struct page *page, isolate_mode_t mode)
 }
 
 static int zs_page_migrate(struct page *newpage, struct page *page,
-		enum migrate_mode mode)
+			   enum migrate_mode mode)
 {
 	struct zs_pool *pool;
 	struct size_class *class;
@@ -1819,15 +1844,12 @@ static int zs_page_migrate(struct page *newpage, struct page *page,
 
 	VM_BUG_ON_PAGE(!zpdesc_is_isolated(zpdesc), zpdesc_page(zpdesc));
 
-	/* We're committed, tell the world that this is a Zsmalloc page. */
-	__zpdesc_set_zsmalloc(newzpdesc);
-
 	/* The page is locked, so this pointer must remain valid */
 	zspage = get_zspage(zpdesc);
 	pool = zspage->pool;
 
 	/*
-	 * The pool lock protects the race between zpage migration
+	 * The pool->lock protects the race between zpage migration
 	 * and zs_free.
 	 */
 	pool_write_lock(pool);
@@ -1837,8 +1859,15 @@ static int zs_page_migrate(struct page *newpage, struct page *page,
 	 * the class lock protects zpage alloc/free in the zspage.
 	 */
 	size_class_lock(class);
-	/* the migrate_write_lock protects zpage access via zs_map_object */
-	migrate_write_lock(zspage);
+	/* the zspage write_lock protects zpage access via zs_map_object */
+	if (!zspage_try_write_lock(zspage)) {
+		size_class_unlock(class);
+		pool_write_unlock(pool);
+		return -EINVAL;
+	}
+
+	/* We're committed, tell the world that this is a Zsmalloc page. */
+	__zpdesc_set_zsmalloc(newzpdesc);
 
 	offset = get_first_obj_offset(zpdesc);
 	s_addr = kmap_local_zpdesc(zpdesc);
@@ -1869,7 +1898,7 @@ static int zs_page_migrate(struct page *newpage, struct page *page,
 	 */
 	pool_write_unlock(pool);
 	size_class_unlock(class);
-	migrate_write_unlock(zspage);
+	zspage_write_unlock(zspage);
 
 	zpdesc_get(newzpdesc);
 	if (zpdesc_zone(newzpdesc) != zpdesc_zone(zpdesc)) {
@@ -2005,9 +2034,11 @@ static unsigned long __zs_compact(struct zs_pool *pool,
 		if (!src_zspage)
 			break;
 
-		migrate_write_lock(src_zspage);
+		if (!zspage_try_write_lock(src_zspage))
+			break;
+
 		migrate_zspage(pool, src_zspage, dst_zspage);
-		migrate_write_unlock(src_zspage);
+		zspage_write_unlock(src_zspage);
 
 		fg = putback_zspage(class, src_zspage);
 		if (fg == ZS_INUSE_RATIO_0) {
