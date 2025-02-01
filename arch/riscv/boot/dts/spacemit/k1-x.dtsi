@@ -43,7 +43,6 @@
 		cpu_0: cpu@0 {
 			compatible = "spacemit,x60", "riscv";
 			device_type = "cpu";
-			model = "Spacemit(R) X60";
 			reg = <0>;
 			status = "okay";
 			riscv,isa = "rv64imafdcv";
@@ -79,7 +78,6 @@
 			reg = <1>;
 			status = "okay";
 			compatible = "spacemit,x60", "riscv";
-			model = "Spacemit(R) X60";
 			riscv,isa = "rv64imafdcv";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "v",
@@ -113,7 +111,6 @@
 			reg = <2>;
 			status = "okay";
 			compatible = "spacemit,x60", "riscv";
-			model = "Spacemit(R) X60";
 			riscv,isa = "rv64imafdcv";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "v",
@@ -147,7 +144,6 @@
 			reg = <3>;
 			status = "okay";
 			compatible = "spacemit,x60", "riscv";
-			model = "Spacemit(R) X60";
 			riscv,isa = "rv64imafdcv";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "v",
@@ -181,7 +177,6 @@
 			reg = <4>;
 			status = "okay";
 			compatible = "spacemit,x60", "riscv";
-			model = "Spacemit(R) X60";
 			riscv,isa = "rv64imafdcv";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "v",
@@ -215,7 +210,6 @@
 			reg = <5>;
 			status = "okay";
 			compatible = "spacemit,x60", "riscv";
-			model = "Spacemit(R) X60";
 			riscv,isa = "rv64imafdcv";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "v",
@@ -249,7 +243,6 @@
 			reg = <6>;
 			status = "okay";
 			compatible = "spacemit,x60", "riscv";
-			model = "Spacemit(R) X60";
 			riscv,isa = "rv64imafdcv";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "v",
@@ -283,7 +276,6 @@
 			reg = <7>;
 			status = "okay";
 			compatible = "spacemit,x60", "riscv";
-			model = "Spacemit(R) X60";
 			riscv,isa = "rv64imafdcv";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "v",
