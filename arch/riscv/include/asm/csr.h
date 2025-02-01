@@ -444,6 +444,12 @@
 #define CSR_VTYPE		0xc21
 #define CSR_VLENB		0xc22
 
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+/* TCM enable register */
+#define CSR_TCMCFG		0x5db
+#define TCM_EN			_AC(0x00000001, UL) /* TCM Access Enable */
+#endif
+
 /* Scalar Crypto Extension - Entropy */
 #define CSR_SEED		0x015
 #define SEED_OPST_MASK		_AC(0xC0000000, UL)

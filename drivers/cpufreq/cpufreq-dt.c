@@ -21,6 +21,9 @@
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 #include <linux/thermal.h>
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+#include <soc/spacemit/spacemit_misc.h>
+#endif
 
 #include "cpufreq-dt.h"
 
@@ -42,6 +45,7 @@ static struct freq_attr *cpufreq_dt_attr[] = {
 	NULL,
 };
 
+#ifndef CONFIG_SOC_SPACEMIT
 static struct private_data *cpufreq_dt_find_data(int cpu)
 {
 	struct private_data *priv;
@@ -53,6 +57,24 @@ static struct private_data *cpufreq_dt_find_data(int cpu)
 
 	return NULL;
 }
+#else
+struct private_data *cpufreq_dt_find_data(int cpu)
+{
+	struct private_data *priv;
+
+	list_for_each_entry(priv, &priv_list, node) {
+		if (cpumask_test_cpu(cpu, priv->cpus))
+			return priv;
+	}
+
+	return NULL;
+}
+
+void cpufreq_dt_add_data(struct private_data *priv)
+{
+	list_add(&priv->node, &priv_list);
+}
+#endif
 
 static int set_target(struct cpufreq_policy *policy, unsigned int index)
 {
@@ -160,7 +182,12 @@ static void cpufreq_exit(struct cpufreq_policy *policy)
 static struct cpufreq_driver dt_cpufreq_driver = {
 	.flags = CPUFREQ_NEED_INITIAL_FREQ_CHECK |
 		 CPUFREQ_IS_COOLING_DEV,
-	.verify = cpufreq_generic_frequency_table_verify,
+#ifndef CONFIG_SOC_SPACEMIT_K1X
+ 	.verify = cpufreq_generic_frequency_table_verify,
+#else
+	.verify = spacmeit_cpufreq_veritfy,
+	.ready = spacemit_cpufreq_ready,
+#endif
 	.target_index = set_target,
 	.get = cpufreq_generic_get,
 	.init = cpufreq_init,
