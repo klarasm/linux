@@ -1997,8 +1997,6 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 			}
 			if (pte_dirty(pteval))
 				folio_mark_dirty(folio);
-		} else {
-			pte_clear(mm, address, pvmw.pte);
 		}
 
 		/*
