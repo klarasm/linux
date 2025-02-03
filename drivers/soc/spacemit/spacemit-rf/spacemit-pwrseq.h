@@ -1,0 +1,28 @@
+#ifndef __SPACEMIT_PWRSEQ_H
+#define __SPACEMIT_PWRSEQ_H
+
+struct spacemit_pwrseq {
+	struct device		*dev;
+	bool clk_enabled;
+	u32 power_on_delay_ms;
+
+	struct clk *ext_clk;
+	struct gpio_descs *pwr_gpios;
+	struct regulator *vdd_supply;
+	struct regulator *io_supply;
+	int	vdd_voltage;
+	int io_voltage;
+
+	bool always_on;
+
+	struct mutex pwrseq_mutex;
+	atomic_t pwrseq_count;
+};
+
+
+void spacemit_wlan_set_power(bool on_off);
+int spacemit_wlan_get_oob_irq(void);
+int spacemit_wlan_get_oob_irq_flags(void);
+void spacemit_power_on(struct spacemit_pwrseq *pwrseq, bool on_off);
+struct spacemit_pwrseq *spacemit_get_pwrseq_from_dev(struct device*);
+#endif
