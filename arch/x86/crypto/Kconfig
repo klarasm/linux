@@ -21,7 +21,6 @@ config CRYPTO_AES_NI_INTEL
 	select CRYPTO_LIB_GF128MUL
 	select CRYPTO_ALGAPI
 	select CRYPTO_SKCIPHER
-	select CRYPTO_SIMD
 	help
 	  Block cipher: AES cipher algorithms
 	  AEAD cipher: AES with GCM
@@ -62,7 +61,6 @@ config CRYPTO_CAMELLIA_AESNI_AVX_X86_64
 	depends on X86 && 64BIT
 	select CRYPTO_SKCIPHER
 	select CRYPTO_CAMELLIA_X86_64
-	select CRYPTO_SIMD
 	imply CRYPTO_XTS
 	help
 	  Length-preserving ciphers: Camellia with ECB and CBC modes
@@ -88,7 +86,6 @@ config CRYPTO_CAST5_AVX_X86_64
 	select CRYPTO_SKCIPHER
 	select CRYPTO_CAST5
 	select CRYPTO_CAST_COMMON
-	select CRYPTO_SIMD
 	imply CRYPTO_CTR
 	help
 	  Length-preserving ciphers: CAST5 (CAST-128) cipher algorithm
@@ -105,7 +102,6 @@ config CRYPTO_CAST6_AVX_X86_64
 	select CRYPTO_SKCIPHER
 	select CRYPTO_CAST6
 	select CRYPTO_CAST_COMMON
-	select CRYPTO_SIMD
 	imply CRYPTO_XTS
 	imply CRYPTO_CTR
 	help
@@ -136,7 +132,6 @@ config CRYPTO_SERPENT_SSE2_X86_64
 	depends on X86 && 64BIT
 	select CRYPTO_SKCIPHER
 	select CRYPTO_SERPENT
-	select CRYPTO_SIMD
 	imply CRYPTO_CTR
 	help
 	  Length-preserving ciphers: Serpent cipher algorithm
@@ -152,7 +147,6 @@ config CRYPTO_SERPENT_SSE2_586
 	depends on X86 && !64BIT
 	select CRYPTO_SKCIPHER
 	select CRYPTO_SERPENT
-	select CRYPTO_SIMD
 	imply CRYPTO_CTR
 	help
 	  Length-preserving ciphers: Serpent cipher algorithm
@@ -168,7 +162,6 @@ config CRYPTO_SERPENT_AVX_X86_64
 	depends on X86 && 64BIT
 	select CRYPTO_SKCIPHER
 	select CRYPTO_SERPENT
-	select CRYPTO_SIMD
 	imply CRYPTO_XTS
 	imply CRYPTO_CTR
 	help
@@ -197,7 +190,6 @@ config CRYPTO_SM4_AESNI_AVX_X86_64
 	tristate "Ciphers: SM4 with modes: ECB, CBC, CTR (AES-NI/AVX)"
 	depends on X86 && 64BIT
 	select CRYPTO_SKCIPHER
-	select CRYPTO_SIMD
 	select CRYPTO_ALGAPI
 	select CRYPTO_SM4
 	help
@@ -218,7 +210,6 @@ config CRYPTO_SM4_AESNI_AVX2_X86_64
 	tristate "Ciphers: SM4 with modes: ECB, CBC, CTR (AES-NI/AVX2)"
 	depends on X86 && 64BIT
 	select CRYPTO_SKCIPHER
-	select CRYPTO_SIMD
 	select CRYPTO_ALGAPI
 	select CRYPTO_SM4
 	select CRYPTO_SM4_AESNI_AVX_X86_64
@@ -277,7 +268,6 @@ config CRYPTO_TWOFISH_AVX_X86_64
 	tristate "Ciphers: Twofish with modes: ECB, CBC (AVX)"
 	depends on X86 && 64BIT
 	select CRYPTO_SKCIPHER
-	select CRYPTO_SIMD
 	select CRYPTO_TWOFISH_COMMON
 	select CRYPTO_TWOFISH_X86_64
 	select CRYPTO_TWOFISH_X86_64_3WAY
@@ -295,7 +285,6 @@ config CRYPTO_ARIA_AESNI_AVX_X86_64
 	tristate "Ciphers: ARIA with modes: ECB, CTR (AES-NI/AVX/GFNI)"
 	depends on X86 && 64BIT
 	select CRYPTO_SKCIPHER
-	select CRYPTO_SIMD
 	select CRYPTO_ALGAPI
 	select CRYPTO_ARIA
 	help
@@ -313,7 +302,6 @@ config CRYPTO_ARIA_AESNI_AVX2_X86_64
 	tristate "Ciphers: ARIA with modes: ECB, CTR (AES-NI/AVX2/GFNI)"
 	depends on X86 && 64BIT
 	select CRYPTO_SKCIPHER
-	select CRYPTO_SIMD
 	select CRYPTO_ALGAPI
 	select CRYPTO_ARIA
 	select CRYPTO_ARIA_AESNI_AVX_X86_64
@@ -332,7 +320,6 @@ config CRYPTO_ARIA_GFNI_AVX512_X86_64
 	tristate "Ciphers: ARIA with modes: ECB, CTR (AVX512/GFNI)"
 	depends on X86 && 64BIT && AS_AVX512 && AS_GFNI
 	select CRYPTO_SKCIPHER
-	select CRYPTO_SIMD
 	select CRYPTO_ALGAPI
 	select CRYPTO_ARIA
 	select CRYPTO_ARIA_AESNI_AVX_X86_64
@@ -366,7 +353,6 @@ config CRYPTO_AEGIS128_AESNI_SSE2
 	tristate "AEAD ciphers: AEGIS-128 (AES-NI/SSE4.1)"
 	depends on X86 && 64BIT
 	select CRYPTO_AEAD
-	select CRYPTO_SIMD
 	help
 	  AEGIS-128 AEAD algorithm
 
