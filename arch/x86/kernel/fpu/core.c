@@ -57,31 +57,18 @@ DEFINE_PER_CPU(struct fpu *, fpu_fpregs_owner_ctx);
  */
 bool irq_fpu_usable(void)
 {
-	if (WARN_ON_ONCE(in_nmi()))
-		return false;
-
-	/* In kernel FPU usage already active? */
-	if (this_cpu_read(in_kernel_fpu))
-		return false;
-
 	/*
-	 * When not in NMI or hard interrupt context, FPU can be used in:
-	 *
-	 * - Task context except from within fpregs_lock()'ed critical
-	 *   regions.
-	 *
-	 * - Soft interrupt processing context which cannot happen
-	 *   while in a fpregs_lock()'ed critical region.
+	 * kernel_fpu_begin() takes fpregs_lock(), which disables preemption and
+	 * softirq processing.  That prevents any other task or softirq from
+	 * trying to use the FPU.  Therefore, kernel-mode FPU can always be used
+	 * in task and softirq context, except when hardirqs are disabled which
+	 * is not compatible with disabling and enabling softirq processing, or
+	 * when kernel-mode FPU is explicitly nested (which should never
+	 * happen).  Disabling/enabling softirq processing is also not allowed
+	 * in hardirq context.  Thus, we get the following condition.
 	 */
-	if (!in_hardirq())
-		return true;
-
-	/*
-	 * In hard interrupt context it's safe when soft interrupts
-	 * are enabled, which means the interrupt did not hit in
-	 * a fpregs_lock()'ed critical region.
-	 */
-	return !softirq_count();
+	return !this_cpu_read(in_kernel_fpu) &&
+		!in_hardirq() && !irqs_disabled() && !in_nmi();
 }
 EXPORT_SYMBOL(irq_fpu_usable);
 
@@ -420,7 +407,7 @@ EXPORT_SYMBOL_GPL(fpu_copy_uabi_to_guest_fpstate);
 
 void kernel_fpu_begin_mask(unsigned int kfpu_mask)
 {
-	preempt_disable();
+	fpregs_lock();
 
 	WARN_ON_FPU(!irq_fpu_usable());
 	WARN_ON_FPU(this_cpu_read(in_kernel_fpu));
@@ -448,7 +435,7 @@ void kernel_fpu_end(void)
 	WARN_ON_FPU(!this_cpu_read(in_kernel_fpu));
 
 	this_cpu_write(in_kernel_fpu, false);
-	preempt_enable();
+	fpregs_unlock();
 }
 EXPORT_SYMBOL_GPL(kernel_fpu_end);
 
