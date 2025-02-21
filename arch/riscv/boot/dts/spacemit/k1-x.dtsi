@@ -1074,8 +1074,8 @@
 			k1x,ssp-id = <3>;
 			k1x,ssp-clock-rate = <26000000>;
 			k1x,ssp-disable-dma;
-			dmas = <&pdma0 17 1
-				&pdma0 16 1>;
+			dmas = <&pdma0 DMA_SSP3_RX 1
+				&pdma0 DMA_SSP3_TX 1>;
 			dma-names = "rx", "tx";
 			power-domains = <&power K1X_PMU_BUS_PWR_DOMAIN>;
 			cpuidle,pm-runtime,sleep;
