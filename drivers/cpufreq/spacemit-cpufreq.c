@@ -470,8 +470,8 @@ void spacemit_cpufreq_ready(struct cpufreq_policy *policy)
 		/* M1 */
 	} else {
 		/* K1 or other */
-		remove_policy_boost_sysfs_file(policy);
-		remove_boost_sysfs_file();
+		//remove_policy_boost_sysfs_file(policy);
+		//remove_boost_sysfs_file();
 	}
 }
 
