@@ -182,17 +182,11 @@ static bool v2d_fence_enable_signaling(struct dma_fence *fence)
 	return true;
 }
 
-static void v2d_fence_fence_value_str(struct dma_fence *fence, char *str, int size)
-{
-	snprintf(str, size, "%llu", fence->seqno);
-}
-
 const struct dma_fence_ops v2d_fence_ops = {
 	.wait = dma_fence_default_wait,
 	.get_driver_name = v2d_fence_get_driver_name,
 	.get_timeline_name = v2d_fence_get_timeline_name,
-	.enable_signaling = v2d_fence_enable_signaling,
-	.fence_value_str = v2d_fence_fence_value_str
+	.enable_signaling = v2d_fence_enable_signaling
 };
 
 static int v2d_fence_generate(struct v2d_info *info, struct dma_fence **fence, int *fence_fd)
