@@ -65,10 +65,15 @@ SYM_FUNC_START(rep_movs_alternative)
 	je .Lexit
 	cmp $8,%ecx
 	jae .Lword
-	jmp .Lcopy_user_tail
+4:	movq -8(%rsi,%rcx),%rax
+5:	movq %rax,-8(%rdi,%rcx)
+	xorl %ecx,%ecx
+	RET
 
 	_ASM_EXTABLE_UA( 2b, .Lcopy_user_tail)
 	_ASM_EXTABLE_UA( 3b, .Lcopy_user_tail)
+	_ASM_EXTABLE_UA( 4b, .Lcopy_user_tail)
+	_ASM_EXTABLE_UA( 5b, .Lcopy_user_tail)
 
 .Llarge:
 0:	ALTERNATIVE "jmp .Llarge_movsq", "rep movsb", X86_FEATURE_ERMS
