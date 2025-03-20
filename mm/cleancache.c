@@ -249,7 +249,7 @@ static void put_fs(struct cleancache_fs *fs)
 }
 
 /* inode helpers */
-static struct cleancache_inode *alloc_inode(struct cleancache_fs *fs,
+static struct cleancache_inode *cleancache_alloc_inode(struct cleancache_fs *fs,
 					    struct cleancache_filekey *key)
 {
 	struct cleancache_inode *inode;
@@ -397,7 +397,7 @@ static struct cleancache_inode *add_and_get_inode(struct cleancache_fs *fs,
 	struct cleancache_inode *inode, *tmp;
 	unsigned long flags;
 
-	inode = alloc_inode(fs, key);
+	inode = cleancache_alloc_inode(fs, key);
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
 
