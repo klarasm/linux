@@ -73,6 +73,7 @@ struct msi_msg {
 	};
 };
 
+extern int pci_msi_ignore_mask;
 /* Helper functions */
 struct msi_desc;
 struct pci_dev;
@@ -573,8 +574,6 @@ enum {
 	MSI_FLAG_PCI_MSIX_ALLOC_DYN	= (1 << 20),
 	/* PCI MSIs cannot be steered separately to CPU cores */
 	MSI_FLAG_NO_AFFINITY		= (1 << 21),
-	/* Inhibit usage of entry masking */
-	MSI_FLAG_NO_MASK		= (1 << 22),
 };
 
 /*

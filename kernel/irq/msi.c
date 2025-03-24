@@ -1157,7 +1157,7 @@ static bool msi_check_reservation_mode(struct irq_domain *domain,
 	if (!(info->flags & MSI_FLAG_MUST_REACTIVATE))
 		return false;
 
-	if (info->flags & MSI_FLAG_NO_MASK)
+	if (IS_ENABLED(CONFIG_PCI_MSI) && pci_msi_ignore_mask)
 		return false;
 
 	/*
