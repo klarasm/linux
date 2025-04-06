@@ -790,13 +790,11 @@ static void emac_configure_rx(struct emac_priv *priv)
  */
 static int emac_free_tx_buf(struct emac_priv *priv, int i)
 {
-	struct emac_desc_ring *tx_ring;
 	struct emac_tx_desc_buffer *tx_buf;
 	struct desc_buf *buf;
 	int j;
 
-	tx_ring = &priv->tx_ring;
-	tx_buf = &tx_ring->tx_desc_buf[i];
+	tx_buf = &priv->tx_ring.tx_desc_buf[i];
 
 	for (j = 0; j < 2; j++) {
 		buf = &tx_buf->buf[j];
