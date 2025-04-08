@@ -680,8 +680,8 @@ static int __msix_setup_interrupts(struct pci_dev *__dev, struct msix_entry *ent
 	if (ret)
 		return ret;
 
-	retain_ptr(dev);
 	msix_update_entries(dev, entries);
+	retain_ptr(dev);
 	return 0;
 }
 
