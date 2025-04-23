@@ -35,8 +35,8 @@ int ___ratelimit(struct ratelimit_state *rs, const char *func)
 	unsigned long flags;
 	int ret;
 
-	if (!interval || !burst)
-		return 1;
+	if (interval <= 0 || burst <= 0)
+		return interval == 0 || burst > 0;
 
 	/*
 	 * If we contend on this state's lock then just check if
