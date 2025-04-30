@@ -18,7 +18,7 @@
 #include <linux/atomic.h>
 #include <linux/spinlock.h>
 
-#include "../clk/spacemit/ccu-spacemit-k1x.h"
+#include "../clk/spacemit-vendor/ccu-spacemit-k1x.h"
 
 #define LOG_INFO(fmt, arg...)    pr_info("[RESET][%s][%d]:" fmt "\n", __func__, __LINE__, ##arg)
 
