@@ -607,9 +607,6 @@ static void svm_disable_virtualization_cpu(void)
 	kvm_cpu_svm_disable();
 
 	amd_pmu_disable_virt();
-
-	if (cpu_feature_enabled(X86_FEATURE_SRSO_BP_SPEC_REDUCE))
-		msr_clear_bit(MSR_ZEN4_BP_CFG, MSR_ZEN4_BP_CFG_BP_SPEC_REDUCE_BIT);
 }
 
 static int svm_enable_virtualization_cpu(void)
@@ -685,9 +682,6 @@ static int svm_enable_virtualization_cpu(void)
 
 		rdmsr(MSR_TSC_AUX, sev_es_host_save_area(sd)->tsc_aux, msr_hi);
 	}
-
-	if (cpu_feature_enabled(X86_FEATURE_SRSO_BP_SPEC_REDUCE))
-		msr_set_bit(MSR_ZEN4_BP_CFG, MSR_ZEN4_BP_CFG_BP_SPEC_REDUCE_BIT);
 
 	return 0;
 }
@@ -5071,10 +5065,42 @@ static void svm_vcpu_deliver_sipi_vector(struct kvm_vcpu *vcpu, u8 vector)
 	sev_vcpu_deliver_sipi_vector(vcpu, vector);
 }
 
+static DEFINE_MUTEX(srso_lock);
+static int srso_nr_vms;
+
+static void svm_toggle_srso_spec_reduce(void *set)
+{
+	if (set)
+		msr_set_bit(MSR_ZEN4_BP_CFG, MSR_ZEN4_BP_CFG_BP_SPEC_REDUCE_BIT);
+	else
+		msr_clear_bit(MSR_ZEN4_BP_CFG, MSR_ZEN4_BP_CFG_BP_SPEC_REDUCE_BIT);
+}
+
+static void svm_srso_add_remove_vm(int count)
+{
+	bool set;
+
+	if (!cpu_feature_enabled(X86_FEATURE_SRSO_BP_SPEC_REDUCE))
+		return;
+
+	guard(mutex)(&srso_lock);
+
+	set = !srso_nr_vms;
+	srso_nr_vms += count;
+
+	WARN_ON_ONCE(srso_nr_vms < 0);
+	if (!set && srso_nr_vms)
+		return;
+
+	on_each_cpu(svm_toggle_srso_spec_reduce, (void *)set, 1);
+}
+
 static void svm_vm_destroy(struct kvm *kvm)
 {
 	avic_vm_destroy(kvm);
 	sev_vm_destroy(kvm);
+
+	svm_srso_add_remove_vm(-1);
 }
 
 static int svm_vm_init(struct kvm *kvm)
@@ -5100,6 +5126,7 @@ static int svm_vm_init(struct kvm *kvm)
 			return ret;
 	}
 
+	svm_srso_add_remove_vm(1);
 	return 0;
 }
 
