@@ -129,7 +129,6 @@
 struct io_defer_entry {
 	struct list_head	list;
 	struct io_kiocb		*req;
-	u32			seq;
 };
 
 /* requests with any of those set should undergo io_disarm_next() */
@@ -149,6 +148,7 @@ static bool io_uring_try_cancel_requests(struct io_ring_ctx *ctx,
 					 bool is_sqpoll_thread);
 
 static void io_queue_sqe(struct io_kiocb *req);
+static void __io_req_caches_free(struct io_ring_ctx *ctx);
 
 static __read_mostly DEFINE_STATIC_KEY_FALSE(io_key_has_sqarray);
 
@@ -381,25 +381,6 @@ err:
 	return NULL;
 }
 
-static void io_account_cq_overflow(struct io_ring_ctx *ctx)
-{
-	struct io_rings *r = ctx->rings;
-
-	WRITE_ONCE(r->cq_overflow, READ_ONCE(r->cq_overflow) + 1);
-	ctx->cq_extra--;
-}
-
-static bool req_need_defer(struct io_kiocb *req, u32 seq)
-{
-	if (unlikely(req->flags & REQ_F_IO_DRAIN)) {
-		struct io_ring_ctx *ctx = req->ctx;
-
-		return seq + READ_ONCE(ctx->cq_extra) != ctx->cached_cq_tail;
-	}
-
-	return false;
-}
-
 static void io_clean_op(struct io_kiocb *req)
 {
 	if (unlikely(req->flags & REQ_F_BUFFER_SELECTED))
@@ -559,20 +540,37 @@ void io_req_queue_iowq(struct io_kiocb *req)
 	io_req_task_work_add(req);
 }
 
+static unsigned io_linked_nr(struct io_kiocb *req)
+{
+	struct io_kiocb *tmp;
+	unsigned nr = 0;
+
+	io_for_each_link(tmp, req)
+		nr++;
+	return nr;
+}
+
 static __cold noinline void io_queue_deferred(struct io_ring_ctx *ctx)
 {
-	spin_lock(&ctx->completion_lock);
+	bool drain_seen = false, first = true;
+
+	lockdep_assert_held(&ctx->uring_lock);
+	__io_req_caches_free(ctx);
+
 	while (!list_empty(&ctx->defer_list)) {
 		struct io_defer_entry *de = list_first_entry(&ctx->defer_list,
 						struct io_defer_entry, list);
 
-		if (req_need_defer(de->req, de->seq))
-			break;
+		drain_seen |= de->req->flags & REQ_F_IO_DRAIN;
+		if ((drain_seen || first) && ctx->nr_req_allocated != ctx->nr_drained)
+			return;
+
 		list_del_init(&de->list);
+		ctx->nr_drained -= io_linked_nr(de->req);
 		io_req_task_queue(de->req);
 		kfree(de);
+		first = false;
 	}
-	spin_unlock(&ctx->completion_lock);
 }
 
 void __io_commit_cqring_flush(struct io_ring_ctx *ctx)
@@ -581,8 +579,6 @@ void __io_commit_cqring_flush(struct io_ring_ctx *ctx)
 		io_poll_wq_wake(ctx);
 	if (ctx->off_timeout_used)
 		io_flush_timeouts(ctx);
-	if (ctx->drain_active)
-		io_queue_deferred(ctx);
 	if (ctx->has_evfd)
 		io_eventfd_signal(ctx, true);
 }
@@ -737,12 +733,14 @@ static bool io_cqring_event_overflow(struct io_ring_ctx *ctx, u64 user_data,
 	ocqe = kmalloc(ocq_size, GFP_ATOMIC | __GFP_ACCOUNT);
 	trace_io_uring_cqe_overflow(ctx, user_data, res, cflags, ocqe);
 	if (!ocqe) {
+		struct io_rings *r = ctx->rings;
+
 		/*
 		 * If we're in ring overflow flush mode, or in task cancel mode,
 		 * or cannot allocate an overflow entry, then we need to drop it
 		 * on the floor.
 		 */
-		io_account_cq_overflow(ctx);
+		WRITE_ONCE(r->cq_overflow, READ_ONCE(r->cq_overflow) + 1);
 		set_bit(IO_CHECK_CQ_DROPPED_BIT, &ctx->check_cq);
 		return false;
 	}
@@ -812,8 +810,6 @@ static bool io_fill_cqe_aux(struct io_ring_ctx *ctx, u64 user_data, s32 res,
 {
 	struct io_uring_cqe *cqe;
 
-	ctx->cq_extra++;
-
 	if (likely(io_get_cqe(ctx, &cqe))) {
 		WRITE_ONCE(cqe->user_data, user_data);
 		WRITE_ONCE(cqe->res, res);
@@ -848,6 +844,9 @@ bool io_post_aux_cqe(struct io_ring_ctx *ctx, u64 user_data, s32 res, u32 cflags
  */
 void io_add_aux_cqe(struct io_ring_ctx *ctx, u64 user_data, s32 res, u32 cflags)
 {
+	lockdep_assert_held(&ctx->uring_lock);
+	lockdep_assert(ctx->lockless_cq);
+
 	if (!io_fill_cqe_aux(ctx, user_data, res, cflags)) {
 		spin_lock(&ctx->completion_lock);
 		io_cqring_event_overflow(ctx, user_data, res, cflags, 0, 0);
@@ -959,6 +958,8 @@ __cold bool __io_alloc_req_refill(struct io_ring_ctx *ctx)
 	}
 
 	percpu_ref_get_many(&ctx->refs, ret);
+	ctx->nr_req_allocated += ret;
+
 	while (ret--) {
 		struct io_kiocb *req = reqs[ret];
 
@@ -1460,6 +1461,10 @@ void __io_submit_flush_completions(struct io_ring_ctx *ctx)
 		io_free_batch_list(ctx, state->compl_reqs.first);
 		INIT_WQ_LIST(&state->compl_reqs);
 	}
+
+	if (unlikely(ctx->drain_active))
+		io_queue_deferred(ctx);
+
 	ctx->submit_state.cq_flush = false;
 }
 
@@ -1647,56 +1652,32 @@ io_req_flags_t io_file_get_flags(struct file *file)
 	return res;
 }
 
-static u32 io_get_sequence(struct io_kiocb *req)
-{
-	u32 seq = req->ctx->cached_sq_head;
-	struct io_kiocb *cur;
-
-	/* need original cached_sq_head, but it was increased for each req */
-	io_for_each_link(cur, req)
-		seq--;
-	return seq;
-}
-
 static __cold void io_drain_req(struct io_kiocb *req)
 	__must_hold(&ctx->uring_lock)
 {
 	struct io_ring_ctx *ctx = req->ctx;
+	bool drain = req->flags & IOSQE_IO_DRAIN;
 	struct io_defer_entry *de;
-	int ret;
-	u32 seq = io_get_sequence(req);
+	struct io_kiocb *tmp;
+	int nr = 0;
 
-	/* Still need defer if there is pending req in defer list. */
-	spin_lock(&ctx->completion_lock);
-	if (!req_need_defer(req, seq) && list_empty_careful(&ctx->defer_list)) {
-		spin_unlock(&ctx->completion_lock);
-queue:
-		ctx->drain_active = false;
-		io_req_task_queue(req);
-		return;
-	}
-	spin_unlock(&ctx->completion_lock);
-
-	io_prep_async_link(req);
-	de = kmalloc(sizeof(*de), GFP_KERNEL);
+	de = kmalloc(sizeof(*de), GFP_KERNEL_ACCOUNT);
 	if (!de) {
-		ret = -ENOMEM;
-		io_req_defer_failed(req, ret);
+		io_req_defer_failed(req, -ENOMEM);
 		return;
 	}
 
-	spin_lock(&ctx->completion_lock);
-	if (!req_need_defer(req, seq) && list_empty(&ctx->defer_list)) {
-		spin_unlock(&ctx->completion_lock);
-		kfree(de);
-		goto queue;
-	}
-
+	io_for_each_link(tmp, req)
+		nr++;
+	io_prep_async_link(req);
 	trace_io_uring_defer(req);
 	de->req = req;
-	de->seq = seq;
+
+	ctx->nr_drained += io_linked_nr(req);
 	list_add_tail(&de->list, &ctx->defer_list);
-	spin_unlock(&ctx->completion_lock);
+	io_queue_deferred(ctx);
+	if (!drain && list_empty(&ctx->defer_list))
+		ctx->drain_active = false;
 }
 
 static bool io_assign_file(struct io_kiocb *req, const struct io_issue_def *def,
@@ -2279,10 +2260,6 @@ static bool io_get_sqe(struct io_ring_ctx *ctx, const struct io_uring_sqe **sqe)
 	    (!(ctx->flags & IORING_SETUP_NO_SQARRAY))) {
 		head = READ_ONCE(ctx->sq_array[head]);
 		if (unlikely(head >= ctx->sq_entries)) {
-			/* drop invalid entries */
-			spin_lock(&ctx->completion_lock);
-			ctx->cq_extra--;
-			spin_unlock(&ctx->completion_lock);
 			WRITE_ONCE(ctx->rings->sq_dropped,
 				   READ_ONCE(ctx->rings->sq_dropped) + 1);
 			return false;
@@ -2700,21 +2677,26 @@ unsigned long rings_size(unsigned int flags, unsigned int sq_entries,
 	return off;
 }
 
-static void io_req_caches_free(struct io_ring_ctx *ctx)
+static __cold void __io_req_caches_free(struct io_ring_ctx *ctx)
 {
 	struct io_kiocb *req;
 	int nr = 0;
-
-	mutex_lock(&ctx->uring_lock);
 
 	while (!io_req_cache_empty(ctx)) {
 		req = io_extract_req(ctx);
 		kmem_cache_free(req_cachep, req);
 		nr++;
 	}
-	if (nr)
+	if (nr) {
+		ctx->nr_req_allocated -= nr;
 		percpu_ref_put_many(&ctx->refs, nr);
-	mutex_unlock(&ctx->uring_lock);
+	}
+}
+
+static __cold void io_req_caches_free(struct io_ring_ctx *ctx)
+{
+	guard(mutex)(&ctx->uring_lock);
+	__io_req_caches_free(ctx);
 }
 
 static __cold void io_ring_ctx_free(struct io_ring_ctx *ctx)
@@ -2750,6 +2732,9 @@ static __cold void io_ring_ctx_free(struct io_ring_ctx *ctx)
 	percpu_ref_exit(&ctx->refs);
 	free_uid(ctx->user);
 	io_req_caches_free(ctx);
+
+	WARN_ON_ONCE(ctx->nr_req_allocated);
+
 	if (ctx->hash_map)
 		io_wq_put_hash(ctx->hash_map);
 	io_napi_free(ctx);
@@ -3016,20 +3001,19 @@ static __cold bool io_cancel_defer_files(struct io_ring_ctx *ctx,
 	struct io_defer_entry *de;
 	LIST_HEAD(list);
 
-	spin_lock(&ctx->completion_lock);
 	list_for_each_entry_reverse(de, &ctx->defer_list, list) {
 		if (io_match_task_safe(de->req, tctx, cancel_all)) {
 			list_cut_position(&list, &ctx->defer_list, &de->list);
 			break;
 		}
 	}
-	spin_unlock(&ctx->completion_lock);
 	if (list_empty(&list))
 		return false;
 
 	while (!list_empty(&list)) {
 		de = list_first_entry(&list, struct io_defer_entry, list);
 		list_del_init(&de->list);
+		ctx->nr_drained -= io_linked_nr(de->req);
 		io_req_task_queue_fail(de->req, -ECANCELED);
 		kfree(de);
 	}
@@ -3104,8 +3088,8 @@ static __cold bool io_uring_try_cancel_requests(struct io_ring_ctx *ctx,
 	if ((ctx->flags & IORING_SETUP_DEFER_TASKRUN) &&
 	    io_allowed_defer_tw_run(ctx))
 		ret |= io_run_local_work(ctx, INT_MAX, INT_MAX) > 0;
-	ret |= io_cancel_defer_files(ctx, tctx, cancel_all);
 	mutex_lock(&ctx->uring_lock);
+	ret |= io_cancel_defer_files(ctx, tctx, cancel_all);
 	ret |= io_poll_remove_all(ctx, tctx, cancel_all);
 	ret |= io_waitid_remove_all(ctx, tctx, cancel_all);
 	ret |= io_futex_remove_all(ctx, tctx, cancel_all);
