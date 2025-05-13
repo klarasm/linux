@@ -1768,7 +1768,11 @@ xfs_configure_buftarg(
 	if (bdev_can_atomic_write(btp->bt_bdev))
 		xfs_configure_buftarg_atomic_writes(btp);
 
-	return 0;
+	/*
+	 * Flush the block device pagecache so our bios see anything dirtied
+	 * before mount.
+	 */
+	return sync_blockdev(btp->bt_bdev);
 }
 
 int
