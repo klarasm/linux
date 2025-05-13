@@ -346,7 +346,7 @@ restart_drop_extra_replicas:
 							.btree	= m->btree_id,
 							.flags	= BCH_VALIDATE_commit,
 						 });
-		if (invalid) {
+		if (unlikely(invalid)) {
 			struct printbuf buf = PRINTBUF;
 			bch2_log_msg_start(c, &buf);
 
@@ -380,6 +380,25 @@ restart_drop_extra_replicas:
 
 			trace_data_update(c, buf.buf);
 			printbuf_exit(&buf);
+		}
+
+		if (bch2_bkey_sectors_need_rebalance(c, bkey_i_to_s_c(&new->k_i)) &&
+		    !bch2_bkey_sectors_need_rebalance(c, k)) {
+			struct printbuf buf = PRINTBUF;
+
+			bch2_data_update_opts_to_text(&buf, c, &m->op.opts, &m->data_opts);
+
+			prt_str(&buf, "\nold: ");
+			bch2_bkey_val_to_text(&buf, c, old);
+			prt_str(&buf, "\nk:   ");
+			bch2_bkey_val_to_text(&buf, c, k);
+			prt_str(&buf, "\nnew: ");
+			bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(insert));
+
+			trace_data_update_created_rebalance(c, buf.buf);
+			printbuf_exit(&buf);
+
+			this_cpu_inc(c->counters[BCH_COUNTER_io_move_created_rebalance]);
 		}
 
 		printbuf_reset(&journal_msg);
