@@ -240,17 +240,17 @@ amdgpu_userq_get_doorbell_index(struct amdgpu_userq_mgr *uq_mgr,
 	db_obj->obj = amdgpu_bo_ref(gem_to_amdgpu_bo(gobj));
 	drm_gem_object_put(gobj);
 
-	/* Pin the BO before generating the index, unpin in queue destroy */
-	r = amdgpu_bo_pin(db_obj->obj, AMDGPU_GEM_DOMAIN_DOORBELL);
+	r = amdgpu_bo_reserve(db_obj->obj, true);
 	if (r) {
 		drm_file_err(uq_mgr->file, "[Usermode queues] Failed to pin doorbell object\n");
 		goto unref_bo;
 	}
 
-	r = amdgpu_bo_reserve(db_obj->obj, true);
+	/* Pin the BO before generating the index, unpin in queue destroy */
+	r = amdgpu_bo_pin(db_obj->obj, AMDGPU_GEM_DOMAIN_DOORBELL);
 	if (r) {
 		drm_file_err(uq_mgr->file, "[Usermode queues] Failed to pin doorbell object\n");
-		goto unpin_bo;
+		goto unresv_bo;
 	}
 
 	switch (db_info->queue_type) {
@@ -286,7 +286,8 @@ amdgpu_userq_get_doorbell_index(struct amdgpu_userq_mgr *uq_mgr,
 
 unpin_bo:
 	amdgpu_bo_unpin(db_obj->obj);
-
+unresv_bo:
+	amdgpu_bo_unreserve(db_obj->obj);
 unref_bo:
 	amdgpu_bo_unref(&db_obj->obj);
 	return r;
@@ -301,7 +302,7 @@ amdgpu_userq_destroy(struct drm_file *filp, int queue_id)
 	struct amdgpu_usermode_queue *queue;
 	int r = 0;
 
-	cancel_delayed_work(&uq_mgr->resume_work);
+	cancel_delayed_work_sync(&uq_mgr->resume_work);
 	mutex_lock(&uq_mgr->userq_mutex);
 
 	queue = amdgpu_userq_find(uq_mgr, queue_id);
@@ -311,9 +312,13 @@ amdgpu_userq_destroy(struct drm_file *filp, int queue_id)
 		return -EINVAL;
 	}
 	amdgpu_userq_wait_for_last_fence(uq_mgr, queue);
-	r = amdgpu_userq_unmap_helper(uq_mgr, queue);
-	amdgpu_bo_unpin(queue->db_obj.obj);
+	r = amdgpu_bo_reserve(queue->db_obj.obj, true);
+	if (!r) {
+		amdgpu_bo_unpin(queue->db_obj.obj);
+		amdgpu_bo_unreserve(queue->db_obj.obj);
+	}
 	amdgpu_bo_unref(&queue->db_obj.obj);
+	r = amdgpu_userq_unmap_helper(uq_mgr, queue);
 	amdgpu_userq_cleanup(uq_mgr, queue, queue_id);
 	mutex_unlock(&uq_mgr->userq_mutex);
 
@@ -746,7 +751,7 @@ amdgpu_userq_evict(struct amdgpu_userq_mgr *uq_mgr,
 	amdgpu_eviction_fence_signal(evf_mgr, ev_fence);
 
 	if (evf_mgr->fd_closing) {
-		cancel_delayed_work(&uq_mgr->resume_work);
+		cancel_delayed_work_sync(&uq_mgr->resume_work);
 		return;
 	}
 
@@ -777,24 +782,25 @@ void amdgpu_userq_mgr_fini(struct amdgpu_userq_mgr *userq_mgr)
 	struct amdgpu_userq_mgr *uqm, *tmp;
 	uint32_t queue_id;
 
-	cancel_delayed_work(&userq_mgr->resume_work);
+	cancel_delayed_work_sync(&userq_mgr->resume_work);
 
+	mutex_lock(&adev->userq_mutex);
 	mutex_lock(&userq_mgr->userq_mutex);
 	idr_for_each_entry(&userq_mgr->userq_idr, queue, queue_id) {
 		amdgpu_userq_wait_for_last_fence(userq_mgr, queue);
 		amdgpu_userq_unmap_helper(userq_mgr, queue);
 		amdgpu_userq_cleanup(userq_mgr, queue, queue_id);
 	}
-	mutex_lock(&adev->userq_mutex);
+
 	list_for_each_entry_safe(uqm, tmp, &adev->userq_mgr_list, list) {
 		if (uqm == userq_mgr) {
 			list_del(&uqm->list);
 			break;
 		}
 	}
-	mutex_unlock(&adev->userq_mutex);
 	idr_destroy(&userq_mgr->userq_idr);
 	mutex_unlock(&userq_mgr->userq_mutex);
+	mutex_unlock(&adev->userq_mutex);
 	mutex_destroy(&userq_mgr->userq_mutex);
 }
 
