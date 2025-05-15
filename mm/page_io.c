@@ -235,7 +235,7 @@ static void swap_zeromap_folio_clear(struct folio *folio)
 
 static bool swap_sched_async_compress(struct folio *folio)
 {
-	struct swap_info_struct *sis = swp_swap_info(folio->swap);
+	struct swap_info_struct *sis = swp_info(folio->swap);
 	int nid = numa_node_id();
 	pg_data_t *pgdat = NODE_DATA(nid);
 
@@ -253,7 +253,7 @@ static bool swap_sched_async_compress(struct folio *folio)
 	if (!mem_cgroup_zswap_writeback_enabled(folio_memcg(folio)))
 		return false;
 
-	sis = swp_swap_info(folio->swap);
+	sis = swp_info(folio->swap);
 	if (zswap_is_enabled() || data_race(sis->flags & SWP_SYNCHRONOUS_IO)) {
 		if (kfifo_avail(&pgdat->kcompress_fifo) >= sizeof(folio) &&
 			kfifo_in(&pgdat->kcompress_fifo, &folio, sizeof(folio))) {
