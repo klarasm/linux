@@ -346,8 +346,9 @@ restart_drop_extra_replicas:
 							.btree	= m->btree_id,
 							.flags	= BCH_VALIDATE_commit,
 						 });
-		if (invalid) {
+		if (unlikely(invalid)) {
 			struct printbuf buf = PRINTBUF;
+			bch2_log_msg_start(c, &buf);
 
 			prt_str(&buf, "about to insert invalid key in data update path");
 			prt_printf(&buf, "\nop.nonce: %u", m->op.nonce);
@@ -358,10 +359,11 @@ restart_drop_extra_replicas:
 			prt_str(&buf, "\nnew: ");
 			bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(insert));
 
-			bch2_print_string_as_lines(KERN_ERR, buf.buf);
+			bch2_fs_emergency_read_only2(c, &buf);
+
+			bch2_print_str(c, KERN_ERR, buf.buf);
 			printbuf_exit(&buf);
 
-			bch2_fatal_error(c);
 			ret = -BCH_ERR_invalid_bkey;
 			goto out;
 		}
@@ -378,6 +380,25 @@ restart_drop_extra_replicas:
 
 			trace_data_update(c, buf.buf);
 			printbuf_exit(&buf);
+		}
+
+		if (bch2_bkey_sectors_need_rebalance(c, bkey_i_to_s_c(&new->k_i)) &&
+		    !bch2_bkey_sectors_need_rebalance(c, k)) {
+			struct printbuf buf = PRINTBUF;
+
+			bch2_data_update_opts_to_text(&buf, c, &m->op.opts, &m->data_opts);
+
+			prt_str(&buf, "\nold: ");
+			bch2_bkey_val_to_text(&buf, c, old);
+			prt_str(&buf, "\nk:   ");
+			bch2_bkey_val_to_text(&buf, c, k);
+			prt_str(&buf, "\nnew: ");
+			bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(insert));
+
+			trace_data_update_created_rebalance(c, buf.buf);
+			printbuf_exit(&buf);
+
+			this_cpu_inc(c->counters[BCH_COUNTER_io_move_created_rebalance]);
 		}
 
 		printbuf_reset(&journal_msg);
@@ -587,6 +608,10 @@ void bch2_data_update_opts_to_text(struct printbuf *out, struct bch_fs *c,
 
 	prt_str_indented(out, "extra replicas:\t");
 	prt_u64(out, data_opts->extra_replicas);
+	prt_newline(out);
+
+	prt_str_indented(out, "scrub:\t");
+	prt_u64(out, data_opts->scrub);
 }
 
 void bch2_data_update_to_text(struct printbuf *out, struct data_update *m)
@@ -607,9 +632,17 @@ void bch2_data_update_inflight_to_text(struct printbuf *out, struct data_update 
 	prt_newline(out);
 	printbuf_indent_add(out, 2);
 	bch2_data_update_opts_to_text(out, m->op.c, &m->op.opts, &m->data_opts);
-	prt_printf(out, "read_done:\t%u\n", m->read_done);
-	bch2_write_op_to_text(out, &m->op);
-	printbuf_indent_sub(out, 2);
+
+	if (!m->read_done) {
+		prt_printf(out, "read:\n");
+		printbuf_indent_add(out, 2);
+		bch2_read_bio_to_text(out, &m->rbio);
+	} else {
+		prt_printf(out, "write:\n");
+		printbuf_indent_add(out, 2);
+		bch2_write_op_to_text(out, &m->op);
+	}
+	printbuf_indent_sub(out, 4);
 }
 
 int bch2_extent_drop_ptrs(struct btree_trans *trans,
