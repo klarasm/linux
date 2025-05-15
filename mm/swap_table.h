@@ -41,6 +41,10 @@
 /* For shadow offset calculation */
 #define SWAP_COUNT_SHIFT	ENTRY_COUNT_BITS
 
+#if !defined(MAX_POSSIBLE_PHYSMEM_BITS) && defined(MAX_PHYSMEM_BITS)
+#define MAX_POSSIBLE_PHYSMEM_BITS MAX_PHYSMEM_BITS
+#endif
+
 /*
  * Helpers for casting one type of info into a swap table entry.
  */
