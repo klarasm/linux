@@ -4334,6 +4334,7 @@ static inline int non_swapcache_batch(swp_entry_t entry, unsigned int max_nr)
 
 	return i;
 }
+#endif
 
 /*
  * Check if the page table is still suitable for large folio swap in.
@@ -4365,6 +4366,7 @@ static bool can_swapin_thp(struct vm_fault *vmf, pte_t *ptep,
 	return true;
 }
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
 static inline unsigned long thp_swap_suitable_orders(pgoff_t swp_offset,
 						     unsigned long addr,
 						     unsigned long orders)
