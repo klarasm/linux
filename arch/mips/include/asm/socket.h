@@ -44,6 +44,7 @@ enum sock_type {
 /* Flags for socket, socketpair, paccept */
 #define SOCK_CLOEXEC	O_CLOEXEC
 #define SOCK_NONBLOCK	O_NONBLOCK
+#define SOCK_COREDUMP	O_NOCTTY
 
 #define ARCH_HAS_SOCKET_TYPES 1
 
