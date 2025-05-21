@@ -639,7 +639,7 @@ static int __init pcie_already_init(char *str)
 }
 __setup("pcie_init", pcie_already_init);
 
-static int k1x_pcie_link_up(struct dw_pcie *pci)
+static bool k1x_pcie_link_up(struct dw_pcie *pci)
 {
 	struct k1x_pcie *k1x = to_k1x_pcie(pci);
 	u32 reg = k1x_pcie_phy_ahb_readl(k1x, K1X_PHY_AHB_LINK_STS);
