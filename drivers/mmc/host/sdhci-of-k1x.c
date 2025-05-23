@@ -1868,7 +1868,7 @@ static const struct dev_pm_ops sdhci_spacemit_pmops = {
 
 static struct platform_driver spacemit_sdhci_driver = {
 	.driver		= {
-		.name	= "sdhci-spacemit",
+		.name	= "sdhci-spacemit-k1x",
 		.of_match_table = of_match_ptr(sdhci_spacemit_of_match),
 		.pm	= SDHCI_SPACEMIT_PMOPS,
 	},
