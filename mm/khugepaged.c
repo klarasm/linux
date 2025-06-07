@@ -1299,6 +1299,7 @@ static int collapse_huge_page(struct mm_struct *mm, unsigned long address,
 		mthp_pte = maybe_mkwrite(pte_mkdirty(mthp_pte), vma);
 
 		spin_lock(pmd_ptl);
+		BUG_ON(!pmd_none(*pmd));
 		folio_ref_add(folio, (1 << order) - 1);
 		folio_add_new_anon_rmap(folio, vma, _address, RMAP_EXCLUSIVE);
 		folio_add_lru_vma(folio, vma);
