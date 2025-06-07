@@ -2271,8 +2271,6 @@ static int shmem_swapin_folio(struct inode *inode, pgoff_t index,
 
 	/* Look it up and read it in.. */
 	folio = swap_cache_get_folio(swap);
-	if (folio)
-		swap_update_readahead(folio, NULL, 0);
 	if (!folio) {
 		bool fallback_order0 = false;
 
@@ -2369,6 +2367,8 @@ alloced:
 		error = -EEXIST;
 		goto unlock;
 	}
+	if (!skip_swapcache)
+		swap_update_readahead(folio, NULL, 0);
 	if (!folio_test_uptodate(folio)) {
 		error = -EIO;
 		goto failed;
