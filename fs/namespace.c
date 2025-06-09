@@ -2495,6 +2495,9 @@ struct vfsmount *clone_private_mount(const struct path *path)
 			return ERR_PTR(-EINVAL);
 	}
 
+        if (!ns_capable(old_mnt->mnt_ns->user_ns, CAP_SYS_ADMIN))
+		return ERR_PTR(-EPERM);
+
 	if (__has_locked_children(old_mnt, path->dentry))
 		return ERR_PTR(-EINVAL);
 
@@ -2941,6 +2944,10 @@ static int do_change_type(struct path *path, int ms_flags)
 		return -EINVAL;
 
 	namespace_lock();
+	if (!check_mnt(mnt)) {
+		err = -EINVAL;
+		goto out_unlock;
+	}
 	if (type == MS_SHARED) {
 		err = invent_group_ids(mnt, recurse);
 		if (err)
@@ -3641,36 +3648,40 @@ static int do_move_mount(struct path *old_path,
 	ns = old->mnt_ns;
 
 	err = -EINVAL;
-	if (!may_use_mount(p))
-		goto out;
-
 	/* The thing moved must be mounted... */
 	if (!is_mounted(&old->mnt))
 		goto out;
 
-	/* ... and either ours or the root of anon namespace */
-	if (!(attached ? check_mnt(old) : is_anon_ns(ns)))
-		goto out;
-
-	if (is_anon_ns(ns) && ns == p->mnt_ns) {
+	if (check_mnt(old)) {
+		/* if the source is in our namespace... */
+		/* ... it should be detachable from parent */
+		if (!mnt_has_parent(old) || IS_MNT_LOCKED(old))
+			goto out;
+		/* ... and the target should be in our namespace */
+		if (!check_mnt(p))
+			goto out;
+	} else {
 		/*
-		 * Ending up with two files referring to the root of the
-		 * same anonymous mount namespace would cause an error
-		 * as this would mean trying to move the same mount
-		 * twice into the mount tree which would be rejected
-		 * later. But be explicit about it right here.
+		 * otherwise the source must be the root of some anon namespace.
+		 * AV: check for mount being root of an anon namespace is worth
+		 * an inlined predicate...
 		 */
-		goto out;
-	} else if (is_anon_ns(p->mnt_ns)) {
+		if (!is_anon_ns(ns) || mnt_has_parent(old))
+			goto out;
 		/*
-		 * Don't allow moving an attached mount tree to an
-		 * anonymous mount tree.
+		 * Bail out early if the target is within the same namespace -
+		 * subsequent checks would've rejected that, but they lose
+		 * some corner cases if we check it early.
 		 */
-		goto out;
+		if (ns == p->mnt_ns)
+			goto out;
+		/*
+		 * Target should be either in our namespace or in an acceptable
+		 * anon namespace, sensu check_anonymous_mnt().
+		 */
+		if (!may_use_mount(p))
+			goto out;
 	}
-
-	if (old->mnt.mnt_flags & MNT_LOCKED)
-		goto out;
 
 	if (!path_mounted(old_path))
 		goto out;

@@ -70,27 +70,6 @@ int xe_svm_bo_evict(struct xe_bo *bo);
 
 void xe_svm_range_debug(struct xe_svm_range *range, const char *operation);
 
-int xe_svm_alloc_vram(struct xe_vm *vm, struct xe_tile *tile,
-		      struct xe_svm_range *range,
-		      const struct drm_gpusvm_ctx *ctx);
-
-struct xe_svm_range *xe_svm_range_find_or_insert(struct xe_vm *vm, u64 addr,
-						 struct xe_vma *vma, struct drm_gpusvm_ctx *ctx);
-
-int xe_svm_range_get_pages(struct xe_vm *vm, struct xe_svm_range *range,
-			   struct drm_gpusvm_ctx *ctx);
-
-bool xe_svm_range_needs_migrate_to_vram(struct xe_svm_range *range, struct xe_vma *vma,
-					bool preferred_region_is_vram);
-
-void xe_svm_range_migrate_to_smem(struct xe_vm *vm, struct xe_svm_range *range);
-
-bool xe_svm_range_validate(struct xe_vm *vm,
-			   struct xe_svm_range *range,
-			   u8 tile_mask, bool devmem_preferred);
-
-u64 xe_svm_find_vma_start(struct xe_vm *vm, u64 addr, u64 end,  struct xe_vma *vma);
-
 /**
  * xe_svm_range_has_dma_mapping() - SVM range has DMA mapping
  * @range: SVM range
@@ -235,74 +214,6 @@ int xe_svm_bo_evict(struct xe_bo *bo)
 static inline
 void xe_svm_range_debug(struct xe_svm_range *range, const char *operation)
 {
-}
-
-static inline
-int xe_svm_alloc_vram(struct xe_vm *vm, struct xe_tile *tile,
-		      struct xe_svm_range *range,
-		      const struct drm_gpusvm_ctx *ctx)
-{
-	return -EOPNOTSUPP;
-}
-
-static inline
-struct xe_svm_range *xe_svm_range_find_or_insert(struct xe_vm *vm, u64 addr,
-						 struct xe_vma *vma, struct drm_gpusvm_ctx *ctx)
-{
-	return ERR_PTR(-EINVAL);
-}
-
-static inline
-int xe_svm_range_get_pages(struct xe_vm *vm, struct xe_svm_range *range,
-			   struct drm_gpusvm_ctx *ctx)
-{
-	return -EINVAL;
-}
-
-static inline struct xe_svm_range *to_xe_range(struct drm_gpusvm_range *r)
-{
-	return NULL;
-}
-
-static inline unsigned long xe_svm_range_start(struct xe_svm_range *range)
-{
-	return 0;
-}
-
-static inline unsigned long xe_svm_range_end(struct xe_svm_range *range)
-{
-	return 0;
-}
-
-static inline unsigned long xe_svm_range_size(struct xe_svm_range *range)
-{
-	return 0;
-}
-
-static inline
-bool xe_svm_range_needs_migrate_to_vram(struct xe_svm_range *range, struct xe_vma *vma,
-					u32 region)
-{
-	return false;
-}
-
-static inline
-void xe_svm_range_migrate_to_smem(struct xe_vm *vm, struct xe_svm_range *range)
-{
-}
-
-static inline
-bool xe_svm_range_validate(struct xe_vm *vm,
-			   struct xe_svm_range *range,
-			   u8 tile_mask, bool devmem_preferred)
-{
-	return false;
-}
-
-static inline
-u64 xe_svm_find_vma_start(struct xe_vm *vm, u64 addr, u64 end, struct xe_vma *vma)
-{
-	return ULONG_MAX;
 }
 
 #define xe_svm_assert_in_notifier(...) do {} while (0)

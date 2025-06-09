@@ -860,8 +860,8 @@ int xe_svm_handle_pagefault(struct xe_vm *vm, struct xe_vma *vma,
 	struct xe_svm_range *range;
 	struct drm_exec exec;
 	struct dma_fence *fence;
-	struct xe_tile *tile = gt_to_tile(gt);
 	int migrate_try_count = ctx.devmem_only ? 3 : 1;
+	struct xe_tile *tile = gt_to_tile(gt);
 	ktime_t end = 0;
 	int err;
 

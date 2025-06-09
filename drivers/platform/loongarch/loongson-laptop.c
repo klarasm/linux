@@ -377,9 +377,10 @@ static int loongson_laptop_backlight_update(struct backlight_device *bd)
 	if (lvl < 0)
 		return -EIO;
 
-	if (target_powered == bl_powered) {
-		ret = ec_set_brightness(lvl);
-	} else {
+	if (ec_set_brightness(lvl))
+		return -EIO;
+
+	if (target_powered != bl_powered) {
 		ret = ec_backlight_set_power(target_powered);
 		if (ret < 0)
 			return ret;
