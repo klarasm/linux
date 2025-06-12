@@ -220,16 +220,6 @@ void osd_req_op_extent_osd_data_pages(struct ceph_osd_request *osd_req,
 }
 EXPORT_SYMBOL(osd_req_op_extent_osd_data_pages);
 
-void osd_req_op_extent_osd_data_pagelist(struct ceph_osd_request *osd_req,
-			unsigned int which, struct ceph_pagelist *pagelist)
-{
-	struct ceph_osd_data *osd_data;
-
-	osd_data = osd_req_op_data(osd_req, which, extent, osd_data);
-	ceph_osd_data_pagelist_init(osd_data, pagelist);
-}
-EXPORT_SYMBOL(osd_req_op_extent_osd_data_pagelist);
-
 #ifdef CONFIG_BLOCK
 void osd_req_op_extent_osd_data_bio(struct ceph_osd_request *osd_req,
 				    unsigned int which,
@@ -296,19 +286,6 @@ static void osd_req_op_cls_request_info_pagelist(
 	osd_data = osd_req_op_data(osd_req, which, cls, request_info);
 	ceph_osd_data_pagelist_init(osd_data, pagelist);
 }
-
-void osd_req_op_cls_request_data_pagelist(
-			struct ceph_osd_request *osd_req,
-			unsigned int which, struct ceph_pagelist *pagelist)
-{
-	struct ceph_osd_data *osd_data;
-
-	osd_data = osd_req_op_data(osd_req, which, cls, request_data);
-	ceph_osd_data_pagelist_init(osd_data, pagelist);
-	osd_req->r_ops[which].cls.indata_len += pagelist->length;
-	osd_req->r_ops[which].indata_len += pagelist->length;
-}
-EXPORT_SYMBOL(osd_req_op_cls_request_data_pagelist);
 
 void osd_req_op_cls_request_data_pages(struct ceph_osd_request *osd_req,
 			unsigned int which, struct page **pages, u64 length,
@@ -1173,6 +1150,8 @@ EXPORT_SYMBOL(ceph_osdc_new_request);
 
 int __ceph_alloc_sparse_ext_map(struct ceph_osd_req_op *op, int cnt)
 {
+	WARN_ON(op->op != CEPH_OSD_OP_SPARSE_READ);
+
 	op->extent.sparse_ext_cnt = cnt;
 	op->extent.sparse_ext = kmalloc_array(cnt,
 					      sizeof(*op->extent.sparse_ext),

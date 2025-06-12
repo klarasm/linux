@@ -657,7 +657,11 @@ static int hid_parser_main(struct hid_parser *parser, struct hid_item *item)
 		ret = hid_add_field(parser, HID_FEATURE_REPORT, data);
 		break;
 	default:
-		hid_warn(parser->device, "unknown main item tag 0x%x\n", item->tag);
+		if (item->tag >= HID_MAIN_ITEM_TAG_RESERVED_MIN &&
+			item->tag <= HID_MAIN_ITEM_TAG_RESERVED_MAX)
+			hid_warn(parser->device, "reserved main item tag 0x%x\n", item->tag);
+		else
+			hid_warn(parser->device, "unknown main item tag 0x%x\n", item->tag);
 		ret = 0;
 	}
 
@@ -1163,6 +1167,8 @@ static void hid_apply_multiplier(struct hid_device *hid,
 	while (multiplier_collection->parent_idx != -1 &&
 	       multiplier_collection->type != HID_COLLECTION_LOGICAL)
 		multiplier_collection = &hid->collection[multiplier_collection->parent_idx];
+	if (multiplier_collection->type != HID_COLLECTION_LOGICAL)
+		multiplier_collection = NULL;
 
 	effective_multiplier = hid_calculate_multiplier(hid, multiplier);
 
@@ -2174,9 +2180,9 @@ static bool hid_hiddev(struct hid_device *hdev)
 
 
 static ssize_t
-read_report_descriptor(struct file *filp, struct kobject *kobj,
-		struct bin_attribute *attr,
-		char *buf, loff_t off, size_t count)
+report_descriptor_read(struct file *filp, struct kobject *kobj,
+		       const struct bin_attribute *attr,
+		       char *buf, loff_t off, size_t count)
 {
 	struct device *dev = kobj_to_dev(kobj);
 	struct hid_device *hdev = to_hid_device(dev);
@@ -2193,24 +2199,17 @@ read_report_descriptor(struct file *filp, struct kobject *kobj,
 }
 
 static ssize_t
-show_country(struct device *dev, struct device_attribute *attr,
-		char *buf)
+country_show(struct device *dev, struct device_attribute *attr,
+	     char *buf)
 {
 	struct hid_device *hdev = to_hid_device(dev);
 
 	return sprintf(buf, "%02x\n", hdev->country & 0xff);
 }
 
-static struct bin_attribute dev_bin_attr_report_desc = {
-	.attr = { .name = "report_descriptor", .mode = 0444 },
-	.read = read_report_descriptor,
-	.size = HID_MAX_DESCRIPTOR_SIZE,
-};
+static const BIN_ATTR_RO(report_descriptor, HID_MAX_DESCRIPTOR_SIZE);
 
-static const struct device_attribute dev_attr_country = {
-	.attr = { .name = "country", .mode = 0444 },
-	.show = show_country,
-};
+static const DEVICE_ATTR_RO(country);
 
 int hid_connect(struct hid_device *hdev, unsigned int connect_mask)
 {
@@ -2397,6 +2396,9 @@ int hid_hw_open(struct hid_device *hdev)
 		ret = hdev->ll_driver->open(hdev);
 		if (ret)
 			hdev->ll_open_count--;
+
+		if (hdev->driver->on_hid_hw_open)
+			hdev->driver->on_hid_hw_open(hdev);
 	}
 
 	mutex_unlock(&hdev->ll_open_lock);
@@ -2416,8 +2418,12 @@ EXPORT_SYMBOL_GPL(hid_hw_open);
 void hid_hw_close(struct hid_device *hdev)
 {
 	mutex_lock(&hdev->ll_open_lock);
-	if (!--hdev->ll_open_count)
+	if (!--hdev->ll_open_count) {
 		hdev->ll_driver->close(hdev);
+
+		if (hdev->driver->on_hid_hw_close)
+			hdev->driver->on_hid_hw_close(hdev);
+	}
 	mutex_unlock(&hdev->ll_open_lock);
 }
 EXPORT_SYMBOL_GPL(hid_hw_close);
@@ -2800,13 +2806,13 @@ static struct attribute *hid_dev_attrs[] = {
 	&dev_attr_modalias.attr,
 	NULL,
 };
-static struct bin_attribute *hid_dev_bin_attrs[] = {
-	&dev_bin_attr_report_desc,
+static const struct bin_attribute *hid_dev_bin_attrs[] = {
+	&bin_attr_report_descriptor,
 	NULL
 };
 static const struct attribute_group hid_dev_group = {
 	.attrs = hid_dev_attrs,
-	.bin_attrs = hid_dev_bin_attrs,
+	.bin_attrs_new = hid_dev_bin_attrs,
 };
 __ATTRIBUTE_GROUPS(hid_dev);
 
@@ -3064,7 +3070,7 @@ int hid_check_keys_pressed(struct hid_device *hid)
 EXPORT_SYMBOL_GPL(hid_check_keys_pressed);
 
 #ifdef CONFIG_HID_BPF
-static struct hid_ops __hid_ops = {
+static const struct hid_ops __hid_ops = {
 	.hid_get_report = hid_get_report,
 	.hid_hw_raw_request = __hid_hw_raw_request,
 	.hid_hw_output_report = __hid_hw_output_report,

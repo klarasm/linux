@@ -62,6 +62,9 @@ config GPIB_CEC_PCI
 config GPIB_NI_PCI_ISA
 	tristate "NI PCI/ISA compatible boards"
 	depends on ISA_BUS || PCI || PCMCIA
+	depends on HAS_IOPORT
+	depends on PCMCIA || !PCMCIA
+	depends on HAS_IOPORT_MAP
 	select GPIB_COMMON
 	select GPIB_NEC7210
 	help
@@ -85,6 +88,7 @@ config GPIB_CB7210
        tristate "Measurement Computing compatible boards"
 	depends on HAS_IOPORT
 	depends on ISA_BUS || PCI || PCMCIA
+	depends on PCMCIA || !PCMCIA
        select GPIB_COMMON
 	select GPIB_NEC7210
        help
@@ -128,7 +132,7 @@ config GPIB_FMH
        tristate "FMH FPGA based devices"
        select GPIB_COMMON
        select GPIB_NEC7210
-       depends on BROKEN
+       depends on !PPC
        depends on OF && PCI
        help
          GPIB driver for fmhess FPGA based devices
@@ -162,7 +166,6 @@ config GPIB_HP82341
        tristate "HP82341x"
        select GPIB_COMMON
        select GPIB_TMS9914
-       depends on BROKEN
        depends on ISA_BUS || EISA
        help
          GPIB driver for HP82341 A/B/C/D boards
@@ -173,6 +176,7 @@ config GPIB_HP82341
 config GPIB_INES
        tristate "INES"
 	depends on PCI || ISA_BUS || PCMCIA
+	depends on PCMCIA || !PCMCIA
 	depends on HAS_IOPORT
        select GPIB_COMMON
        select GPIB_NEC7210
@@ -194,8 +198,8 @@ config GPIB_INES
 	  called cb7210.
 
 config GPIB_PCMCIA
-       bool "PCMCIA/Cardbus support for NI MC and Ines boards"
-       depends on PCCARD && (GPIB_NI_PCI_ISA || GPIB_CB7210 || GPIB_INES)
+       def_bool y
+       depends on PCMCIA && (GPIB_NI_PCI_ISA || GPIB_CB7210 || GPIB_INES)
        help
          Enable PCMCIA/CArdbus support for National Instruments,
 	 measurement computing boards and Ines boards.
