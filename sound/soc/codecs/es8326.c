@@ -1094,6 +1094,7 @@ static void es8326_init(struct snd_soc_component *component)
 	regmap_write(es8326->regmap, ES8326_CLK_DIV_LRCK, 0xff);
 	regmap_write(es8326->regmap, ES8326_ADC1_SRC, 0x44);
 	regmap_write(es8326->regmap, ES8326_ADC2_SRC, 0x66);
+	regmap_write(es8326->regmap, ES8326_FMT, 0x0c);
 	es8326_disable_micbias(es8326->component);
 	if (es8326->version > ES8326_VERSION_B) {
 		regmap_update_bits(es8326->regmap, ES8326_ANA_MICBIAS, 0x73, 0x10);
@@ -1130,6 +1131,7 @@ static int es8326_suspend(struct snd_soc_component *component)
 	struct es8326_priv *es8326 = snd_soc_component_get_drvdata(component);
 
 	cancel_delayed_work_sync(&es8326->jack_detect_work);
+	snd_soc_jack_report(es8326->jack, 0, SND_JACK_HEADSET);
 	es8326_disable_micbias(component);
 	es8326->calibrated = false;
 	regmap_write(es8326->regmap, ES8326_CLK_MUX, 0x2d);
