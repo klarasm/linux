@@ -22,12 +22,16 @@
  *
  */
 
+#include <drm/drm_print.h>
+
+#include "i915_utils.h"
 #include "i9xx_plane_regs.h"
 #include "intel_color.h"
 #include "intel_color_regs.h"
 #include "intel_de.h"
 #include "intel_display_types.h"
 #include "intel_dsb.h"
+#include "intel_vrr.h"
 
 struct intel_color_funcs {
 	int (*color_check)(struct intel_atomic_state *state,
@@ -403,14 +407,13 @@ static void icl_read_csc(struct intel_crtc_state *crtc_state)
 static bool ilk_limited_range(const struct intel_crtc_state *crtc_state)
 {
 	struct intel_display *display = to_intel_display(crtc_state);
-	struct drm_i915_private *i915 = to_i915(display->drm);
 
 	/* icl+ have dedicated output CSC */
 	if (DISPLAY_VER(display) >= 11)
 		return false;
 
 	/* pre-hsw have TRANSCONF_COLOR_RANGE_SELECT */
-	if (DISPLAY_VER(display) < 7 || IS_IVYBRIDGE(i915))
+	if (DISPLAY_VER(display) < 7 || display->platform.ivybridge)
 		return false;
 
 	return crtc_state->limited_color_range;
@@ -514,7 +517,6 @@ static void ilk_csc_convert_ctm(const struct intel_crtc_state *crtc_state,
 static void ilk_assign_csc(struct intel_crtc_state *crtc_state)
 {
 	struct intel_display *display = to_intel_display(crtc_state);
-	struct drm_i915_private *i915 = to_i915(display->drm);
 	bool limited_color_range = ilk_csc_limited_range(crtc_state);
 
 	if (crtc_state->hw.ctm) {
@@ -536,7 +538,7 @@ static void ilk_assign_csc(struct intel_crtc_state *crtc_state)
 		 * LUT is needed but CSC is not we need to load an
 		 * identity matrix.
 		 */
-		drm_WARN_ON(display->drm, !IS_GEMINILAKE(i915));
+		drm_WARN_ON(display->drm, !display->platform.geminilake);
 
 		ilk_csc_copy(display, &crtc_state->csc, &ilk_csc_matrix_identity);
 	} else {
@@ -997,7 +999,7 @@ static void skl_color_commit_noarm(struct intel_dsb *dsb,
 	 * output all black (until CSC_MODE is rearmed and properly latched).
 	 * Once PSR exit (and proper register latching) has occurred the
 	 * danger is over. Thus when PSR is enabled the CSC coeff/offset
-	 * register programming will be peformed from skl_color_commit_arm()
+	 * register programming will be performed from skl_color_commit_arm()
 	 * which is called after PSR exit.
 	 */
 	if (!crtc_state->has_psr)
@@ -1343,6 +1345,17 @@ static void ilk_lut_write(const struct intel_crtc_state *crtc_state,
 		intel_de_write_fw(display, reg, val);
 }
 
+static void ilk_lut_write_indexed(const struct intel_crtc_state *crtc_state,
+				  i915_reg_t reg, u32 val)
+{
+	struct intel_display *display = to_intel_display(crtc_state);
+
+	if (crtc_state->dsb_color_vblank)
+		intel_dsb_reg_write_indexed(crtc_state->dsb_color_vblank, reg, val);
+	else
+		intel_de_write_fw(display, reg, val);
+}
+
 static void ilk_load_lut_8(const struct intel_crtc_state *crtc_state,
 			   const struct drm_property_blob *blob)
 {
@@ -1357,19 +1370,29 @@ static void ilk_load_lut_8(const struct intel_crtc_state *crtc_state,
 	lut = blob->data;
 
 	/*
-	 * DSB fails to correctly load the legacy LUT
-	 * unless we either write each entry twice,
-	 * or use non-posted writes
+	 * DSB fails to correctly load the legacy LUT unless
+	 * we either write each entry twice when using posted
+	 * writes, or we use non-posted writes.
+	 *
+	 * If palette anti-collision is active during LUT
+	 * register writes:
+	 * - posted writes simply get dropped and thus the LUT
+	 *   contents may not be correctly updated
+	 * - non-posted writes are blocked and thus the LUT
+	 *   contents are always correct, but simultaneous CPU
+	 *   MMIO access will start to fail
+	 *
+	 * Choose the lesser of two evils and use posted writes.
+	 * Using posted writes is also faster, even when having
+	 * to write each register twice.
 	 */
-	if (crtc_state->dsb_color_vblank)
-		intel_dsb_nonpost_start(crtc_state->dsb_color_vblank);
-
-	for (i = 0; i < 256; i++)
+	for (i = 0; i < 256; i++) {
 		ilk_lut_write(crtc_state, LGC_PALETTE(pipe, i),
 			      i9xx_lut_8(&lut[i]));
-
-	if (crtc_state->dsb_color_vblank)
-		intel_dsb_nonpost_end(crtc_state->dsb_color_vblank);
+		if (crtc_state->dsb_color_vblank)
+			ilk_lut_write(crtc_state, LGC_PALETTE(pipe, i),
+				      i9xx_lut_8(&lut[i]));
+	}
 }
 
 static void ilk_load_lut_10(const struct intel_crtc_state *crtc_state,
@@ -1458,8 +1481,8 @@ static void bdw_load_lut_10(const struct intel_crtc_state *crtc_state,
 		      prec_index);
 
 	for (i = 0; i < lut_size; i++)
-		ilk_lut_write(crtc_state, PREC_PAL_DATA(pipe),
-			      ilk_lut_10(&lut[i]));
+		ilk_lut_write_indexed(crtc_state, PREC_PAL_DATA(pipe),
+				      ilk_lut_10(&lut[i]));
 
 	/*
 	 * Reset the index, otherwise it prevents the legacy palette to be
@@ -1612,16 +1635,16 @@ static void glk_load_degamma_lut(const struct intel_crtc_state *crtc_state,
 		 * ToDo: Extend to max 7.0. Enable 32 bit input value
 		 * as compared to just 16 to achieve this.
 		 */
-		ilk_lut_write(crtc_state, PRE_CSC_GAMC_DATA(pipe),
-			      DISPLAY_VER(display) >= 14 ?
-			      mtl_degamma_lut(&lut[i]) : glk_degamma_lut(&lut[i]));
+		ilk_lut_write_indexed(crtc_state, PRE_CSC_GAMC_DATA(pipe),
+				      DISPLAY_VER(display) >= 14 ?
+				      mtl_degamma_lut(&lut[i]) : glk_degamma_lut(&lut[i]));
 	}
 
 	/* Clamp values > 1.0. */
 	while (i++ < glk_degamma_lut_size(display))
-		ilk_lut_write(crtc_state, PRE_CSC_GAMC_DATA(pipe),
-			      DISPLAY_VER(display) >= 14 ?
-			      1 << 24 : 1 << 16);
+		ilk_lut_write_indexed(crtc_state, PRE_CSC_GAMC_DATA(pipe),
+				      DISPLAY_VER(display) >= 14 ?
+				      1 << 24 : 1 << 16);
 
 	ilk_lut_write(crtc_state, PRE_CSC_GAMC_INDEX(pipe), 0);
 }
@@ -1687,10 +1710,10 @@ icl_program_gamma_superfine_segment(const struct intel_crtc_state *crtc_state)
 	for (i = 0; i < 9; i++) {
 		const struct drm_color_lut *entry = &lut[i];
 
-		ilk_lut_write(crtc_state, PREC_PAL_MULTI_SEG_DATA(pipe),
-			      ilk_lut_12p4_ldw(entry));
-		ilk_lut_write(crtc_state, PREC_PAL_MULTI_SEG_DATA(pipe),
-			      ilk_lut_12p4_udw(entry));
+		ilk_lut_write_indexed(crtc_state, PREC_PAL_MULTI_SEG_DATA(pipe),
+				      ilk_lut_12p4_ldw(entry));
+		ilk_lut_write_indexed(crtc_state, PREC_PAL_MULTI_SEG_DATA(pipe),
+				      ilk_lut_12p4_udw(entry));
 	}
 
 	ilk_lut_write(crtc_state, PREC_PAL_MULTI_SEG_INDEX(pipe),
@@ -1726,10 +1749,10 @@ icl_program_gamma_multi_segment(const struct intel_crtc_state *crtc_state)
 	for (i = 1; i < 257; i++) {
 		entry = &lut[i * 8];
 
-		ilk_lut_write(crtc_state, PREC_PAL_DATA(pipe),
-			      ilk_lut_12p4_ldw(entry));
-		ilk_lut_write(crtc_state, PREC_PAL_DATA(pipe),
-			      ilk_lut_12p4_udw(entry));
+		ilk_lut_write_indexed(crtc_state, PREC_PAL_DATA(pipe),
+				      ilk_lut_12p4_ldw(entry));
+		ilk_lut_write_indexed(crtc_state, PREC_PAL_DATA(pipe),
+				      ilk_lut_12p4_udw(entry));
 	}
 
 	/*
@@ -1747,10 +1770,10 @@ icl_program_gamma_multi_segment(const struct intel_crtc_state *crtc_state)
 	for (i = 0; i < 256; i++) {
 		entry = &lut[i * 8 * 128];
 
-		ilk_lut_write(crtc_state, PREC_PAL_DATA(pipe),
-			      ilk_lut_12p4_ldw(entry));
-		ilk_lut_write(crtc_state, PREC_PAL_DATA(pipe),
-			      ilk_lut_12p4_udw(entry));
+		ilk_lut_write_indexed(crtc_state, PREC_PAL_DATA(pipe),
+				      ilk_lut_12p4_ldw(entry));
+		ilk_lut_write_indexed(crtc_state, PREC_PAL_DATA(pipe),
+				      ilk_lut_12p4_udw(entry));
 	}
 
 	ilk_lut_write(crtc_state, PREC_PAL_INDEX(pipe),
@@ -1965,8 +1988,12 @@ void intel_color_prepare_commit(struct intel_atomic_state *state,
 
 	display->funcs.color->load_luts(crtc_state);
 
-	intel_dsb_wait_vblank_delay(state, crtc_state->dsb_color_vblank);
-	intel_dsb_interrupt(crtc_state->dsb_color_vblank);
+	if (crtc_state->use_dsb) {
+		intel_vrr_send_push(crtc_state->dsb_color_vblank, crtc_state);
+		intel_dsb_wait_vblank_delay(state, crtc_state->dsb_color_vblank);
+		intel_vrr_check_push_sent(crtc_state->dsb_color_vblank, crtc_state);
+		intel_dsb_interrupt(crtc_state->dsb_color_vblank);
+	}
 
 	intel_dsb_finish(crtc_state->dsb_color_vblank);
 }
@@ -3956,12 +3983,10 @@ int intel_color_init(struct intel_display *display)
 
 void intel_color_init_hooks(struct intel_display *display)
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
-
 	if (HAS_GMCH(display)) {
-		if (IS_CHERRYVIEW(i915))
+		if (display->platform.cherryview)
 			display->funcs.color = &chv_color_funcs;
-		else if (IS_VALLEYVIEW(i915))
+		else if (display->platform.valleyview)
 			display->funcs.color = &vlv_color_funcs;
 		else if (DISPLAY_VER(display) >= 4)
 			display->funcs.color = &i965_color_funcs;
@@ -3978,7 +4003,7 @@ void intel_color_init_hooks(struct intel_display *display)
 			display->funcs.color = &skl_color_funcs;
 		else if (DISPLAY_VER(display) == 8)
 			display->funcs.color = &bdw_color_funcs;
-		else if (IS_HASWELL(i915))
+		else if (display->platform.haswell)
 			display->funcs.color = &hsw_color_funcs;
 		else if (DISPLAY_VER(display) == 7)
 			display->funcs.color = &ivb_color_funcs;

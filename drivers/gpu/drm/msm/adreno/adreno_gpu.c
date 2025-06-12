@@ -236,14 +236,27 @@ adreno_iommu_create_address_space(struct msm_gpu *gpu,
 u64 adreno_private_address_space_size(struct msm_gpu *gpu)
 {
 	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
+	struct adreno_smmu_priv *adreno_smmu = dev_get_drvdata(&gpu->pdev->dev);
+	const struct io_pgtable_cfg *ttbr1_cfg;
 
 	if (address_space_size)
 		return address_space_size;
 
-	if (adreno_gpu->info->address_space_size)
-		return adreno_gpu->info->address_space_size;
+	if (adreno_gpu->info->quirks & ADRENO_QUIRK_4GB_VA)
+		return SZ_4G;
 
-	return SZ_4G;
+	if (!adreno_smmu || !adreno_smmu->get_ttbr1_cfg)
+		return SZ_4G;
+
+	ttbr1_cfg = adreno_smmu->get_ttbr1_cfg(adreno_smmu->cookie);
+
+	/*
+	 * Userspace VM is actually using TTBR0, but both are the same size,
+	 * with b48 (sign bit) selecting which TTBRn to use.  So if IAS is
+	 * 48, the total (kernel+user) address space size is effectively
+	 * 49 bits.  But what userspace is control of is the lower 48.
+	 */
+	return BIT(ttbr1_cfg->ias) - ADRENO_VM_START;
 }
 
 #define ARM_SMMU_FSR_TF                 BIT(1)
@@ -292,7 +305,7 @@ int adreno_fault_handler(struct msm_gpu *gpu, unsigned long iova, int flags,
 
 	if (do_devcoredump) {
 		/* Turn off the hangcheck timer to keep it from bothering us */
-		del_timer(&gpu->hangcheck_timer);
+		timer_delete(&gpu->hangcheck_timer);
 
 		gpu->fault_info.ttbr0 = info->ttbr0;
 		gpu->fault_info.iova  = iova;
@@ -310,10 +323,11 @@ int adreno_get_param(struct msm_gpu *gpu, struct msm_file_private *ctx,
 		     uint32_t param, uint64_t *value, uint32_t *len)
 {
 	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
+	struct drm_device *drm = gpu->dev;
 
 	/* No pointer params yet */
 	if (*len != 0)
-		return -EINVAL;
+		return UERR(EINVAL, drm, "invalid len");
 
 	switch (param) {
 	case MSM_PARAM_GPU_ID:
@@ -365,12 +379,12 @@ int adreno_get_param(struct msm_gpu *gpu, struct msm_file_private *ctx,
 		return 0;
 	case MSM_PARAM_VA_START:
 		if (ctx->aspace == gpu->aspace)
-			return -EINVAL;
+			return UERR(EINVAL, drm, "requires per-process pgtables");
 		*value = ctx->aspace->va_start;
 		return 0;
 	case MSM_PARAM_VA_SIZE:
 		if (ctx->aspace == gpu->aspace)
-			return -EINVAL;
+			return UERR(EINVAL, drm, "requires per-process pgtables");
 		*value = ctx->aspace->va_size;
 		return 0;
 	case MSM_PARAM_HIGHEST_BANK_BIT:
@@ -385,15 +399,19 @@ int adreno_get_param(struct msm_gpu *gpu, struct msm_file_private *ctx,
 	case MSM_PARAM_MACROTILE_MODE:
 		*value = adreno_gpu->ubwc_config.macrotile_mode;
 		return 0;
+	case MSM_PARAM_UCHE_TRAP_BASE:
+		*value = adreno_gpu->uche_trap_base;
+		return 0;
 	default:
-		DBG("%s: invalid param: %u", gpu->name, param);
-		return -EINVAL;
+		return UERR(EINVAL, drm, "%s: invalid param: %u", gpu->name, param);
 	}
 }
 
 int adreno_set_param(struct msm_gpu *gpu, struct msm_file_private *ctx,
 		     uint32_t param, uint64_t value, uint32_t len)
 {
+	struct drm_device *drm = gpu->dev;
+
 	switch (param) {
 	case MSM_PARAM_COMM:
 	case MSM_PARAM_CMDLINE:
@@ -401,11 +419,11 @@ int adreno_set_param(struct msm_gpu *gpu, struct msm_file_private *ctx,
 		 * that should be a reasonable upper bound
 		 */
 		if (len > PAGE_SIZE)
-			return -EINVAL;
+			return UERR(EINVAL, drm, "invalid len");
 		break;
 	default:
 		if (len != 0)
-			return -EINVAL;
+			return UERR(EINVAL, drm, "invalid len");
 	}
 
 	switch (param) {
@@ -434,11 +452,10 @@ int adreno_set_param(struct msm_gpu *gpu, struct msm_file_private *ctx,
 	}
 	case MSM_PARAM_SYSPROF:
 		if (!capable(CAP_SYS_ADMIN))
-			return -EPERM;
+			return UERR(EPERM, drm, "invalid permissions");
 		return msm_file_private_set_sysprof(ctx, gpu, value);
 	default:
-		DBG("%s: invalid param: %u", gpu->name, param);
-		return -EINVAL;
+		return UERR(EINVAL, drm, "%s: invalid param: %u", gpu->name, param);
 	}
 }
 
@@ -879,6 +896,16 @@ void adreno_show(struct msm_gpu *gpu, struct msm_gpu_state *state,
 		drm_printf(p, "  - dir=%s\n", info->flags & IOMMU_FAULT_WRITE ? "WRITE" : "READ");
 		drm_printf(p, "  - type=%s\n", info->type);
 		drm_printf(p, "  - source=%s\n", info->block);
+
+		/* Information extracted from what we think are the current
+		 * pgtables.  Hopefully the TTBR0 matches what we've extracted
+		 * from the SMMU registers in smmu_info!
+		 */
+		drm_puts(p, "pgtable-fault-info:\n");
+		drm_printf(p, "  - ttbr0: %.16llx\n", (u64)info->pgtbl_ttbr0);
+		drm_printf(p, "  - asid: %d\n", info->asid);
+		drm_printf(p, "  - ptes: %.16llx %.16llx %.16llx %.16llx\n",
+			   info->ptes[0], info->ptes[1], info->ptes[2], info->ptes[3]);
 	}
 
 	drm_printf(p, "rbbm-status: 0x%08x\n", state->rbbm_status);

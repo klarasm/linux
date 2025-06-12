@@ -361,9 +361,9 @@ static void ufs_hisi_pwr_change_pre_change(struct ufs_hba *hba)
 }
 
 static int ufs_hisi_pwr_change_notify(struct ufs_hba *hba,
-				       enum ufs_notify_change_status status,
-				       struct ufs_pa_layer_attr *dev_max_params,
-				       struct ufs_pa_layer_attr *dev_req_params)
+				enum ufs_notify_change_status status,
+				const struct ufs_pa_layer_attr *dev_max_params,
+				struct ufs_pa_layer_attr *dev_req_params)
 {
 	struct ufs_host_params host_params;
 	int ret = 0;
@@ -576,9 +576,7 @@ static int ufs_hisi_probe(struct platform_device *pdev)
 
 static void ufs_hisi_remove(struct platform_device *pdev)
 {
-	struct ufs_hba *hba =  platform_get_drvdata(pdev);
-
-	ufshcd_remove(hba);
+	ufshcd_pltfrm_remove(pdev);
 }
 
 static const struct dev_pm_ops ufs_hisi_pm_ops = {

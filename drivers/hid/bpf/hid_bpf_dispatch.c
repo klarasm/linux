@@ -19,7 +19,7 @@
 #include <linux/module.h>
 #include "hid_bpf_dispatch.h"
 
-struct hid_ops *hid_ops;
+const struct hid_ops *hid_ops;
 EXPORT_SYMBOL(hid_ops);
 
 u8 *
@@ -37,6 +37,9 @@ dispatch_hid_bpf_device_event(struct hid_device *hdev, enum hid_report_type type
 	};
 	struct hid_bpf_ops *e;
 	int ret;
+
+	if (unlikely(hdev->bpf.destroyed))
+		return ERR_PTR(-ENODEV);
 
 	if (type >= HID_REPORT_TYPES)
 		return ERR_PTR(-EINVAL);
@@ -93,6 +96,9 @@ int dispatch_hid_bpf_raw_requests(struct hid_device *hdev,
 	struct hid_bpf_ops *e;
 	int ret, idx;
 
+	if (unlikely(hdev->bpf.destroyed))
+		return -ENODEV;
+
 	if (rtype >= HID_REPORT_TYPES)
 		return -EINVAL;
 
@@ -129,6 +135,9 @@ int dispatch_hid_bpf_output_report(struct hid_device *hdev,
 	};
 	struct hid_bpf_ops *e;
 	int ret, idx;
+
+	if (unlikely(hdev->bpf.destroyed))
+		return -ENODEV;
 
 	idx = srcu_read_lock(&hdev->bpf.srcu);
 	list_for_each_entry_srcu(e, &hdev->bpf.prog_list, list,
@@ -352,7 +361,6 @@ __hid_bpf_hw_check_params(struct hid_bpf_ctx *ctx, __u8 *buf, size_t *buf__sz,
 {
 	struct hid_report_enum *report_enum;
 	struct hid_report *report;
-	struct hid_device *hdev;
 	u32 report_len;
 
 	/* check arguments */
@@ -371,9 +379,7 @@ __hid_bpf_hw_check_params(struct hid_bpf_ctx *ctx, __u8 *buf, size_t *buf__sz,
 	if (*buf__sz < 1)
 		return -EINVAL;
 
-	hdev = (struct hid_device *)ctx->hid; /* discard const */
-
-	report_enum = hdev->report_enum + rtype;
+	report_enum = ctx->hid->report_enum + rtype;
 	report = hid_ops->hid_get_report(report_enum, buf);
 	if (!report)
 		return -EINVAL;
@@ -402,7 +408,6 @@ hid_bpf_hw_request(struct hid_bpf_ctx *ctx, __u8 *buf, size_t buf__sz,
 		   enum hid_report_type rtype, enum hid_class_request reqtype)
 {
 	struct hid_bpf_ctx_kern *ctx_kern;
-	struct hid_device *hdev;
 	size_t size = buf__sz;
 	u8 *dma_data;
 	int ret;
@@ -429,13 +434,11 @@ hid_bpf_hw_request(struct hid_bpf_ctx *ctx, __u8 *buf, size_t buf__sz,
 		return -EINVAL;
 	}
 
-	hdev = (struct hid_device *)ctx->hid; /* discard const */
-
 	dma_data = kmemdup(buf, size, GFP_KERNEL);
 	if (!dma_data)
 		return -ENOMEM;
 
-	ret = hid_ops->hid_hw_raw_request(hdev,
+	ret = hid_ops->hid_hw_raw_request(ctx->hid,
 					      dma_data[0],
 					      dma_data,
 					      size,
@@ -464,7 +467,6 @@ __bpf_kfunc int
 hid_bpf_hw_output_report(struct hid_bpf_ctx *ctx, __u8 *buf, size_t buf__sz)
 {
 	struct hid_bpf_ctx_kern *ctx_kern;
-	struct hid_device *hdev;
 	size_t size = buf__sz;
 	u8 *dma_data;
 	int ret;
@@ -478,13 +480,11 @@ hid_bpf_hw_output_report(struct hid_bpf_ctx *ctx, __u8 *buf, size_t buf__sz)
 	if (ret)
 		return ret;
 
-	hdev = (struct hid_device *)ctx->hid; /* discard const */
-
 	dma_data = kmemdup(buf, size, GFP_KERNEL);
 	if (!dma_data)
 		return -ENOMEM;
 
-	ret = hid_ops->hid_hw_output_report(hdev, dma_data, size, (u64)(long)ctx, true);
+	ret = hid_ops->hid_hw_output_report(ctx->hid, dma_data, size, (u64)(long)ctx, true);
 
 	kfree(dma_data);
 	return ret;

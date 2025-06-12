@@ -25,6 +25,9 @@ static void
 function_trace_call(unsigned long ip, unsigned long parent_ip,
 		    struct ftrace_ops *op, struct ftrace_regs *fregs);
 static void
+function_args_trace_call(unsigned long ip, unsigned long parent_ip,
+			 struct ftrace_ops *op, struct ftrace_regs *fregs);
+static void
 function_stack_trace_call(unsigned long ip, unsigned long parent_ip,
 			  struct ftrace_ops *op, struct ftrace_regs *fregs);
 static void
@@ -42,9 +45,10 @@ enum {
 	TRACE_FUNC_NO_OPTS		= 0x0, /* No flags set. */
 	TRACE_FUNC_OPT_STACK		= 0x1,
 	TRACE_FUNC_OPT_NO_REPEATS	= 0x2,
+	TRACE_FUNC_OPT_ARGS		= 0x4,
 
 	/* Update this to next highest bit. */
-	TRACE_FUNC_OPT_HIGHEST_BIT	= 0x4
+	TRACE_FUNC_OPT_HIGHEST_BIT	= 0x8
 };
 
 #define TRACE_FUNC_OPT_MASK	(TRACE_FUNC_OPT_HIGHEST_BIT - 1)
@@ -114,6 +118,8 @@ static ftrace_func_t select_trace_function(u32 flags_val)
 	switch (flags_val & TRACE_FUNC_OPT_MASK) {
 	case TRACE_FUNC_NO_OPTS:
 		return function_trace_call;
+	case TRACE_FUNC_OPT_ARGS:
+		return function_args_trace_call;
 	case TRACE_FUNC_OPT_STACK:
 		return function_stack_trace_call;
 	case TRACE_FUNC_OPT_NO_REPEATS:
@@ -176,7 +182,8 @@ static void function_trace_start(struct trace_array *tr)
 	tracing_reset_online_cpus(&tr->array_buffer);
 }
 
-#ifdef CONFIG_FUNCTION_GRAPH_TRACER
+/* fregs are guaranteed not to be NULL if HAVE_DYNAMIC_FTRACE_WITH_ARGS is set */
+#if defined(CONFIG_FUNCTION_GRAPH_TRACER) && defined(CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS)
 static __always_inline unsigned long
 function_get_true_parent_ip(unsigned long parent_ip, struct ftrace_regs *fregs)
 {
@@ -202,7 +209,6 @@ function_trace_call(unsigned long ip, unsigned long parent_ip,
 		    struct ftrace_ops *op, struct ftrace_regs *fregs)
 {
 	struct trace_array *tr = op->private;
-	struct trace_array_cpu *data;
 	unsigned int trace_ctx;
 	int bit;
 
@@ -215,11 +221,31 @@ function_trace_call(unsigned long ip, unsigned long parent_ip,
 
 	parent_ip = function_get_true_parent_ip(parent_ip, fregs);
 
+	trace_ctx = tracing_gen_ctx_dec();
+
+	trace_function(tr, ip, parent_ip, trace_ctx, NULL);
+
+	ftrace_test_recursion_unlock(bit);
+}
+
+static void
+function_args_trace_call(unsigned long ip, unsigned long parent_ip,
+			 struct ftrace_ops *op, struct ftrace_regs *fregs)
+{
+	struct trace_array *tr = op->private;
+	unsigned int trace_ctx;
+	int bit;
+
+	if (unlikely(!tr->function_enabled))
+		return;
+
+	bit = ftrace_test_recursion_trylock(ip, parent_ip);
+	if (bit < 0)
+		return;
+
 	trace_ctx = tracing_gen_ctx();
 
-	data = this_cpu_ptr(tr->array_buffer.data);
-	if (!atomic_read(&data->disabled))
-		trace_function(tr, ip, parent_ip, trace_ctx);
+	trace_function(tr, ip, parent_ip, trace_ctx, fregs);
 
 	ftrace_test_recursion_unlock(bit);
 }
@@ -265,11 +291,11 @@ function_stack_trace_call(unsigned long ip, unsigned long parent_ip,
 	parent_ip = function_get_true_parent_ip(parent_ip, fregs);
 	cpu = raw_smp_processor_id();
 	data = per_cpu_ptr(tr->array_buffer.data, cpu);
-	disabled = atomic_inc_return(&data->disabled);
+	disabled = local_inc_return(&data->disabled);
 
 	if (likely(disabled == 1)) {
 		trace_ctx = tracing_gen_ctx_flags(flags);
-		trace_function(tr, ip, parent_ip, trace_ctx);
+		trace_function(tr, ip, parent_ip, trace_ctx, NULL);
 #ifdef CONFIG_UNWINDER_FRAME_POINTER
 		if (ftrace_pids_enabled(op))
 			skip++;
@@ -277,7 +303,7 @@ function_stack_trace_call(unsigned long ip, unsigned long parent_ip,
 		__trace_stack(tr, trace_ctx, skip);
 	}
 
-	atomic_dec(&data->disabled);
+	local_dec(&data->disabled);
 	local_irq_restore(flags);
 }
 
@@ -318,9 +344,7 @@ function_no_repeats_trace_call(unsigned long ip, unsigned long parent_ip,
 {
 	struct trace_func_repeats *last_info;
 	struct trace_array *tr = op->private;
-	struct trace_array_cpu *data;
 	unsigned int trace_ctx;
-	unsigned long flags;
 	int bit;
 
 	if (unlikely(!tr->function_enabled))
@@ -331,8 +355,7 @@ function_no_repeats_trace_call(unsigned long ip, unsigned long parent_ip,
 		return;
 
 	parent_ip = function_get_true_parent_ip(parent_ip, fregs);
-	data = this_cpu_ptr(tr->array_buffer.data);
-	if (atomic_read(&data->disabled))
+	if (!tracer_tracing_is_on(tr))
 		goto out;
 
 	/*
@@ -346,11 +369,10 @@ function_no_repeats_trace_call(unsigned long ip, unsigned long parent_ip,
 	if (is_repeat_check(tr, last_info, ip, parent_ip))
 		goto out;
 
-	local_save_flags(flags);
-	trace_ctx = tracing_gen_ctx_flags(flags);
+	trace_ctx = tracing_gen_ctx_dec();
 	process_repeats(tr, ip, parent_ip, last_info, trace_ctx);
 
-	trace_function(tr, ip, parent_ip, trace_ctx);
+	trace_function(tr, ip, parent_ip, trace_ctx, NULL);
 
 out:
 	ftrace_test_recursion_unlock(bit);
@@ -380,7 +402,7 @@ function_stack_no_repeats_trace_call(unsigned long ip, unsigned long parent_ip,
 	parent_ip = function_get_true_parent_ip(parent_ip, fregs);
 	cpu = raw_smp_processor_id();
 	data = per_cpu_ptr(tr->array_buffer.data, cpu);
-	disabled = atomic_inc_return(&data->disabled);
+	disabled = local_inc_return(&data->disabled);
 
 	if (likely(disabled == 1)) {
 		last_info = per_cpu_ptr(tr->last_func_repeats, cpu);
@@ -390,12 +412,12 @@ function_stack_no_repeats_trace_call(unsigned long ip, unsigned long parent_ip,
 		trace_ctx = tracing_gen_ctx_flags(flags);
 		process_repeats(tr, ip, parent_ip, last_info, trace_ctx);
 
-		trace_function(tr, ip, parent_ip, trace_ctx);
+		trace_function(tr, ip, parent_ip, trace_ctx, NULL);
 		__trace_stack(tr, trace_ctx, STACK_SKIP);
 	}
 
  out:
-	atomic_dec(&data->disabled);
+	local_dec(&data->disabled);
 	local_irq_restore(flags);
 }
 
@@ -404,6 +426,9 @@ static struct tracer_opt func_opts[] = {
 	{ TRACER_OPT(func_stack_trace, TRACE_FUNC_OPT_STACK) },
 #endif
 	{ TRACER_OPT(func-no-repeats, TRACE_FUNC_OPT_NO_REPEATS) },
+#ifdef CONFIG_FUNCTION_TRACE_ARGS
+	{ TRACER_OPT(func-args, TRACE_FUNC_OPT_ARGS) },
+#endif
 	{ } /* Always set a last empty entry */
 };
 
@@ -598,11 +623,7 @@ ftrace_traceoff(unsigned long ip, unsigned long parent_ip,
 
 static __always_inline void trace_stack(struct trace_array *tr)
 {
-	unsigned int trace_ctx;
-
-	trace_ctx = tracing_gen_ctx();
-
-	__trace_stack(tr, trace_ctx, FTRACE_STACK_SKIP);
+	__trace_stack(tr, tracing_gen_ctx_dec(), FTRACE_STACK_SKIP);
 }
 
 static void
