@@ -19,6 +19,7 @@
 #include <linux/firmware/imx/sci.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/reset.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
@@ -33,6 +34,13 @@
 #include <linux/regulator/consumer.h>
 
 #include "flexcan.h"
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+#include <linux/rpmsg.h>
+#define STARTUP_MSG			"startup"
+#define IRQUP_MSG			"irqon"
+static unsigned long long private_data[1];
+#define R_DRV_NAME			"r_flexcan"
+#endif
 
 #define DRV_NAME			"flexcan"
 
@@ -291,7 +299,16 @@ struct flexcan_regs {
 	);
 };
 
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+struct instance_data {
+	struct rpmsg_device *rpdev;
+	struct net_device *dev;
+};
+#endif
+
+#ifndef CONFIG_SOC_SPACEMIT_K1X
 static_assert(sizeof(struct flexcan_regs) ==  0x4 * 18 + 0xfb8);
+#endif
 
 static const struct flexcan_devtype_data fsl_mcf5441x_devtype_data = {
 	.quirks = FLEXCAN_QUIRK_BROKEN_PERR_STATE |
@@ -386,6 +403,17 @@ static const struct flexcan_devtype_data fsl_lx2160a_r1_devtype_data = {
 		FLEXCAN_QUIRK_SUPPORT_RX_MAILBOX |
 		FLEXCAN_QUIRK_SUPPORT_RX_MAILBOX_RTR,
 };
+
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+static const struct flexcan_devtype_data spacemit_k1x_devtype_data = {
+	.quirks = FLEXCAN_QUIRK_DISABLE_RXFG | FLEXCAN_QUIRK_ENABLE_EACEN_RRS |
+		FLEXCAN_QUIRK_DISABLE_MECR | FLEXCAN_QUIRK_BROKEN_PERR_STATE |
+		FLEXCAN_QUIRK_USE_RX_MAILBOX | FLEXCAN_QUIRK_SUPPORT_FD |
+		FLEXCAN_QUIRK_SUPPORT_RX_MAILBOX |
+		FLEXCAN_QUIRK_SUPPORT_RX_MAILBOX_RTR |
+		FLEXCAN_QUIRK_SUPPORT_ECC,
+};
+#endif
 
 static const struct flexcan_devtype_data nxp_s32g2_devtype_data = {
 	.quirks = FLEXCAN_QUIRK_DISABLE_RXFG | FLEXCAN_QUIRK_ENABLE_EACEN_RRS |
@@ -634,11 +662,20 @@ static int flexcan_clks_enable(const struct flexcan_priv *priv)
 			clk_disable_unprepare(priv->clk_ipg);
 	}
 
+	if (priv->reset) {
+		err = reset_control_deassert(priv->reset);
+		if(err) {
+			clk_disable_unprepare(priv->clk_per);
+			clk_disable_unprepare(priv->clk_ipg);
+		}
+	}
+
 	return err;
 }
 
 static void flexcan_clks_disable(const struct flexcan_priv *priv)
 {
+	reset_control_assert(priv->reset);
 	clk_disable_unprepare(priv->clk_per);
 	clk_disable_unprepare(priv->clk_ipg);
 }
@@ -1354,6 +1391,49 @@ static void flexcan_set_bittiming(struct net_device *dev)
 		return flexcan_set_bittiming_ctrl(dev);
 }
 
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+static void flexcan_ram_init(struct net_device *dev)
+{
+	struct flexcan_priv *priv = netdev_priv(dev);
+	struct flexcan_regs __iomem *regs = priv->regs;
+	u32 reg_ctrl2;
+	void __iomem *mb_addr;
+	u32 count;
+	u32 i;
+
+	/* 11.8.3.13 Detection and correction of memory errors:
+	 * CTRL2[WRMFRZ] grants write access to all memory positions
+	 * that require initialization, ranging from 0x080 to 0xADF
+	 * and from 0xF28 to 0xFFF when the CAN FD feature is enabled.
+	 * The RXMGMASK, RX14MASK, RX15MASK, and RXFGMASK registers
+	 * need to be initialized as well. MCR[RFEN] must not be set
+	 * during memory initialization.
+	 */
+	reg_ctrl2 = priv->read(&regs->ctrl2);
+	reg_ctrl2 |= FLEXCAN_CTRL2_WRMFRZ;
+	priv->write(reg_ctrl2, &regs->ctrl2);
+
+	/* use iowrite32 instead of memset_io on riscv */
+	mb_addr = &regs->mb[0][0];
+	count = offsetof(struct flexcan_regs, rx_smb1[3]) -
+		offsetof(struct flexcan_regs, mb[0][0]) + 0x4;
+	for (i = 0; i< count / 4; i++) {
+		priv->write(0, mb_addr + i * 4);
+	}
+
+	if (priv->can.ctrlmode & CAN_CTRLMODE_FD) {
+		mb_addr = &regs->tx_smb_fd[0];
+		count = offsetof(struct flexcan_regs, rx_smb1_fd[17]) -
+			offsetof(struct flexcan_regs, tx_smb_fd[0]) + 0x4;
+		for (i = 0; i< count / 4; i++) {
+			priv->write(0, mb_addr + i * 4);
+		}
+	}
+
+	reg_ctrl2 &= ~FLEXCAN_CTRL2_WRMFRZ;
+	priv->write(reg_ctrl2, &regs->ctrl2);
+}
+#else
 static void flexcan_ram_init(struct net_device *dev)
 {
 	struct flexcan_priv *priv = netdev_priv(dev);
@@ -1380,6 +1460,7 @@ static void flexcan_ram_init(struct net_device *dev)
 	reg_ctrl2 &= ~FLEXCAN_CTRL2_WRMFRZ;
 	priv->write(reg_ctrl2, &regs->ctrl2);
 }
+#endif
 
 static int flexcan_rx_offload_setup(struct net_device *dev)
 {
@@ -1761,6 +1842,37 @@ static int flexcan_open(struct net_device *dev)
 
 	can_rx_offload_enable(&priv->offload);
 
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+	if(dev->irq != -1) {
+		err = request_irq(dev->irq, flexcan_irq, IRQF_SHARED, dev->name, dev);
+		if (err)
+			goto out_can_rx_offload_disable;
+
+		if (priv->devtype_data.quirks & FLEXCAN_QUIRK_NR_IRQ_3) {
+			err = request_irq(priv->irq_boff,
+				  flexcan_irq, IRQF_SHARED, dev->name, dev);
+			if (err)
+				goto out_free_irq;
+
+			err = request_irq(priv->irq_err,
+				  flexcan_irq, IRQF_SHARED, dev->name, dev);
+			if (err)
+				goto out_free_irq_boff;
+		}
+	} else {
+		struct instance_data *idata = (struct instance_data*)private_data[0];
+		struct rpmsg_device *rpdev;
+		int ret;
+
+		rpdev = idata->rpdev;
+		idata->dev = dev;
+		ret = rpmsg_send(rpdev->ept, STARTUP_MSG, strlen(STARTUP_MSG));
+		if (ret) {
+			dev_err(&rpdev->dev, "rpmsg_send failed: %d\n", ret);
+			return ret;
+		}
+	}
+#else
 	err = request_irq(dev->irq, flexcan_irq, IRQF_SHARED, dev->name, dev);
 	if (err)
 		goto out_can_rx_offload_disable;
@@ -1776,6 +1888,7 @@ static int flexcan_open(struct net_device *dev)
 		if (err)
 			goto out_free_irq_boff;
 	}
+#endif
 
 	if (priv->devtype_data.quirks & FLEXCAN_QUIRK_SECONDARY_MB_IRQ) {
 		err = request_irq(priv->irq_secondary_mb,
@@ -2070,10 +2183,21 @@ static const struct of_device_id flexcan_of_match[] = {
 	{ .compatible = "fsl,vf610-flexcan", .data = &fsl_vf610_devtype_data, },
 	{ .compatible = "fsl,ls1021ar2-flexcan", .data = &fsl_ls1021a_r2_devtype_data, },
 	{ .compatible = "fsl,lx2160ar1-flexcan", .data = &fsl_lx2160a_r1_devtype_data, },
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+	{ .compatible = "spacemit,k1x-flexcan", .data = &spacemit_k1x_devtype_data, },
+#endif
 	{ .compatible = "nxp,s32g2-flexcan", .data = &nxp_s32g2_devtype_data, },
 	{ /* sentinel */ },
 };
 MODULE_DEVICE_TABLE(of, flexcan_of_match);
+
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+static const struct of_device_id r_flexcan_of_match[] = {
+	{ .compatible = "spacemit,k1x-r-flexcan", .data = &spacemit_k1x_devtype_data, },
+	{ },
+};
+MODULE_DEVICE_TABLE(of, r_flexcan_of_match);
+#endif
 
 static const struct platform_device_id flexcan_id_table[] = {
 	{
@@ -2093,6 +2217,7 @@ static int flexcan_probe(struct platform_device *pdev)
 	struct regulator *reg_xceiver;
 	struct phy *transceiver;
 	struct clk *clk_ipg = NULL, *clk_per = NULL;
+	struct reset_control *reset;
 	struct flexcan_regs __iomem *regs;
 	struct flexcan_platform_data *pdata;
 	int err, irq;
@@ -2138,11 +2263,42 @@ static int flexcan_probe(struct platform_device *pdev)
 			return PTR_ERR(clk_per);
 		}
 		clock_freq = clk_get_rate(clk_per);
+	} else {
+		clk_per = devm_clk_get(&pdev->dev, "per");
+		if (IS_ERR(clk_per)) {
+			dev_err(&pdev->dev, "no per clock defined\n");
+			return PTR_ERR(clk_per);
+		}
+		clk_set_rate(clk_per, clock_freq);
 	}
 
-	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
-		return irq;
+	if (!clk_ipg) {
+		clk_ipg = devm_clk_get(&pdev->dev, "ipg");
+		if (IS_ERR(clk_ipg)) {
+			dev_err(&pdev->dev, "no ipg clock defined\n");
+			return PTR_ERR(clk_ipg);
+		}
+	}
+
+	reset = devm_reset_control_get_optional(&pdev->dev,NULL);
+	if(IS_ERR(reset)) {
+		dev_err(&pdev->dev, "flexcan get reset failed\n");
+		return PTR_ERR(reset);
+	}
+
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+	if (!of_get_property(pdev->dev.of_node, "rcpu-can", NULL)) {
+		irq = platform_get_irq(pdev, 0);
+		if (irq < 0)
+			return irq;
+	} else {
+		irq = -1;
+	}
+#else
+ 	irq = platform_get_irq(pdev, 0);
+ 	if (irq <= 0)
+ 		return -ENODEV;
+#endif
 
 	regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(regs))
@@ -2208,6 +2364,7 @@ static int flexcan_probe(struct platform_device *pdev)
 	priv->clk_ipg = clk_ipg;
 	priv->clk_per = clk_per;
 	priv->clk_src = clk_src;
+	priv->reset = reset;
 	priv->reg_xceiver = reg_xceiver;
 	priv->transceiver = transceiver;
 
@@ -2448,8 +2605,79 @@ static struct platform_driver flexcan_driver = {
 	.remove = flexcan_remove,
 	.id_table = flexcan_id_table,
 };
-
 module_platform_driver(flexcan_driver);
+
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+static struct platform_driver r_flexcan_driver = {
+	.driver = {
+		.name = R_DRV_NAME,
+		.pm = &flexcan_pm_ops,
+		.of_match_table = r_flexcan_of_match,
+	},
+	.probe = flexcan_probe,
+	.remove = flexcan_remove,
+	.id_table = flexcan_id_table,
+};
+
+static struct rpmsg_device_id rpmsg_driver_rcan_id_table[] = {
+	{ .name	= "can-service", .driver_data = 0 },
+	{ },
+};
+MODULE_DEVICE_TABLE(rpmsg, rpmsg_driver_rcan_id_table);
+
+static int rpmsg_rcan_client_cb(struct rpmsg_device *rpdev, void *data,
+		int len, void *priv, u32 src)
+{
+	struct instance_data *idata = dev_get_drvdata(&rpdev->dev);
+	struct net_device *dev = idata->dev;
+	int ret;
+
+	flexcan_irq(0, (void*)dev);
+	ret = rpmsg_send(rpdev->ept, IRQUP_MSG, strlen(IRQUP_MSG));
+	if (ret) {
+		dev_err(&rpdev->dev, "rpmsg_send failed: %d\n", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int rpmsg_rcan_client_probe(struct rpmsg_device *rpdev)
+{
+	struct instance_data *idata;
+
+	dev_info(&rpdev->dev, "new channel: 0x%x -> 0x%x!\n",
+					rpdev->src, rpdev->dst);
+
+	idata = devm_kzalloc(&rpdev->dev, sizeof(*idata), GFP_KERNEL);
+	if (!idata)
+		return -ENOMEM;
+
+	dev_set_drvdata(&rpdev->dev, idata);
+	idata->rpdev = rpdev;
+
+	private_data[0] = (unsigned long long)idata;
+
+	platform_driver_register(&r_flexcan_driver);
+
+	return 0;
+}
+
+static void rpmsg_rcan_client_remove(struct rpmsg_device *rpdev)
+{
+	dev_info(&rpdev->dev, "rpmsg rcan client driver is removed\n");
+	platform_driver_unregister(&flexcan_driver);
+}
+
+static struct rpmsg_driver rpmsg_rcan_client = {
+	.drv.name	= KBUILD_MODNAME,
+	.id_table	= rpmsg_driver_rcan_id_table,
+	.probe		= rpmsg_rcan_client_probe,
+	.callback	= rpmsg_rcan_client_cb,
+	.remove		= rpmsg_rcan_client_remove,
+};
+module_rpmsg_driver(rpmsg_rcan_client);
+#endif
 
 MODULE_AUTHOR("Sascha Hauer <kernel@pengutronix.de>, "
 	      "Marc Kleine-Budde <kernel@pengutronix.de>");

@@ -22,6 +22,7 @@
 #include <linux/slab.h>
 #include <linux/err.h>
 #include <linux/clk.h>
+#include <linux/reset.h>
 #include <linux/io.h>
 #include <linux/pwm.h>
 #include <linux/of.h>
@@ -53,7 +54,12 @@ struct pxa_pwm_chip {
 	struct device	*dev;
 
 	struct clk	*clk;
+	struct reset_control	*reset;
 	void __iomem	*mmio_base;
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+	int dcr_fd; /* Controller PWM_DCR FD feature */
+	int rcpu_pwm; /* PWM in rcpu domain */
+#endif
 };
 
 static inline struct pxa_pwm_chip *to_pxa_pwm_chip(struct pwm_chip *chip)
@@ -89,9 +95,31 @@ static int pxa_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 		return -EINVAL;
 
 	if (duty_ns == period_ns)
+#ifdef 	CONFIG_SOC_SPACEMIT_K1X
+	{
+		if(pc->dcr_fd)
+			dc = PWMDCR_FD;
+		else{
+			dc = (pv + 1) * duty_ns / period_ns;
+			if (dc >= PWMDCR_FD) {
+				dc = PWMDCR_FD - 1;
+				pv = dc - 1;
+			}
+		}
+	}
+#else
 		dc = PWMDCR_FD;
+#endif
 	else
 		dc = mul_u64_u64_div_u64(pv + 1, duty_ns, period_ns);
+
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+	/*
+	 * FIXME: Graceful shutdown mode would cause the function clock
+	 * could not be enabled normally, so chose abrupt shutdown mode.
+	 */
+	prescale |= PWMCR_SD;
+#endif
 
 	writel(prescale | PWMCR_SD, pc->mmio_base + offset + PWMCR);
 	writel(dc, pc->mmio_base + offset + PWMDCR);
@@ -149,6 +177,9 @@ static const struct of_device_id pwm_of_match[] = {
 	{ .compatible = "marvell,pxa270-pwm", .data = &pwm_id_table[0]},
 	{ .compatible = "marvell,pxa168-pwm", .data = &pwm_id_table[0]},
 	{ .compatible = "marvell,pxa910-pwm", .data = &pwm_id_table[0]},
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+	{ .compatible = "spacemit,k1x-pwm", .data = &pwm_id_table[0]},
+#endif
 	{ }
 };
 MODULE_DEVICE_TABLE(of, pwm_of_match);
@@ -177,6 +208,23 @@ static int pwm_probe(struct platform_device *pdev)
 		return PTR_ERR(chip);
 	pc = to_pxa_pwm_chip(chip);
 
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+	if (dev->of_node) {
+		if(of_get_property(dev->of_node, "k1x,pwm-disable-fd", NULL))
+			pc->dcr_fd = 0;
+		else
+			pc->dcr_fd = 1;
+		if(of_get_property(dev->of_node, "rcpu-pwm", NULL))
+			pc->rcpu_pwm = 1;
+		else
+			pc->rcpu_pwm = 0;
+	}
+	else {
+		pc->dcr_fd = 0;
+		pc->rcpu_pwm = 0;
+	}
+#endif
+
 	pc->clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(pc->clk))
 		return dev_err_probe(dev, PTR_ERR(pc->clk), "Failed to get clock\n");
@@ -198,19 +246,50 @@ static int pwm_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return dev_err_probe(dev, ret, "pwmchip_add() failed\n");
 
+	platform_set_drvdata(pdev, pc);
+
 	return 0;
 }
+
+#ifdef CONFIG_PM_SLEEP
+static int pxa_pwm_suspend_noirq(struct device *dev)
+{
+	return 0;
+}
+
+static int pxa_pwm_resume_noirq(struct device *dev)
+{
+	struct pxa_pwm_chip *pc = dev_get_drvdata(dev);
+
+	/* if pwm in rcpu domain, deassert reset first before apply the old state */
+	if(pc->rcpu_pwm)
+		reset_control_deassert(pc->reset);
+	return 0;
+}
+#endif
+
+static const struct dev_pm_ops pxa_pwm_pm_qos = {
+	.suspend_noirq = pxa_pwm_suspend_noirq,
+	.resume_noirq = pxa_pwm_resume_noirq,
+};
 
 static struct platform_driver pwm_driver = {
 	.driver		= {
 		.name	= "pxa25x-pwm",
+#ifdef CONFIG_PM_SLEEP
+		.pm	= &pxa_pwm_pm_qos,
+#endif
 		.of_match_table = pwm_of_match,
 	},
 	.probe		= pwm_probe,
 	.id_table	= pwm_id_table,
 };
 
-module_platform_driver(pwm_driver);
+static int k1x_pwm_driver_init(void)
+{
+	return platform_driver_register(&pwm_driver);
+}
+late_initcall_sync(k1x_pwm_driver_init);
 
 MODULE_DESCRIPTION("PXA Pulse Width Modulator driver");
 MODULE_LICENSE("GPL v2");

@@ -12,6 +12,9 @@
 #include <linux/slab.h>
 #include <linux/unaligned.h>
 #include <linux/bitfield.h>
+#if defined(CONFIG_SOC_SPACEMIT_K1X)
+#include <soc/spacemit/spacemit_misc.h>
+#endif
 #include <linux/pci.h>
 
 #include "xhci.h"
@@ -594,6 +597,10 @@ static void xhci_clear_port_change_bit(struct xhci_hcd *xhci, u16 wValue,
 		break;
 	case USB_PORT_FEAT_C_CONNECTION:
 		status = PORT_CSC;
+#if defined(CONFIG_SOC_SPACEMIT_K1X)
+		dwc3_spacemit_clear_disconnect(xhci_to_hcd(xhci)->
+			self.controller->parent->parent);
+#endif
 		port_change_bit = "connect";
 		break;
 	case USB_PORT_FEAT_C_OVER_CURRENT:
