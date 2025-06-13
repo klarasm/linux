@@ -1665,9 +1665,17 @@ static struct dentry *lookup_dcache(const struct qstr *name,
 	return dentry;
 }
 
-static struct dentry *lookup_one_qstr_excl_raw(const struct qstr *name,
-					       struct dentry *base,
-					       unsigned int flags)
+/*
+ * Parent directory has inode locked exclusive.  This is one
+ * and only case when ->lookup() gets called on non in-lookup
+ * dentries - as the matter of fact, this only gets called
+ * when directory is guaranteed to have no in-lookup children
+ * at all.
+ * Will return -ENOENT if name isn't found and LOOKUP_CREATE wasn't passed.
+ * Will return -EEXIST if name is found and LOOKUP_EXCL was passed.
+ */
+struct dentry *lookup_one_qstr_excl(const struct qstr *name,
+				    struct dentry *base, unsigned int flags)
 {
 	struct dentry *dentry;
 	struct dentry *old;
@@ -1675,7 +1683,7 @@ static struct dentry *lookup_one_qstr_excl_raw(const struct qstr *name,
 
 	dentry = lookup_dcache(name, base, flags);
 	if (dentry)
-		return dentry;
+		goto found;
 
 	/* Don't create child dentry for a dead directory. */
 	dir = base->d_inode;
@@ -1691,24 +1699,7 @@ static struct dentry *lookup_one_qstr_excl_raw(const struct qstr *name,
 		dput(dentry);
 		dentry = old;
 	}
-	return dentry;
-}
-
-/*
- * Parent directory has inode locked exclusive.  This is one
- * and only case when ->lookup() gets called on non in-lookup
- * dentries - as the matter of fact, this only gets called
- * when directory is guaranteed to have no in-lookup children
- * at all.
- * Will return -ENOENT if name isn't found and LOOKUP_CREATE wasn't passed.
- * Will return -EEXIST if name is found and LOOKUP_EXCL was passed.
- */
-struct dentry *lookup_one_qstr_excl(const struct qstr *name,
-				    struct dentry *base, unsigned int flags)
-{
-	struct dentry *dentry;
-
-	dentry = lookup_one_qstr_excl_raw(name, base, flags);
+found:
 	if (IS_ERR(dentry))
 		return dentry;
 	if (d_is_negative(dentry) && !(flags & LOOKUP_CREATE)) {
@@ -2790,7 +2781,7 @@ struct dentry *kern_path_locked_negative(const char *name, struct path *path)
 	if (unlikely(type != LAST_NORM))
 		return ERR_PTR(-EINVAL);
 	inode_lock_nested(parent_path.dentry->d_inode, I_MUTEX_PARENT);
-	d = lookup_one_qstr_excl_raw(&last, parent_path.dentry, 0);
+	d = lookup_one_qstr_excl(&last, parent_path.dentry, LOOKUP_CREATE);
 	if (IS_ERR(d)) {
 		inode_unlock(parent_path.dentry->d_inode);
 		return d;
@@ -2917,7 +2908,8 @@ static int lookup_one_common(struct mnt_idmap *idmap,
  * @base:	base directory to lookup from
  *
  * Look up a dentry by name in the dcache, returning NULL if it does not
- * currently exist.  The function does not try to create a dentry.
+ * currently exist.  The function does not try to create a dentry and if one
+ * is found it doesn't try to revalidate it.
  *
  * Note that this routine is purely a helper for filesystem usage and should
  * not be called by generic code.  It does no permission checking.
@@ -2933,7 +2925,7 @@ struct dentry *try_lookup_noperm(struct qstr *name, struct dentry *base)
 	if (err)
 		return ERR_PTR(err);
 
-	return lookup_dcache(name, base, 0);
+	return d_lookup(base, name);
 }
 EXPORT_SYMBOL(try_lookup_noperm);
 
@@ -3057,14 +3049,22 @@ EXPORT_SYMBOL(lookup_one_positive_unlocked);
  * Note that this routine is purely a helper for filesystem usage and should
  * not be called by generic code. It does no permission checking.
  *
- * Unlike lookup_noperm, it should be called without the parent
+ * Unlike lookup_noperm(), it should be called without the parent
  * i_rwsem held, and will take the i_rwsem itself if necessary.
+ *
+ * Unlike try_lookup_noperm() it *does* revalidate the dentry if it already
+ * existed.
  */
 struct dentry *lookup_noperm_unlocked(struct qstr *name, struct dentry *base)
 {
 	struct dentry *ret;
+	int err;
 
-	ret = try_lookup_noperm(name, base);
+	err = lookup_noperm_common(name, base);
+	if (err)
+		return ERR_PTR(err);
+
+	ret = lookup_dcache(name, base, 0);
 	if (!ret)
 		ret = lookup_slow(name, base, 0);
 	return ret;
