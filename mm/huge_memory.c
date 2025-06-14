@@ -3483,9 +3483,9 @@ static int __split_unmapped_folio(struct folio *folio, int new_order,
 		bool uniform_split)
 {
 	struct lruvec *lruvec;
-	struct address_space *swap_cache = NULL;
 	struct folio *origin_folio = folio;
 	struct folio *next_folio = folio_next(folio);
+	struct swap_cluster_info *ci = NULL;
 	struct folio *new_folio;
 	struct folio *next;
 	int order = folio_order(folio);
@@ -3502,8 +3502,7 @@ static int __split_unmapped_folio(struct folio *folio, int new_order,
 		if (!uniform_split || new_order != 0)
 			return -EINVAL;
 
-		swap_cache = swap_address_space(folio->swap);
-		xa_lock(&swap_cache->i_pages);
+		ci = swap_lock_folio_cluster(folio);
 	}
 
 	if (folio_test_anon(folio))
@@ -3592,7 +3591,7 @@ after_split:
 				continue;
 
 			folio_ref_unfreeze(release, 1 +
-					((mapping || swap_cache) ?
+					((mapping || ci) ?
 						folio_nr_pages(release) : 0));
 
 			lru_add_split_folio(origin_folio, release, lruvec,
@@ -3610,10 +3609,9 @@ after_split:
 			} else if (mapping) {
 				__xa_store(&mapping->i_pages,
 						release->index, release, 0);
-			} else if (swap_cache) {
-				__xa_store(&swap_cache->i_pages,
-						swap_cache_index(release->swap),
-						release, 0);
+			} else if (ci) {
+				__swap_cache_override_folio(ci, release->swap,
+							    origin_folio, release);
 			}
 		}
 	}
@@ -3625,12 +3623,12 @@ after_split:
 	 * see stale page cache entries.
 	 */
 	folio_ref_unfreeze(origin_folio, 1 +
-		((mapping || swap_cache) ? folio_nr_pages(origin_folio) : 0));
+		((mapping || ci) ? folio_nr_pages(origin_folio) : 0));
 
 	unlock_page_lruvec(lruvec);
 
-	if (swap_cache)
-		xa_unlock(&swap_cache->i_pages);
+	if (ci)
+		swap_unlock_cluster(ci);
 	if (mapping)
 		xa_unlock(&mapping->i_pages);
 
