@@ -638,8 +638,6 @@ EXPORT_SYMBOL_GPL(svc_destroy);
 static bool
 svc_init_buffer(struct svc_rqst *rqstp, const struct svc_serv *serv, int node)
 {
-	unsigned long ret;
-
 	rqstp->rq_maxpages = svc_serv_maxpages(serv);
 
 	/* rq_pages' last entry is NULL for historical reasons. */
@@ -649,9 +647,7 @@ svc_init_buffer(struct svc_rqst *rqstp, const struct svc_serv *serv, int node)
 	if (!rqstp->rq_pages)
 		return false;
 
-	ret = alloc_pages_bulk_node(GFP_KERNEL, node, rqstp->rq_maxpages,
-				    rqstp->rq_pages);
-	return ret == rqstp->rq_maxpages;
+	return true;
 }
 
 /*
@@ -755,14 +751,16 @@ void svc_pool_wake_idle_thread(struct svc_pool *pool)
 		WRITE_ONCE(rqstp->rq_qtime, ktime_get());
 		if (!task_is_running(rqstp->rq_task)) {
 			wake_up_process(rqstp->rq_task);
-			trace_svc_wake_up(rqstp->rq_task->pid);
+			trace_svc_pool_thread_wake(pool, rqstp->rq_task->pid);
 			percpu_counter_inc(&pool->sp_threads_woken);
+		} else {
+			trace_svc_pool_thread_running(pool, rqstp->rq_task->pid);
 		}
 		rcu_read_unlock();
 		return;
 	}
 	rcu_read_unlock();
-
+	trace_svc_pool_thread_noidle(pool, 0);
 }
 EXPORT_SYMBOL_GPL(svc_pool_wake_idle_thread);
 

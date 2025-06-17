@@ -45,6 +45,7 @@ static bool notests;
 module_param(notests, bool, 0644);
 MODULE_PARM_DESC(notests, "disable all crypto self-tests");
 
+#ifdef CONFIG_CRYPTO_SELFTESTS_FULL
 static bool noslowtests;
 module_param(noslowtests, bool, 0644);
 MODULE_PARM_DESC(noslowtests, "disable slow crypto self-tests");
@@ -52,6 +53,10 @@ MODULE_PARM_DESC(noslowtests, "disable slow crypto self-tests");
 static unsigned int fuzz_iterations = 100;
 module_param(fuzz_iterations, uint, 0644);
 MODULE_PARM_DESC(fuzz_iterations, "number of fuzz test iterations");
+#else
+#define noslowtests 1
+#define fuzz_iterations 0
+#endif
 
 #ifndef CONFIG_CRYPTO_SELFTESTS
 
@@ -319,9 +324,9 @@ struct testvec_config {
 
 /*
  * The following are the lists of testvec_configs to test for each algorithm
- * type when the fast crypto self-tests are enabled.  They aim to provide good
- * test coverage, while keeping the test time much shorter than the full tests
- * so that the fast tests can be used to fulfill FIPS 140 testing requirements.
+ * type when the "fast" crypto self-tests are enabled.  They aim to provide good
+ * test coverage, while keeping the test time much shorter than the "full" tests
+ * so that the "fast" tests can be enabled in a wider range of circumstances.
  */
 
 /* Configs for skciphers and aeads */
@@ -1183,14 +1188,18 @@ static void generate_random_testvec_config(struct rnd_state *rng,
 
 static void crypto_disable_simd_for_test(void)
 {
+#ifdef CONFIG_CRYPTO_SELFTESTS_FULL
 	migrate_disable();
 	__this_cpu_write(crypto_simd_disabled_for_test, true);
+#endif
 }
 
 static void crypto_reenable_simd_for_test(void)
 {
+#ifdef CONFIG_CRYPTO_SELFTESTS_FULL
 	__this_cpu_write(crypto_simd_disabled_for_test, false);
 	migrate_enable();
+#endif
 }
 
 /*
@@ -3541,59 +3550,6 @@ static int alg_test_comp(const struct alg_test_desc *desc, const char *driver,
 	return err;
 }
 
-static int alg_test_crc32c(const struct alg_test_desc *desc,
-			   const char *driver, u32 type, u32 mask)
-{
-	struct crypto_shash *tfm;
-	__le32 val;
-	int err;
-
-	err = alg_test_hash(desc, driver, type, mask);
-	if (err)
-		return err;
-
-	tfm = crypto_alloc_shash(driver, type, mask);
-	if (IS_ERR(tfm)) {
-		if (PTR_ERR(tfm) == -ENOENT) {
-			/*
-			 * This crc32c implementation is only available through
-			 * ahash API, not the shash API, so the remaining part
-			 * of the test is not applicable to it.
-			 */
-			return 0;
-		}
-		printk(KERN_ERR "alg: crc32c: Failed to load transform for %s: "
-		       "%ld\n", driver, PTR_ERR(tfm));
-		return PTR_ERR(tfm);
-	}
-	driver = crypto_shash_driver_name(tfm);
-
-	do {
-		SHASH_DESC_ON_STACK(shash, tfm);
-		u32 *ctx = (u32 *)shash_desc_ctx(shash);
-
-		shash->tfm = tfm;
-
-		*ctx = 420553207;
-		err = crypto_shash_final(shash, (u8 *)&val);
-		if (err) {
-			printk(KERN_ERR "alg: crc32c: Operation failed for "
-			       "%s: %d\n", driver, err);
-			break;
-		}
-
-		if (val != cpu_to_le32(~420553207)) {
-			pr_err("alg: crc32c: Test failed for %s: %u\n",
-			       driver, le32_to_cpu(val));
-			err = -EINVAL;
-		}
-	} while (0);
-
-	crypto_free_shash(tfm);
-
-	return err;
-}
-
 static int alg_test_cprng(const struct alg_test_desc *desc, const char *driver,
 			  u32 type, u32 mask)
 {
@@ -4229,7 +4185,6 @@ static const struct alg_test_desc alg_test_descs[] = {
 	}, {
 		.alg = "authenc(hmac(sha1),cbc(aes))",
 		.test = alg_test_aead,
-		.fips_allowed = 1,
 		.suite = {
 			.aead = __VECS(hmac_sha1_aes_cbc_tv_temp)
 		}
@@ -4248,7 +4203,6 @@ static const struct alg_test_desc alg_test_descs[] = {
 	}, {
 		.alg = "authenc(hmac(sha1),ctr(aes))",
 		.test = alg_test_null,
-		.fips_allowed = 1,
 	}, {
 		.alg = "authenc(hmac(sha1),ecb(cipher_null))",
 		.test = alg_test_aead,
@@ -4258,7 +4212,6 @@ static const struct alg_test_desc alg_test_descs[] = {
 	}, {
 		.alg = "authenc(hmac(sha1),rfc3686(ctr(aes)))",
 		.test = alg_test_null,
-		.fips_allowed = 1,
 	}, {
 		.alg = "authenc(hmac(sha224),cbc(des))",
 		.test = alg_test_aead,
@@ -4546,6 +4499,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "crc32",
+		.generic_driver = "crc32-lib",
 		.test = alg_test_hash,
 		.fips_allowed = 1,
 		.suite = {
@@ -4553,7 +4507,8 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "crc32c",
-		.test = alg_test_crc32c,
+		.generic_driver = "crc32c-lib",
+		.test = alg_test_hash,
 		.fips_allowed = 1,
 		.suite = {
 			.hash = __VECS(crc32c_tv_template)
@@ -5100,7 +5055,6 @@ static const struct alg_test_desc alg_test_descs[] = {
 	}, {
 		.alg = "hmac(sha1)",
 		.test = alg_test_hash,
-		.fips_allowed = 1,
 		.suite = {
 			.hash = __VECS(hmac_sha1_tv_template)
 		}
@@ -5436,7 +5390,6 @@ static const struct alg_test_desc alg_test_descs[] = {
 	}, {
 		.alg = "sha1",
 		.test = alg_test_hash,
-		.fips_allowed = 1,
 		.suite = {
 			.hash = __VECS(sha1_tv_template)
 		}

@@ -1433,6 +1433,7 @@ hugetlbfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	sb->s_blocksize_bits = huge_page_shift(ctx->hstate);
 	sb->s_magic = HUGETLBFS_MAGIC;
 	sb->s_op = &hugetlbfs_ops;
+	sb->s_d_flags = DCACHE_DONTCACHE;
 	sb->s_time_gran = 1;
 
 	/*
@@ -1517,6 +1518,16 @@ static int get_hstate_idx(int page_size_log)
 	return hstate_index(h);
 }
 
+static bool hstate_is_enabled(struct hstate *h)
+{
+	bool is_enabled;
+
+	spin_lock_irq(&hugetlb_lock);
+	is_enabled = h->nr_overcommit_huge_pages || h->max_huge_pages;
+	spin_unlock_irq(&hugetlb_lock);
+	return is_enabled;
+}
+
 /*
  * Note that size should be aligned to proper hugepage size in caller side,
  * otherwise hugetlb_reserve_pages reserves one less hugepages than intended.
@@ -1548,6 +1559,15 @@ struct file *hugetlb_file_setup(const char *name, size_t size,
 		}
 		return ERR_PTR(-EPERM);
 	}
+
+	/*
+	 * If no hugetlb pages of this size are supposed to exist, then don't
+	 * even allow creating a hugetlb file (even if the file has size 0 or
+	 * userspace requests MAP_NORESERVE).
+	 * This limits attack surface for systems that don't use hugetlb.
+	 */
+	if (!hstate_is_enabled(HUGETLBFS_SB(mnt->mnt_sb)->hstate))
+		return ERR_PTR(-ENOMEM);
 
 	file = ERR_PTR(-ENOSPC);
 	/* hugetlbfs_vfsmount[] mounts do not use idmapped mounts.  */
