@@ -1586,7 +1586,7 @@ static int ubifs_file_mmap_prepare(struct vm_area_desc *desc)
 	err = generic_file_mmap_prepare(desc);
 	if (err)
 		return err;
-	vma->vm_ops = &ubifs_file_vm_ops;
+	desc->vm_ops = &ubifs_file_vm_ops;
 
 	if (IS_ENABLED(CONFIG_UBIFS_ATIME_SUPPORT))
 		file_accessed(desc->file);
