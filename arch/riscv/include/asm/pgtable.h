@@ -935,11 +935,6 @@ static inline pud_t pud_mkhuge(pud_t pud)
 	return pud;
 }
 
-static inline pud_t pud_mkdevmap(pud_t pud)
-{
-	return pte_pud(pte_mkdevmap(pud_pte(pud)));
-}
-
 static inline int pudp_set_access_flags(struct vm_area_struct *vma,
 					unsigned long address, pud_t *pudp,
 					pud_t entry, int dirty)
