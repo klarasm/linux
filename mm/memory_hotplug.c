@@ -747,7 +747,8 @@ static inline void section_taint_zone_device(unsigned long pfn)
  */
 void move_pfn_range_to_zone(struct zone *zone, unsigned long start_pfn,
 				  unsigned long nr_pages,
-				  struct vmem_altmap *altmap, int migratetype)
+				  struct vmem_altmap *altmap, int migratetype,
+				  bool isolate_pageblock)
 {
 	struct pglist_data *pgdat = zone->zone_pgdat;
 	int nid = pgdat->node_id;
@@ -774,12 +775,13 @@ void move_pfn_range_to_zone(struct zone *zone, unsigned long start_pfn,
 
 	/*
 	 * TODO now we have a visible range of pages which are not associated
-	 * with their zone properly. Not nice but set_pfnblock_flags_mask
+	 * with their zone properly. Not nice but set_pfnblock_migratetype()
 	 * expects the zone spans the pfn range. All the pages in the range
 	 * are reserved so nobody should be touching them so we should be safe
 	 */
 	memmap_init_range(nr_pages, nid, zone_idx(zone), start_pfn, 0,
-			 MEMINIT_HOTPLUG, altmap, migratetype);
+			 MEMINIT_HOTPLUG, altmap, migratetype,
+			 isolate_pageblock);
 
 	set_zone_contiguous(zone);
 }
@@ -1104,7 +1106,8 @@ int mhp_init_memmap_on_memory(unsigned long pfn, unsigned long nr_pages,
 	if (mhp_off_inaccessible)
 		page_init_poison(pfn_to_page(pfn), sizeof(struct page) * nr_pages);
 
-	move_pfn_range_to_zone(zone, pfn, nr_pages, NULL, MIGRATE_UNMOVABLE);
+	move_pfn_range_to_zone(zone, pfn, nr_pages, NULL, MIGRATE_UNMOVABLE,
+			       false);
 
 	for (i = 0; i < nr_pages; i++) {
 		struct page *page = pfn_to_page(pfn + i);
@@ -1150,13 +1153,17 @@ void mhp_deinit_memmap_on_memory(unsigned long pfn, unsigned long nr_pages)
 int online_pages(unsigned long pfn, unsigned long nr_pages,
 		       struct zone *zone, struct memory_group *group)
 {
-	unsigned long flags;
-	int need_zonelists_rebuild = 0;
+	struct memory_notify mem_arg = {
+		.start_pfn = pfn,
+		.nr_pages = nr_pages,
+	};
+	struct node_notify node_arg = {
+		.nid = NUMA_NO_NODE,
+	};
 	const int nid = zone_to_nid(zone);
+	int need_zonelists_rebuild = 0;
+	unsigned long flags;
 	int ret;
-	struct memory_notify mem_arg;
-	struct node_notify node_arg;
-	bool cancel_mem_notifier_on_err = false, cancel_node_notifier_on_err = false;
 
 	/*
 	 * {on,off}lining is constrained to full memory sections (or more
@@ -1171,12 +1178,11 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 
 
 	/* associate pfn range with the zone */
-	move_pfn_range_to_zone(zone, pfn, nr_pages, NULL, MIGRATE_ISOLATE);
+	move_pfn_range_to_zone(zone, pfn, nr_pages, NULL, MIGRATE_MOVABLE,
+			       true);
 
-	node_arg.nid = NUMA_NO_NODE;
 	if (!node_state(nid, N_MEMORY)) {
 		/* Adding memory to the node for the first time */
-		cancel_node_notifier_on_err = true;
 		node_arg.nid = nid;
 		ret = node_notify(NODE_ADDING_FIRST_MEMORY, &node_arg);
 		ret = notifier_to_errno(ret);
@@ -1184,9 +1190,6 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 			goto failed_addition;
 	}
 
-	mem_arg.start_pfn = pfn;
-	mem_arg.nr_pages = nr_pages;
-	cancel_mem_notifier_on_err = true;
 	ret = memory_notify(MEM_GOING_ONLINE, &mem_arg);
 	ret = notifier_to_errno(ret);
 	if (ret)
@@ -1219,7 +1222,7 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 		build_all_zonelists(NULL);
 
 	/* Basic onlining is complete, allow allocation of onlined pages. */
-	undo_isolate_page_range(pfn, pfn + nr_pages, MIGRATE_MOVABLE);
+	undo_isolate_page_range(pfn, pfn + nr_pages);
 
 	/*
 	 * Freshly onlined pages aren't shuffled (e.g., all pages are placed to
@@ -1248,9 +1251,8 @@ failed_addition:
 	pr_debug("online_pages [mem %#010llx-%#010llx] failed\n",
 		 (unsigned long long) pfn << PAGE_SHIFT,
 		 (((unsigned long long) pfn + nr_pages) << PAGE_SHIFT) - 1);
-	if (cancel_mem_notifier_on_err)
-		memory_notify(MEM_CANCEL_ONLINE, &mem_arg);
-	if (cancel_node_notifier_on_err)
+	memory_notify(MEM_CANCEL_ONLINE, &mem_arg);
+	if (node_arg.nid != NUMA_NO_NODE)
 		node_notify(NODE_CANCEL_ADDING_FIRST_MEMORY, &node_arg);
 	remove_pfn_range_from_zone(zone, pfn, nr_pages);
 	return ret;
@@ -1957,35 +1959,25 @@ int offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 
 	/* set above range as isolated */
 	ret = start_isolate_page_range(start_pfn, end_pfn,
-				       MIGRATE_MOVABLE,
-				       MEMORY_OFFLINE | REPORT_FAILURE);
+				       PB_ISOLATE_MODE_MEM_OFFLINE);
 	if (ret) {
 		reason = "failure to isolate range";
 		goto failed_removal_pcplists_disabled;
 	}
 
 	/*
-	 * Here we count the possible pages within the range [0..ZONE_MOVABLE].
-	 * If after having accounted all the pages, we see that the nr_pages to
-	 * be offlined is greater or equal to the accounted pages, we know that the
-	 * node will become empty, and so, we will clear N_MEMORY for it.
+	 * Check whether the node will have no present pages after we offline
+	 * 'nr_pages' more. If so, we know that the node will become empty, and
+	 * so we will clear N_MEMORY for it.
 	 */
-	node_arg.nid = NUMA_NO_NODE;
-	for (zt = 0; zt <= ZONE_MOVABLE; zt++)
-		present_pages += pgdat->node_zones[zt].present_pages;
-
-	if (nr_pages >= present_pages) {
+	if (nr_pages >= pgdat->node_present_pages) {
 		node_arg.nid = node;
-		cancel_node_notifier_on_err = true;
 		ret = node_notify(NODE_REMOVING_LAST_MEMORY, &node_arg);
 		ret = notifier_to_errno(ret);
 		if (ret)
 			goto failed_removal_isolated;
 	}
 
-	mem_arg.start_pfn = start_pfn;
-	mem_arg.nr_pages = nr_pages;
-	cancel_mem_notifier_on_err = true;
 	ret = memory_notify(MEM_GOING_OFFLINE, &mem_arg);
 	ret = notifier_to_errno(ret);
 	if (ret) {
@@ -2035,7 +2027,8 @@ int offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 			goto failed_removal_isolated;
 		}
 
-		ret = test_pages_isolated(start_pfn, end_pfn, MEMORY_OFFLINE);
+		ret = test_pages_isolated(start_pfn, end_pfn,
+					  PB_ISOLATE_MODE_MEM_OFFLINE);
 
 	} while (ret);
 
@@ -2088,10 +2081,9 @@ int offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 
 failed_removal_isolated:
 	/* pushback to free area */
-	undo_isolate_page_range(start_pfn, end_pfn, MIGRATE_MOVABLE);
-	if (cancel_mem_notifier_on_err)
-		memory_notify(MEM_CANCEL_OFFLINE, &mem_arg);
-	if (cancel_node_notifier_on_err)
+	undo_isolate_page_range(start_pfn, end_pfn);
+	memory_notify(MEM_CANCEL_OFFLINE, &mem_arg);
+	if (node_arg.nid != NUMA_NO_NODE)
 		node_notify(NODE_CANCEL_REMOVING_LAST_MEMORY, &node_arg);
 failed_removal_pcplists_disabled:
 	lru_cache_enable();
