@@ -1006,7 +1006,8 @@ static void folio_check_dirty_writeback(struct folio *folio,
 		mapping->a_ops->is_dirty_writeback(folio, dirty, writeback);
 }
 
-struct folio *alloc_migrate_folio(struct folio *src, unsigned long private)
+static struct folio *alloc_demote_folio(struct folio *src,
+		unsigned long private)
 {
 	struct folio *dst;
 	nodemask_t *allowed_mask;
@@ -1069,7 +1070,7 @@ static unsigned int demote_folio_list(struct list_head *demote_folios,
 	node_get_allowed_targets(pgdat, &allowed_mask);
 
 	/* Demotion ignores all cpuset and mempolicy settings */
-	migrate_pages(demote_folios, alloc_migrate_folio, NULL,
+	migrate_pages(demote_folios, alloc_demote_folio, NULL,
 		      (unsigned long)&mtc, MIGRATE_ASYNC, MR_DEMOTION,
 		      &nr_succeeded);
 
@@ -3424,7 +3425,7 @@ static unsigned long get_pte_pfn(pte_t pte, struct vm_area_struct *vma, unsigned
 	if (!pte_present(pte) || is_zero_pfn(pfn))
 		return -1;
 
-	if (WARN_ON_ONCE(pte_devmap(pte) || pte_special(pte)))
+	if (WARN_ON_ONCE(pte_special(pte)))
 		return -1;
 
 	if (!pte_young(pte) && !mm_has_notifiers(vma->vm_mm))
@@ -3447,9 +3448,6 @@ static unsigned long get_pmd_pfn(pmd_t pmd, struct vm_area_struct *vma, unsigned
 	VM_WARN_ON_ONCE(addr < vma->vm_start || addr >= vma->vm_end);
 
 	if (!pmd_present(pmd) || is_huge_zero_pmd(pmd))
-		return -1;
-
-	if (WARN_ON_ONCE(pmd_devmap(pmd)))
 		return -1;
 
 	if (!pmd_young(pmd) && !mm_has_notifiers(vma->vm_mm))

@@ -655,11 +655,11 @@ static bool move_pgt_entry(struct pagetable_move_control *pmc,
 
 	if (!pmc->need_rmap_locks && should_take_rmap_locks(entry)) {
 		override_locks = true;
-
 		pmc->need_rmap_locks = true;
-		/* See comment in move_ptes() */
-		maybe_take_rmap_locks(pmc);
 	}
+
+	/* See comment in move_ptes() */
+	maybe_take_rmap_locks(pmc);
 
 	switch (entry) {
 	case NORMAL_PMD:
@@ -1039,7 +1039,8 @@ retry:
 	if (!folio)
 		return ret;
 
-	folio_lock(folio);
+	if (!folio_trylock(folio))
+		return 0;
 
 	/* No-op. */
 	if (!folio_test_anon(folio) || folio_test_ksm(folio))
@@ -1237,8 +1238,6 @@ static bool __relocate_anon_folios(struct pagetable_move_control *pmc, bool undo
 
 			/* Otherwise, we split so we can do this with PMDs/PTEs. */
 			split_huge_pud(pmc->old, pudp, old_addr);
-		} else if (pud_devmap(pud)) {
-			return false;
 		}
 
 		extent = get_old_extent(NORMAL_PMD, pmc);
@@ -1267,7 +1266,7 @@ static bool __relocate_anon_folios(struct pagetable_move_control *pmc, bool undo
 
 			/* Otherwise, we split so we can do this with PTEs. */
 			split_huge_pmd(pmc->old, pmdp, old_addr);
-		} else if (is_swap_pmd(pmd) || pmd_devmap(pmd)) {
+		} else if (is_swap_pmd(pmd)) {
 			return false;
 		}
 
@@ -1333,7 +1332,7 @@ unsigned long move_page_tables(struct pagetable_move_control *pmc)
 		new_pud = alloc_new_pud(mm, pmc->new_addr);
 		if (!new_pud)
 			break;
-		if (pud_trans_huge(*old_pud) || pud_devmap(*old_pud)) {
+		if (pud_trans_huge(*old_pud)) {
 			if (extent == HPAGE_PUD_SIZE) {
 				move_pgt_entry(pmc, HPAGE_PUD, old_pud, new_pud);
 				/* We ignore and continue on error? */
@@ -1352,8 +1351,7 @@ unsigned long move_page_tables(struct pagetable_move_control *pmc)
 		if (!new_pmd)
 			break;
 again:
-		if (is_swap_pmd(*old_pmd) || pmd_trans_huge(*old_pmd) ||
-		    pmd_devmap(*old_pmd)) {
+		if (is_swap_pmd(*old_pmd) || pmd_trans_huge(*old_pmd)) {
 			if (extent == HPAGE_PMD_SIZE &&
 			    move_pgt_entry(pmc, HPAGE_PMD, old_pmd, new_pmd))
 				continue;
