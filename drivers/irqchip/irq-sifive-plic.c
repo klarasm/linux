@@ -40,14 +40,18 @@
  * We always hardwire it to one in Linux.
  */
 #define PRIORITY_BASE			0
-#define     PRIORITY_PER_ID		4
+#define PRIORITY_PER_ID			4
 
 /*
  * Each hart context has a vector of interrupt enable bits associated with it.
  * There's one bit for each interrupt source.
  */
+#ifdef CONFIG_SOC_SPACEMIT
+#define PENDING_BASE			0x1000
+#endif
+
 #define CONTEXT_ENABLE_BASE		0x2000
-#define     CONTEXT_ENABLE_SIZE		0x80
+#define CONTEXT_ENABLE_SIZE		0x80
 
 /*
  * Each hart context has a set of control registers associated with it.  Right
@@ -55,12 +59,13 @@
  * take an interrupt, and a register to claim interrupts.
  */
 #define CONTEXT_BASE			0x200000
-#define     CONTEXT_SIZE		0x1000
-#define     CONTEXT_THRESHOLD		0x00
-#define     CONTEXT_CLAIM		0x04
+#define CONTEXT_SIZE			0x1000
 
-#define	PLIC_DISABLE_THRESHOLD		0x7
-#define	PLIC_ENABLE_THRESHOLD		0
+#define CONTEXT_THRESHOLD		0x00
+#define CONTEXT_CLAIM			0x04
+
+#define PLIC_DISABLE_THRESHOLD		0x7
+#define PLIC_ENABLE_THRESHOLD		0
 
 #define PLIC_QUIRK_EDGE_INTERRUPT	0
 
@@ -110,7 +115,19 @@ static void plic_toggle(struct plic_handler *handler, int hwirq, int enable)
 	unsigned long flags;
 
 	raw_spin_lock_irqsave(&handler->enable_lock, flags);
+
+#ifdef CONFIG_SOC_SPACEMIT
+	if (!enable)
+		writel(hwirq, handler->hart_base + CONTEXT_CLAIM);
+#endif
+
 	__plic_toggle(handler->enable_base, hwirq, enable);
+
+#ifdef CONFIG_SOC_SPACEMIT
+	if (enable)
+		writel(hwirq, handler->hart_base + CONTEXT_CLAIM);
+#endif
+
 	raw_spin_unlock_irqrestore(&handler->enable_lock, flags);
 }
 
@@ -201,8 +218,12 @@ static struct irq_chip plic_edge_chip = {
 	.irq_set_affinity = plic_set_affinity,
 #endif
 	.irq_set_type	= plic_irq_set_type,
+#ifdef CONFIG_SOC_SPACEMIT
+	.flags		= IRQCHIP_AFFINITY_PRE_STARTUP | IRQCHIP_ENABLE_WAKEUP_ON_SUSPEND | IRQCHIP_SKIP_SET_WAKE,
+#else
 	.flags		= IRQCHIP_SKIP_SET_WAKE |
 			  IRQCHIP_AFFINITY_PRE_STARTUP,
+#endif
 };
 
 static struct irq_chip plic_chip = {
@@ -216,8 +237,12 @@ static struct irq_chip plic_chip = {
 	.irq_set_affinity = plic_set_affinity,
 #endif
 	.irq_set_type	= plic_irq_set_type,
+#ifdef CONFIG_SOC_SPACEMIT
+	.flags		= IRQCHIP_AFFINITY_PRE_STARTUP | IRQCHIP_ENABLE_WAKEUP_ON_SUSPEND | IRQCHIP_SKIP_SET_WAKE,
+#else
 	.flags		= IRQCHIP_SKIP_SET_WAKE |
 			  IRQCHIP_AFFINITY_PRE_STARTUP,
+#endif
 };
 
 static int plic_irq_set_type(struct irq_data *d, unsigned int type)
@@ -633,6 +658,10 @@ static int plic_probe(struct fwnode_handle *fwnode)
 done:
 		for (hwirq = 1; hwirq <= nr_irqs; hwirq++) {
 			plic_toggle(handler, hwirq, 0);
+			#ifdef CONFIG_SOC_SPACEMIT
+			/* clear pending, which maybe triggered by uboot */
+			writel(0, priv->regs + PENDING_BASE + (hwirq/32)*4);
+			#endif
 			writel(1, priv->regs + PRIORITY_BASE +
 				  hwirq * PRIORITY_PER_ID);
 		}
@@ -734,3 +763,4 @@ static int __init plic_early_probe(struct device_node *node,
 }
 
 IRQCHIP_DECLARE(riscv, "allwinner,sun20i-d1-plic", plic_early_probe);
+IRQCHIP_DECLARE(riscv_plic0, "riscv,plic0", plic_early_probe); /* for legacy systems */
