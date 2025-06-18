@@ -1104,6 +1104,10 @@ struct rq {
 	unsigned int		nr_preferred_running;
 	unsigned int		numa_migrate_on;
 #endif
+#ifdef CONFIG_SCHED_CACHE
+	unsigned int		nr_pref_llc_running;
+	unsigned int		nr_llc_running;
+#endif
 #ifdef CONFIG_NO_HZ_COMMON
 #ifdef CONFIG_SMP
 	unsigned long		last_blocked_load_update_tick;
@@ -1947,6 +1951,9 @@ init_numa_balancing(unsigned long clone_flags, struct task_struct *p)
 }
 
 #endif /* !CONFIG_NUMA_BALANCING */
+
+extern void reset_llc_stats(struct rq *rq);
+extern int task_llc(const struct task_struct *p);
 
 #ifdef CONFIG_SMP
 
