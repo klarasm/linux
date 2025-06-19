@@ -1512,13 +1512,6 @@ static int ltc4282_setup(struct ltc4282_state *st, struct device *dev)
 	}
 
 	if (device_property_read_bool(dev, "adi,fault-log-enable")) {
-		ret = regmap_set_bits(st->map, LTC4282_ADC_CTRL,
-				      LTC4282_FAULT_LOG_EN_MASK);
-		if (ret)
-			return ret;
-	}
-
-	if (device_property_read_bool(dev, "adi,fault-log-enable")) {
 		ret = regmap_set_bits(st->map, LTC4282_ADC_CTRL, LTC4282_FAULT_LOG_EN_MASK);
 		if (ret)
 			return ret;
@@ -1603,7 +1596,7 @@ static const struct hwmon_ops ltc4282_hwmon_ops = {
 	.read_string = ltc4282_read_labels,
 };
 
-static const struct hwmon_chip_info ltc2947_chip_info = {
+static const struct hwmon_chip_info ltc4282_chip_info = {
 	.ops = &ltc4282_hwmon_ops,
 	.info = ltc4282_info,
 };
@@ -1724,7 +1717,7 @@ static int ltc4282_probe(struct i2c_client *i2c)
 
 	mutex_init(&st->lock);
 	hwmon = devm_hwmon_device_register_with_info(dev, "ltc4282", st,
-						     &ltc2947_chip_info,
+						     &ltc4282_chip_info,
 						     ltc4282_groups);
 	if (IS_ERR(hwmon))
 		return PTR_ERR(hwmon);

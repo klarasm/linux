@@ -1820,6 +1820,27 @@
 			backtraces on all cpus.
 			Format: 0 | 1
 
+	hash_pointers=
+			[KNL,EARLY]
+			By default, when pointers are printed to the console
+			or buffers via the %p format string, that pointer is
+			"hashed", i.e. obscured by hashing the pointer value.
+			This is a security feature that hides actual kernel
+			addresses from unprivileged users, but it also makes
+			debugging the kernel more difficult since unequal
+			pointers can no longer be compared. The choices are:
+			Format: { auto | always | never }
+			Default: auto
+
+			auto   - Hash pointers unless slab_debug is enabled.
+			always - Always hash pointers (even if slab_debug is
+				 enabled).
+			never  - Never hash pointers. This option should only
+				 be specified when debugging the kernel. Do
+				 not use on production kernels. The boot
+				 param "no_hash_pointers" is an alias for
+				 this mode.
+
 	hashdist=	[KNL,NUMA] Large hashes allocated during boot
 			are distributed across NUMA nodes.  Defaults on
 			for 64-bit NUMA, off otherwise.
@@ -2233,6 +2254,11 @@
 			ahash performance varies for different chunk sizes on
 			different crypto accelerators. This option can be used
 			to achieve best performance for particular HW.
+
+	ima=		[IMA] Enable or disable IMA
+			Format: { "off" | "on" }
+			Default: "on"
+			Note that disabling IMA is limited to kdump kernel.
 
 	indirect_target_selection= [X86,Intel] Mitigation control for Indirect
 			Target Selection(ITS) bug in Intel CPUs. Updated
@@ -4192,18 +4218,7 @@
 
 	no_hash_pointers
 			[KNL,EARLY]
-			Force pointers printed to the console or buffers to be
-			unhashed.  By default, when a pointer is printed via %p
-			format string, that pointer is "hashed", i.e. obscured
-			by hashing the pointer value.  This is a security feature
-			that hides actual kernel addresses from unprivileged
-			users, but it also makes debugging the kernel more
-			difficult since unequal pointers can no longer be
-			compared.  However, if this command-line option is
-			specified, then all normal pointers will have their true
-			value printed. This option should only be specified when
-			debugging the kernel.  Please do not use on production
-			kernels.
+			Alias for "hash_pointers=never".
 
 	nohibernate	[HIBERNATION] Disable hibernation and resume.
 
@@ -6580,14 +6595,18 @@
 			slab_debug can create guard zones around objects and
 			may poison objects when not in use. Also tracks the
 			last alloc / free. For more information see
-			Documentation/mm/slub.rst.
+			Documentation/admin-guide/mm/slab.rst.
 			(slub_debug legacy name also accepted for now)
+
+			Using this option implies the "no_hash_pointers"
+			option which can be undone by adding the
+			"hash_pointers=always" option.
 
 	slab_max_order= [MM]
 			Determines the maximum allowed order for slabs.
 			A high setting may cause OOMs due to memory
 			fragmentation. For more information see
-			Documentation/mm/slub.rst.
+			Documentation/admin-guide/mm/slab.rst.
 			(slub_max_order legacy name also accepted for now)
 
 	slab_merge	[MM]
@@ -6602,13 +6621,14 @@
 			the number of objects indicated. The higher the number
 			of objects the smaller the overhead of tracking slabs
 			and the less frequently locks need to be acquired.
-			For more information see Documentation/mm/slub.rst.
+			For more information see
+			Documentation/admin-guide/mm/slab.rst.
 			(slub_min_objects legacy name also accepted for now)
 
 	slab_min_order=	[MM]
 			Determines the minimum page order for slabs. Must be
 			lower or equal to slab_max_order. For more information see
-			Documentation/mm/slub.rst.
+			Documentation/admin-guide/mm/slab.rst.
 			(slub_min_order legacy name also accepted for now)
 
 	slab_nomerge	[MM]
@@ -6622,7 +6642,8 @@
 			cache (risks via metadata attacks are mostly
 			unchanged). Debug options disable merging on their
 			own.
-			For more information see Documentation/mm/slub.rst.
+			For more information see
+			Documentation/admin-guide/mm/slab.rst.
 			(slub_nomerge legacy name also accepted for now)
 
 	slab_strict_numa	[MM]
