@@ -2130,6 +2130,27 @@ config STARFIVE_WATCHDOG
 	  Say Y here to support the watchdog of StarFive JH7100 and JH7110
 	  SoC. This driver can also be built as a module if choose M.
 
+config SPACEMIT_K1_WATCHDOG
+	tristate "Spacemit K1 watchdog"
+	depends on ARCH_SPACEMIT
+	select WATCHDOG_CORE
+	help
+	  Watchdog driver for Spacemit K1 SoCs. It has a 16-bit counter and
+	  defaults to 256 Hz, giving a maximum timeout of 255 seconds.
+
+	  To build as a module, choose M, the driver will then be called
+	  spacemit_k1_wdt.
+
+config SPACEMIT_K1_WATCHDOG_REBOOT
+	bool "Use the Spacemit K1 watchdog as a reboot handler" if SPACEMIT_K1_WATCHDOG
+	default y
+	help
+	  Say Y here to use the Spacemit K1 watchdog driver as a reboot handler.
+	  Setting spacemit_k1_wdt.reboot overrides this option.
+
+	  If there are other reboot handlers registered, they will be preferred
+	  over this driver.
+
 # S390 Architecture
 
 config DIAG288_WATCHDOG
