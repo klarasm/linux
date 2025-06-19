@@ -152,6 +152,18 @@ config ZSWAP_ZPOOL_DEFAULT
        default "zsmalloc" if ZSWAP_ZPOOL_DEFAULT_ZSMALLOC
        default ""
 
+config ZBLOCK
+	tristate "Fast compression allocator with high density"
+	depends on ZPOOL
+	help
+	  A special purpose allocator for storing compressed pages.
+	  It stores integer number of same size compressed objects per
+	  its block. These blocks consist of several physical pages
+	  (2**n, i. e. 1/2/4/8).
+
+	  With zblock, it is possible to densely arrange objects of
+	  various sizes resulting in low internal fragmentation.
+
 config ZSMALLOC
 	tristate
 	prompt "N:1 compression allocator (zsmalloc)" if (ZSWAP || ZRAM)
@@ -934,6 +946,13 @@ config ARCH_SUPPORTS_PUD_PFNMAP
 	depends on ARCH_SUPPORTS_HUGE_PFNMAP && HAVE_ARCH_TRANSPARENT_HUGEPAGE_PUD
 
 #
+# Architectures that always use weak definitions for percpu
+# variables in modules should set this.
+#
+config ARCH_MODULE_NEEDS_WEAK_PER_CPU
+       bool
+
+#
 # UP and nommu archs use km based percpu allocator
 #
 config NEED_PER_CPU_KM
@@ -1110,9 +1129,6 @@ config ARCH_HAS_CURRENT_STACK_POINTER
 	  register alias named "current_stack_pointer", this config can be
 	  selected.
 
-config ARCH_HAS_PTE_DEVMAP
-	bool
-
 config ARCH_HAS_ZONE_DMA_SET
 	bool
 
@@ -1130,7 +1146,6 @@ config ZONE_DEVICE
 	depends on MEMORY_HOTPLUG
 	depends on MEMORY_HOTREMOVE
 	depends on SPARSEMEM_VMEMMAP
-	depends on ARCH_HAS_PTE_DEVMAP
 	select XARRAY_MULTI
 
 	help
