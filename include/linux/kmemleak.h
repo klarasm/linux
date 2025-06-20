@@ -101,6 +101,9 @@ static inline void kmemleak_transient_leak(const void *ptr)
 static inline void kmemleak_ignore(const void *ptr)
 {
 }
+static inline void kmemleak_igonore_percpu(const void __percpu *ptr)
+{
+}
 static inline void kmemleak_scan_area(const void *ptr, size_t size, gfp_t gfp)
 {
 }
