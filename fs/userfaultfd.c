@@ -304,7 +304,7 @@ again:
 		goto out;
 
 	ret = false;
-	if (!pmd_present(_pmd) || pmd_devmap(_pmd))
+	if (!pmd_present(_pmd))
 		goto out;
 
 	if (pmd_trans_huge(_pmd)) {
@@ -1242,7 +1242,7 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 	int ret;
 	struct uffdio_register uffdio_register;
 	struct uffdio_register __user *user_uffdio_register;
-	unsigned long vm_flags;
+	vm_flags_t vm_flags;
 	bool found;
 	bool basic_ioctls;
 	unsigned long start, end;
@@ -1467,10 +1467,8 @@ static int userfaultfd_unregister(struct userfaultfd_ctx *ctx,
 				!!(cur->vm_flags & __VM_UFFD_FLAGS));
 
 		/*
-		 * Check that this VMA isn't already owned by a different
-		 * userfaultfd. This provides for more strict behavior by
-		 * preventing a VMA registered with a userfaultfd from being
-		 * unregistered through a different userfaultfd.
+		 * Prevent unregistering through a different userfaultfd than
+		 * the one used for registration.
 		 */
 		if (cur->vm_userfaultfd_ctx.ctx &&
 		    cur->vm_userfaultfd_ctx.ctx != ctx)
@@ -1499,15 +1497,13 @@ static int userfaultfd_unregister(struct userfaultfd_ctx *ctx,
 	for_each_vma_range(vmi, vma, end) {
 		cond_resched();
 
-		/*
-		 * Nothing to do: this vma is not registered with userfaultfd.
-		 */
+		/* VMA not registered with userfaultfd. */
 		if (!vma->vm_userfaultfd_ctx.ctx)
 			goto skip;
 
 		VM_WARN_ON_ONCE(vma->vm_userfaultfd_ctx.ctx != ctx);
 		VM_WARN_ON_ONCE(!vma_can_userfault(vma, vma->vm_flags, wp_async));
-		WARN_ON(!(vma->vm_flags & VM_MAYWRITE));
+		VM_WARN_ON_ONCE(!(vma->vm_flags & VM_MAYWRITE));
 
 		if (vma->vm_start > start)
 			start = vma->vm_start;
