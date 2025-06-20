@@ -6495,7 +6495,6 @@ static vm_fault_t hugetlb_no_page(struct address_space *mapping,
 		folio_zero_user(folio, vmf->real_address);
 		__folio_mark_uptodate(folio);
 		new_folio = true;
-		new_anon_folio = !(vma->vm_flags & VM_MAYSHARE);
 
 		if (vma->vm_flags & VM_MAYSHARE) {
 			int err = hugetlb_add_to_page_cache(folio, mapping,
@@ -6515,6 +6514,7 @@ static vm_fault_t hugetlb_no_page(struct address_space *mapping,
 				goto out;
 			}
 		} else {
+			new_anon_folio = true;
 			folio_lock(folio);
 		}
 	} else {
