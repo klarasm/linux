@@ -32,6 +32,8 @@
 #include "platform.c"
 #include "pci.c"
 #include "pid_namespace.c"
+#include "poll.c"
+#include "property.c"
 #include "rbtree.c"
 #include "rcu.c"
 #include "refcount.c"

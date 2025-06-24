@@ -6,12 +6,14 @@
 #include <linux/debugfs.h>
 
 #include <drm/drm_blend.h>
+#include <drm/drm_file.h>
+#include <drm/drm_print.h>
 
-#include "i915_drv.h"
+#include "soc/intel_dram.h"
 #include "i915_reg.h"
+#include "i915_utils.h"
 #include "i9xx_wm.h"
 #include "intel_atomic.h"
-#include "intel_atomic_plane.h"
 #include "intel_bw.h"
 #include "intel_cdclk.h"
 #include "intel_crtc.h"
@@ -19,11 +21,13 @@
 #include "intel_de.h"
 #include "intel_display.h"
 #include "intel_display_power.h"
+#include "intel_display_regs.h"
 #include "intel_display_rpm.h"
 #include "intel_display_types.h"
 #include "intel_fb.h"
 #include "intel_fixed.h"
 #include "intel_pcode.h"
+#include "intel_plane.h"
 #include "intel_wm.h"
 #include "skl_universal_plane_regs.h"
 #include "skl_watermark.h"
@@ -84,8 +88,6 @@ intel_has_sagv(struct intel_display *display)
 static u32
 intel_sagv_block_time(struct intel_display *display)
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
-
 	if (DISPLAY_VER(display) >= 14) {
 		u32 val;
 
@@ -96,9 +98,9 @@ intel_sagv_block_time(struct intel_display *display)
 		u32 val = 0;
 		int ret;
 
-		ret = snb_pcode_read(&i915->uncore,
-				     GEN12_PCODE_READ_SAGV_BLOCK_TIME_US,
-				     &val, NULL);
+		ret = intel_pcode_read(display->drm,
+				       GEN12_PCODE_READ_SAGV_BLOCK_TIME_US,
+				       &val, NULL);
 		if (ret) {
 			drm_dbg_kms(display->drm, "Couldn't read SAGV block time!\n");
 			return 0;
@@ -156,7 +158,6 @@ static void intel_sagv_init(struct intel_display *display)
  */
 static void skl_sagv_enable(struct intel_display *display)
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
 	int ret;
 
 	if (!intel_has_sagv(display))
@@ -166,8 +167,8 @@ static void skl_sagv_enable(struct intel_display *display)
 		return;
 
 	drm_dbg_kms(display->drm, "Enabling SAGV\n");
-	ret = snb_pcode_write(&i915->uncore, GEN9_PCODE_SAGV_CONTROL,
-			      GEN9_SAGV_ENABLE);
+	ret = intel_pcode_write(display->drm, GEN9_PCODE_SAGV_CONTROL,
+				GEN9_SAGV_ENABLE);
 
 	/* We don't need to wait for SAGV when enabling */
 
@@ -189,7 +190,6 @@ static void skl_sagv_enable(struct intel_display *display)
 
 static void skl_sagv_disable(struct intel_display *display)
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
 	int ret;
 
 	if (!intel_has_sagv(display))
@@ -200,10 +200,9 @@ static void skl_sagv_disable(struct intel_display *display)
 
 	drm_dbg_kms(display->drm, "Disabling SAGV\n");
 	/* bspec says to keep retrying for at least 1 ms */
-	ret = skl_pcode_request(&i915->uncore, GEN9_PCODE_SAGV_CONTROL,
-				GEN9_SAGV_DISABLE,
-				GEN9_SAGV_IS_DISABLED, GEN9_SAGV_IS_DISABLED,
-				1);
+	ret = intel_pcode_request(display->drm, GEN9_PCODE_SAGV_CONTROL,
+				  GEN9_SAGV_DISABLE,
+				  GEN9_SAGV_IS_DISABLED, GEN9_SAGV_IS_DISABLED, 1);
 	/*
 	 * Some skl systems, pre-release machines in particular,
 	 * don't actually have SAGV.
@@ -3184,8 +3183,6 @@ void skl_watermark_ipc_update(struct intel_display *display)
 
 static bool skl_watermark_ipc_can_enable(struct intel_display *display)
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
-
 	/* Display WA #0477 WaDisableIPC: skl */
 	if (display->platform.skylake)
 		return false;
@@ -3193,8 +3190,11 @@ static bool skl_watermark_ipc_can_enable(struct intel_display *display)
 	/* Display WA #1141: SKL:all KBL:all CFL */
 	if (display->platform.kabylake ||
 	    display->platform.coffeelake ||
-	    display->platform.cometlake)
-		return i915->dram_info.symmetric_memory;
+	    display->platform.cometlake) {
+		const struct dram_info *dram_info = intel_dram_info(display->drm);
+
+		return dram_info->symmetric_memory;
+	}
 
 	return true;
 }
@@ -3213,8 +3213,7 @@ static void
 adjust_wm_latency(struct intel_display *display,
 		  u16 wm[], int num_levels, int read_latency)
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
-	bool wm_lv_0_adjust_needed = i915->dram_info.wm_lv_0_adjust_needed;
+	const struct dram_info *dram_info = intel_dram_info(display->drm);
 	int i, level;
 
 	/*
@@ -3250,7 +3249,7 @@ adjust_wm_latency(struct intel_display *display,
 	 * any underrun. If not able to get Dimm info assume 16GB dimm
 	 * to avoid any underrun.
 	 */
-	if (wm_lv_0_adjust_needed)
+	if (!display->platform.dg2 && dram_info->wm_lv_0_adjust_needed)
 		wm[0] += 1;
 }
 
@@ -3276,7 +3275,6 @@ static void mtl_read_wm_latency(struct intel_display *display, u16 wm[])
 
 static void skl_read_wm_latency(struct intel_display *display, u16 wm[])
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
 	int num_levels = display->wm.num_levels;
 	int read_latency = DISPLAY_VER(display) >= 12 ? 3 : 2;
 	int mult = display->platform.dg2 ? 2 : 1;
@@ -3285,7 +3283,7 @@ static void skl_read_wm_latency(struct intel_display *display, u16 wm[])
 
 	/* read the first set of memory latencies[0:3] */
 	val = 0; /* data0 to be programmed to 0 for first set */
-	ret = snb_pcode_read(&i915->uncore, GEN9_PCODE_READ_MEM_LATENCY, &val, NULL);
+	ret = intel_pcode_read(display->drm, GEN9_PCODE_READ_MEM_LATENCY, &val, NULL);
 	if (ret) {
 		drm_err(display->drm, "SKL Mailbox read error = %d\n", ret);
 		return;
@@ -3298,7 +3296,7 @@ static void skl_read_wm_latency(struct intel_display *display, u16 wm[])
 
 	/* read the second set of memory latencies[4:7] */
 	val = 1; /* data0 to be programmed to 1 for second set */
-	ret = snb_pcode_read(&i915->uncore, GEN9_PCODE_READ_MEM_LATENCY, &val, NULL);
+	ret = intel_pcode_read(display->drm, GEN9_PCODE_READ_MEM_LATENCY, &val, NULL);
 	if (ret) {
 		drm_err(display->drm, "SKL Mailbox read error = %d\n", ret);
 		return;

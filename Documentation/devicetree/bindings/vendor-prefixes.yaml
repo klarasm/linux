@@ -672,6 +672,8 @@ patternProperties:
     description: Huawei Technologies Co., Ltd.
   "^hugsun,.*":
     description: Shenzhen Hugsun Technology Co. Ltd.
+  "^huiling,.*":
+    description: Shenzhen Huiling Information Technology Co., Ltd.
   "^hwacom,.*":
     description: HwaCom Systems Inc.
   "^hxt,.*":
@@ -890,6 +892,8 @@ patternProperties:
     description: Nanjing Loongmasses Ltd.
   "^lsi,.*":
     description: LSI Corp. (LSI Logic)
+  "^luckfox,.*":
+    description: Shenzhen Luckfox Technology Co., Ltd.
   "^lunzn,.*":
     description: Shenzhen Lunzn Technology Co., Ltd.
   "^luxul,.*":
@@ -1302,6 +1306,8 @@ patternProperties:
     description: Recharge Véhicule Électrique (RVE) inc.
   "^saef,.*":
     description: Saef Technology Limited
+  "^sakurapi,.*":
+    description: SakuraPi.org
   "^samsung,.*":
     description: Samsung Semiconductor
   "^samtec,.*":
