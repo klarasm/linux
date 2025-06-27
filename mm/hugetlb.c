@@ -2335,7 +2335,7 @@ struct folio *alloc_hugetlb_folio_reserve(struct hstate *h, int preferred_nid,
 	struct folio *folio;
 
 	spin_lock_irq(&hugetlb_lock);
-	if (WARN_ON_ONCE(!h->resv_huge_pages)) {
+	if (!h->resv_huge_pages) {
 		spin_unlock_irq(&hugetlb_lock);
 		return NULL;
 	}
