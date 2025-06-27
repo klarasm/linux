@@ -3199,6 +3199,7 @@ static int nvme_init_subsystem(struct nvme_ctrl *ctrl, struct nvme_id_ctrl *id)
 	memcpy(subsys->model, id->mn, sizeof(subsys->model));
 	subsys->vendor_id = le16_to_cpu(id->vid);
 	subsys->cmic = id->cmic;
+	subsys->awupf = le16_to_cpu(id->awupf);
 
 	/* Versions prior to 1.4 don't necessarily report a valid type */
 	if (id->cntrltype == NVME_CTRL_DISC ||
@@ -4030,6 +4031,10 @@ static int nvme_init_ns_head(struct nvme_ns *ns, struct nvme_ns_info *info)
 	list_add_tail_rcu(&ns->siblings, &head->list);
 	ns->head = head;
 	mutex_unlock(&ctrl->subsys->lock);
+
+#ifdef CONFIG_NVME_MULTIPATH
+	cancel_delayed_work(&head->remove_work);
+#endif
 	return 0;
 
 out_put_ns_head:

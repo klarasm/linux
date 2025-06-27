@@ -3384,7 +3384,7 @@ static void sd_read_block_limits_ext(struct scsi_disk *sdkp)
 
 	rcu_read_lock();
 	vpd = rcu_dereference(sdkp->device->vpd_pgb7);
-	if (vpd && vpd->len >= 2)
+	if (vpd && vpd->len >= 6)
 		sdkp->rscs = vpd->data[5] & 1;
 	rcu_read_unlock();
 }
@@ -3459,19 +3459,14 @@ static void sd_read_write_same(struct scsi_disk *sdkp, unsigned char *buffer)
 	}
 
 	if (scsi_report_opcode(sdev, buffer, SD_BUF_SIZE, INQUIRY, 0) < 0) {
-		struct scsi_vpd *vpd;
-
 		sdev->no_report_opcodes = 1;
 
-		/* Disable WRITE SAME if REPORT SUPPORTED OPERATION
-		 * CODES is unsupported and the device has an ATA
-		 * Information VPD page (SAT).
+		/*
+		 * Disable WRITE SAME if REPORT SUPPORTED OPERATION CODES is
+		 * unsupported and this is an ATA device.
 		 */
-		rcu_read_lock();
-		vpd = rcu_dereference(sdev->vpd_pg89);
-		if (vpd)
+		if (sdev->is_ata)
 			sdev->no_write_same = 1;
-		rcu_read_unlock();
 	}
 
 	if (scsi_report_opcode(sdev, buffer, SD_BUF_SIZE, WRITE_SAME_16, 0) == 1)

@@ -577,7 +577,7 @@ static void guc_fini_hw(void *arg)
 	unsigned int fw_ref;
 
 	fw_ref = xe_force_wake_get(gt_to_fw(gt), XE_FORCEWAKE_ALL);
-	xe_uc_fini_hw(&guc_to_gt(guc)->uc);
+	xe_uc_sanitize_reset(&guc_to_gt(guc)->uc);
 	xe_force_wake_put(gt_to_fw(gt), fw_ref);
 
 	guc_g2g_fini(guc);
@@ -627,21 +627,49 @@ static int xe_guc_realloc_post_hwconfig(struct xe_guc *guc)
 	return 0;
 }
 
-static int vf_guc_init(struct xe_guc *guc)
+static int vf_guc_init_noalloc(struct xe_guc *guc)
 {
+	struct xe_gt *gt = guc_to_gt(guc);
 	int err;
 
-	xe_guc_comm_init_early(guc);
-
-	err = xe_guc_ct_init(&guc->ct);
+	err = xe_gt_sriov_vf_bootstrap(gt);
 	if (err)
 		return err;
 
-	err = xe_guc_relay_init(&guc->relay);
+	err = xe_gt_sriov_vf_query_config(gt);
 	if (err)
 		return err;
 
 	return 0;
+}
+
+int xe_guc_init_noalloc(struct xe_guc *guc)
+{
+	struct xe_device *xe = guc_to_xe(guc);
+	struct xe_gt *gt = guc_to_gt(guc);
+	int ret;
+
+	xe_guc_comm_init_early(guc);
+
+	ret = xe_guc_ct_init_noalloc(&guc->ct);
+	if (ret)
+		goto out;
+
+	ret = xe_guc_relay_init(&guc->relay);
+	if (ret)
+		goto out;
+
+	if (IS_SRIOV_VF(xe)) {
+		ret = vf_guc_init_noalloc(guc);
+		if (ret)
+			goto out;
+	}
+
+	return 0;
+
+out:
+	xe_gt_err(gt, "GuC init failed with %pe\n", ERR_PTR(ret));
+	return ret;
 }
 
 int xe_guc_init(struct xe_guc *guc)
@@ -653,13 +681,13 @@ int xe_guc_init(struct xe_guc *guc)
 	guc->fw.type = XE_UC_FW_TYPE_GUC;
 	ret = xe_uc_fw_init(&guc->fw);
 	if (ret)
-		goto out;
+		return ret;
 
 	if (!xe_uc_fw_is_enabled(&guc->fw))
 		return 0;
 
 	if (IS_SRIOV_VF(xe)) {
-		ret = vf_guc_init(guc);
+		ret = xe_guc_ct_init(&guc->ct);
 		if (ret)
 			goto out;
 		return 0;
@@ -681,10 +709,6 @@ int xe_guc_init(struct xe_guc *guc)
 	if (ret)
 		goto out;
 
-	ret = xe_guc_relay_init(&guc->relay);
-	if (ret)
-		goto out;
-
 	xe_uc_fw_change_status(&guc->fw, XE_UC_FIRMWARE_LOADABLE);
 
 	ret = devm_add_action_or_reset(xe->drm.dev, guc_fini_hw, guc);
@@ -692,8 +716,6 @@ int xe_guc_init(struct xe_guc *guc)
 		goto out;
 
 	guc_init_params(guc);
-
-	xe_guc_comm_init_early(guc);
 
 	return 0;
 
@@ -707,6 +729,10 @@ static int vf_guc_init_post_hwconfig(struct xe_guc *guc)
 	int err;
 
 	err = xe_guc_submit_init(guc, xe_gt_sriov_vf_guc_ids(guc_to_gt(guc)));
+	if (err)
+		return err;
+
+	err = xe_guc_buf_cache_init(&guc->buf);
 	if (err)
 		return err;
 
@@ -1098,14 +1124,6 @@ static int vf_guc_min_load_for_hwconfig(struct xe_guc *guc)
 	struct xe_gt *gt = guc_to_gt(guc);
 	int ret;
 
-	ret = xe_gt_sriov_vf_bootstrap(gt);
-	if (ret)
-		return ret;
-
-	ret = xe_gt_sriov_vf_query_config(gt);
-	if (ret)
-		return ret;
-
 	ret = xe_guc_hwconfig_init(guc);
 	if (ret)
 		return ret;
@@ -1285,6 +1303,7 @@ int xe_guc_mmio_send_recv(struct xe_guc *guc, const u32 *request,
 	struct xe_reg reply_reg = xe_gt_is_media_type(gt) ?
 		MED_VF_SW_FLAG(0) : VF_SW_FLAG(0);
 	const u32 LAST_INDEX = VF_SW_FLAG_COUNT - 1;
+	bool lost = false;
 	int ret;
 	int i;
 
@@ -1318,6 +1337,12 @@ retry:
 			     FIELD_PREP(GUC_HXG_MSG_0_ORIGIN, GUC_HXG_ORIGIN_GUC),
 			     50000, &reply, false);
 	if (ret) {
+		/* scratch registers might be cleared during FLR, try once more */
+		if (!reply && !lost) {
+			xe_gt_dbg(gt, "GuC mmio request %#x: lost, trying again\n", request[0]);
+			lost = true;
+			goto retry;
+		}
 timeout:
 		xe_gt_err(gt, "GuC mmio request %#x: no reply %#x\n",
 			  request[0], reply);
