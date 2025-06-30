@@ -1236,6 +1236,7 @@ void dpm_complete(pm_message_t state)
  */
 void dpm_resume_end(pm_message_t state)
 {
+	pm_restore_gfp_mask();
 	dpm_resume(state);
 	dpm_complete(state);
 }
@@ -1998,7 +1999,7 @@ static bool device_prepare_smart_suspend(struct device *dev)
 	idx = device_links_read_lock();
 
 	list_for_each_entry_rcu_locked(link, &dev->links.suppliers, c_node) {
-		if (!(link->flags & DL_FLAG_PM_RUNTIME))
+		if (!device_link_test(link, DL_FLAG_PM_RUNTIME))
 			continue;
 
 		if (!dev_pm_smart_suspend(link->supplier) &&
@@ -2176,8 +2177,10 @@ int dpm_suspend_start(pm_message_t state)
 	error = dpm_prepare(state);
 	if (error)
 		dpm_save_failed_step(SUSPEND_PREPARE);
-	else
+	else {
+		pm_restrict_gfp_mask();
 		error = dpm_suspend(state);
+	}
 
 	dpm_show_time(starttime, state, error, "start");
 	return error;
