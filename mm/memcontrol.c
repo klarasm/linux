@@ -51,7 +51,6 @@
 #include <linux/spinlock.h>
 #include <linux/fs.h>
 #include <linux/seq_file.h>
-#include <linux/parser.h>
 #include <linux/vmpressure.h>
 #include <linux/memremap.h>
 #include <linux/mm_inline.h>
@@ -573,9 +572,7 @@ static inline void memcg_rstat_updated(struct mem_cgroup *memcg, int val,
 	if (!val)
 		return;
 
-	/* TODO: add to cgroup update tree once it is nmi-safe. */
-	if (!in_nmi())
-		css_rstat_updated(&memcg->css, cpu);
+	css_rstat_updated(&memcg->css, cpu);
 	statc_pcpu = memcg->vmstats_percpu;
 	for (; statc_pcpu; statc_pcpu = statc->parent_pcpu) {
 		statc = this_cpu_ptr(statc_pcpu);
@@ -2530,7 +2527,8 @@ static inline void account_slab_nmi_safe(struct mem_cgroup *memcg,
 	} else {
 		struct mem_cgroup_per_node *pn = memcg->nodeinfo[pgdat->node_id];
 
-		/* TODO: add to cgroup update tree once it is nmi-safe. */
+		/* preemption is disabled in_nmi(). */
+		css_rstat_updated(&memcg->css, smp_processor_id());
 		if (idx == NR_SLAB_RECLAIMABLE_B)
 			atomic_add(nr, &pn->slab_reclaimable);
 		else
@@ -2753,7 +2751,8 @@ static inline void account_kmem_nmi_safe(struct mem_cgroup *memcg, int val)
 	if (likely(!in_nmi())) {
 		mod_memcg_state(memcg, MEMCG_KMEM, val);
 	} else {
-		/* TODO: add to cgroup update tree once it is nmi-safe. */
+		/* preemption is disabled in_nmi(). */
+		css_rstat_updated(&memcg->css, smp_processor_id());
 		atomic_add(val, &memcg->kmem_stat);
 	}
 }
@@ -4566,83 +4565,15 @@ static ssize_t memory_oom_group_write(struct kernfs_open_file *of,
 	return nbytes;
 }
 
-enum {
-	MEMORY_RECLAIM_SWAPPINESS = 0,
-	MEMORY_RECLAIM_SWAPPINESS_MAX,
-	MEMORY_RECLAIM_NULL,
-};
-
-static const match_table_t tokens = {
-	{ MEMORY_RECLAIM_SWAPPINESS, "swappiness=%d"},
-	{ MEMORY_RECLAIM_SWAPPINESS_MAX, "swappiness=max"},
-	{ MEMORY_RECLAIM_NULL, NULL },
-};
-
 static ssize_t memory_reclaim(struct kernfs_open_file *of, char *buf,
 			      size_t nbytes, loff_t off)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
-	unsigned int nr_retries = MAX_RECLAIM_RETRIES;
-	unsigned long nr_to_reclaim, nr_reclaimed = 0;
-	int swappiness = -1;
-	unsigned int reclaim_options;
-	char *old_buf, *start;
-	substring_t args[MAX_OPT_ARGS];
+	int ret;
 
-	buf = strstrip(buf);
-
-	old_buf = buf;
-	nr_to_reclaim = memparse(buf, &buf) / PAGE_SIZE;
-	if (buf == old_buf)
-		return -EINVAL;
-
-	buf = strstrip(buf);
-
-	while ((start = strsep(&buf, " ")) != NULL) {
-		if (!strlen(start))
-			continue;
-		switch (match_token(start, tokens, args)) {
-		case MEMORY_RECLAIM_SWAPPINESS:
-			if (match_int(&args[0], &swappiness))
-				return -EINVAL;
-			if (swappiness < MIN_SWAPPINESS || swappiness > MAX_SWAPPINESS)
-				return -EINVAL;
-			break;
-		case MEMORY_RECLAIM_SWAPPINESS_MAX:
-			swappiness = SWAPPINESS_ANON_ONLY;
-			break;
-		default:
-			return -EINVAL;
-		}
-	}
-
-	reclaim_options	= MEMCG_RECLAIM_MAY_SWAP | MEMCG_RECLAIM_PROACTIVE;
-	while (nr_reclaimed < nr_to_reclaim) {
-		/* Will converge on zero, but reclaim enforces a minimum */
-		unsigned long batch_size = (nr_to_reclaim - nr_reclaimed) / 4;
-		unsigned long reclaimed;
-
-		if (signal_pending(current))
-			return -EINTR;
-
-		/*
-		 * This is the final attempt, drain percpu lru caches in the
-		 * hope of introducing more evictable pages for
-		 * try_to_free_mem_cgroup_pages().
-		 */
-		if (!nr_retries)
-			lru_add_drain_all();
-
-		reclaimed = try_to_free_mem_cgroup_pages(memcg,
-					batch_size, GFP_KERNEL,
-					reclaim_options,
-					swappiness == -1 ? NULL : &swappiness);
-
-		if (!reclaimed && !nr_retries--)
-			return -EAGAIN;
-
-		nr_reclaimed += reclaimed;
-	}
+	ret = user_proactive_reclaim(buf, memcg, NULL);
+	if (ret)
+		return ret;
 
 	return nbytes;
 }

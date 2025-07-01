@@ -84,6 +84,50 @@ ATOMIC_NOTIFIER_HEAD(panic_notifier_list);
 EXPORT_SYMBOL(panic_notifier_list);
 
 #ifdef CONFIG_SYSCTL
+
+/*
+ * Taint values can only be increased
+ * This means we can safely use a temporary.
+ */
+static int proc_taint(const struct ctl_table *table, int write,
+			       void *buffer, size_t *lenp, loff_t *ppos)
+{
+	struct ctl_table t;
+	unsigned long tmptaint = get_taint();
+	int err;
+
+	if (write && !capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	t = *table;
+	t.data = &tmptaint;
+	err = proc_doulongvec_minmax(&t, write, buffer, lenp, ppos);
+	if (err < 0)
+		return err;
+
+	if (write) {
+		int i;
+
+		/*
+		 * If we are relying on panic_on_taint not producing
+		 * false positives due to userspace input, bail out
+		 * before setting the requested taint flags.
+		 */
+		if (panic_on_taint_nousertaint && (tmptaint & panic_on_taint))
+			return -EINVAL;
+
+		/*
+		 * Poor man's atomic or. Not worth adding a primitive
+		 * to everyone's atomic.h for this
+		 */
+		for (i = 0; i < TAINT_FLAGS_COUNT; i++)
+			if ((1UL << i) & tmptaint)
+				add_taint(i, LOCKDEP_STILL_OK);
+	}
+
+	return err;
+}
+
 static const struct ctl_table kern_panic_table[] = {
 #ifdef CONFIG_SMP
 	{
@@ -96,6 +140,12 @@ static const struct ctl_table kern_panic_table[] = {
 		.extra2         = SYSCTL_ONE,
 	},
 #endif
+	{
+		.procname	= "tainted",
+		.maxlen		= sizeof(long),
+		.mode		= 0644,
+		.proc_handler	= proc_taint,
+	},
 	{
 		.procname	= "panic",
 		.data		= &panic_timeout,
@@ -133,6 +183,16 @@ static const struct ctl_table kern_panic_table[] = {
 		.mode           = 0644,
 		.proc_handler   = proc_douintvec,
 	},
+#if (defined(CONFIG_X86_32) || defined(CONFIG_PARISC)) && \
+	defined(CONFIG_DEBUG_STACKOVERFLOW)
+	{
+		.procname	= "panic_on_stackoverflow",
+		.data		= &sysctl_panic_on_stackoverflow,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+#endif
 };
 
 static __init int kernel_panic_sysctls_init(void)
@@ -753,13 +813,15 @@ void __warn(const char *file, int line, void *caller, unsigned taint,
 
 	disable_trace_on_warning();
 
-	if (file)
-		pr_warn("WARNING: CPU: %d PID: %d at %s:%d %pS\n",
-			raw_smp_processor_id(), current->pid, file, line,
-			caller);
-	else
-		pr_warn("WARNING: CPU: %d PID: %d at %pS\n",
-			raw_smp_processor_id(), current->pid, caller);
+	if (file) {
+		pr_warn("WARNING: %s:%d at %pS, CPU#%d: %s/%d\n",
+			file, line, caller,
+			raw_smp_processor_id(), current->comm, current->pid);
+	} else {
+		pr_warn("WARNING: at %pS, CPU#%d: %s/%d\n",
+			caller,
+			raw_smp_processor_id(), current->comm, current->pid);
+	}
 
 #pragma GCC diagnostic push
 #ifndef __clang__

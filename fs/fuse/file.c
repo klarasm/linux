@@ -1147,7 +1147,7 @@ static ssize_t fuse_send_write_pages(struct fuse_io_args *ia,
 static ssize_t fuse_fill_write_pages(struct fuse_io_args *ia,
 				     struct address_space *mapping,
 				     struct iov_iter *ii, loff_t pos,
-				     unsigned int max_pages)
+				     unsigned int max_folios)
 {
 	struct fuse_args_pages *ap = &ia->ap;
 	struct fuse_conn *fc = get_fuse_conn(mapping->host);
@@ -1157,12 +1157,11 @@ static ssize_t fuse_fill_write_pages(struct fuse_io_args *ia,
 	int err = 0;
 
 	num = min(iov_iter_count(ii), fc->max_write);
-	num = min(num, max_pages << PAGE_SHIFT);
 
 	ap->args.in_pages = true;
 	ap->descs[0].offset = offset;
 
-	while (num) {
+	while (num && ap->num_folios < max_folios) {
 		size_t tmp;
 		struct folio *folio;
 		pgoff_t index = pos >> PAGE_SHIFT;
@@ -1927,17 +1926,6 @@ int fuse_write_inode(struct inode *inode, struct writeback_control *wbc)
 	struct fuse_inode *fi = get_fuse_inode(inode);
 	struct fuse_file *ff;
 	int err;
-
-	/*
-	 * Inode is always written before the last reference is dropped and
-	 * hence this should not be reached from reclaim.
-	 *
-	 * Writing back the inode from reclaim can deadlock if the request
-	 * processing itself needs an allocation.  Allocations triggering
-	 * reclaim while serving a request can't be prevented, because it can
-	 * involve any number of unrelated userspace processes.
-	 */
-	WARN_ON(wbc->for_reclaim);
 
 	ff = __fuse_write_file_get(fi);
 	err = fuse_flush_times(inode, ff);
