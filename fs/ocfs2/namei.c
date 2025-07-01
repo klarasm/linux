@@ -163,7 +163,6 @@ bail_add:
 			if (ret)
 				dput(ret);
 			ret = ERR_PTR(status);
-			goto bail_unlock;
 		}
 	} else
 		ocfs2_dentry_attach_gen(dentry);
