@@ -229,3 +229,7 @@
 		};
 	};
 };
+
+&watchdog {
+	status = "okay";
+};
