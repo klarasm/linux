@@ -346,6 +346,18 @@
 		dma-noncoherent;
 		ranges;
 
+		syscon_rcpu: system-controller@c0880000 {
+			compatible = "spacemit,k1-syscon-rcpu";
+			reg = <0x0 0xc0880000 0x0 0x2048>;
+			#reset-cells = <1>;
+		};
+
+		syscon_rcpu2: system-controller@c0888000 {
+			compatible = "spacemit,k1-syscon-rcpu2";
+			reg = <0x0 0xc0888000 0x0 0x28>;
+			#reset-cells = <1>;
+		};
+
 		syscon_apbc: system-controller@d4015000 {
 			compatible = "spacemit,k1-syscon-apbc";
 			reg = <0x0 0xd4015000 0x0 0x1000>;
@@ -562,6 +574,12 @@
 					      <&cpu7_intc 3>, <&cpu7_intc 7>;
 		};
 
+		syscon_apbc2: system-controller@f0610000 {
+			compatible = "spacemit,k1-syscon-apbc2";
+			reg = <0x0 0xf0610000 0x0 0x20>;
+			#reset-cells = <1>;
+		};
+
 		sec_uart1: serial@f0612000 {
 			compatible = "spacemit,k1-uart", "intel,xscale-uart";
 			reg = <0x0 0xf0612000 0x0 0x100>;
@@ -570,6 +588,37 @@
 			reg-shift = <2>;
 			reg-io-width = <4>;
 			status = "reserved"; /* for TEE usage */
+		};
+
+		network-bus {
+			compatible = "simple-bus";
+			ranges;
+			#address-cells = <2>;
+			#size-cells = <2>;
+			dma-ranges = <0x0 0x00000000 0x0 0x00000000 0x0 0x80000000>,
+				     <0x0 0x80000000 0x1 0x00000000 0x0 0x80000000>;
+
+			eth0: ethernet@cac80000 {
+				compatible = "spacemit,k1-emac";
+				reg = <0x0 0xcac80000 0x0 0x420>;
+				clocks = <&syscon_apmu CLK_EMAC0_BUS>;
+				interrupts = <131>;
+				mac-address = [ 00 00 00 00 00 00 ];
+				resets = <&syscon_apmu RESET_EMAC0>;
+				spacemit,apmu = <&syscon_apmu 0x3e4>;
+				status = "disabled";
+			};
+
+			eth1: ethernet@cac81000 {
+				compatible = "spacemit,k1-emac";
+				reg = <0x0 0xcac81000 0x0 0x420>;
+				clocks = <&syscon_apmu CLK_EMAC1_BUS>;
+				interrupts = <133>;
+				mac-address = [ 00 00 00 00 00 00 ];
+				resets = <&syscon_apmu RESET_EMAC1>;
+				spacemit,apmu = <&syscon_apmu 0x3ec>;
+				status = "disabled";
+			};
 		};
 	};
 };
