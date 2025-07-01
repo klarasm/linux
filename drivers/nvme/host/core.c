@@ -3536,6 +3536,8 @@ static int nvme_init_identify(struct nvme_ctrl *ctrl)
 		ret = nvme_init_effects(ctrl, id);
 		if (ret)
 			goto out_free;
+
+		ctrl->subsys->awupf = le16_to_cpu(id->awupf);
 	}
 
 	if (le16_to_cpu(id->awupf) != ctrl->subsys->awupf) {
