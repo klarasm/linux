@@ -239,3 +239,7 @@
 	pinctrl-0 = <&uart0_2_cfg>;
 	status = "okay";
 };
+
+&watchdog {
+	status = "okay";
+};
