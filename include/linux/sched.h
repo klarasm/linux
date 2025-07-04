@@ -806,6 +806,9 @@ struct kmap_ctrl {
 #endif
 };
 
+/* XXX need fix to not use magic number */
+#define MAX_LLC 64
+
 struct task_struct {
 #ifdef CONFIG_THREAD_INFO_IN_TASK
 	/*
@@ -1393,6 +1396,11 @@ struct task_struct {
 
 	unsigned long			numa_pages_migrated;
 #endif /* CONFIG_NUMA_BALANCING */
+
+#ifdef CONFIG_SCHED_CACHE
+	struct callback_head		cache_work;
+	int				preferred_llc;
+#endif
 
 #ifdef CONFIG_RSEQ
 	struct rseq __user *rseq;
