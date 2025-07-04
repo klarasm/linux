@@ -2,8 +2,10 @@
 /*
  * Copyright (c) 2018-2019 The Linux Foundation. All rights reserved.
  * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
+#include <linux/export.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/remoteproc.h>
@@ -2581,10 +2583,15 @@ int ath11k_core_init(struct ath11k_base *ab)
 	ret = ath11k_core_soc_create(ab);
 	if (ret) {
 		ath11k_err(ab, "failed to create soc core: %d\n", ret);
-		return ret;
+		goto err_unregister_pm_notifier;
 	}
 
 	return 0;
+
+err_unregister_pm_notifier:
+	ath11k_core_pm_notifier_unregister(ab);
+
+	return ret;
 }
 EXPORT_SYMBOL(ath11k_core_init);
 

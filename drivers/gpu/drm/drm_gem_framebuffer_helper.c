@@ -5,6 +5,7 @@
  * Copyright (C) 2017 Noralf Trønnes
  */
 
+#include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/module.h>
 
@@ -99,7 +100,7 @@ void drm_gem_fb_destroy(struct drm_framebuffer *fb)
 	unsigned int i;
 
 	for (i = 0; i < fb->format->num_planes; i++)
-		drm_gem_object_put(fb->obj[i]);
+		drm_gem_object_handle_put_unlocked(fb->obj[i]);
 
 	drm_framebuffer_cleanup(fb);
 	kfree(fb);
@@ -182,8 +183,10 @@ int drm_gem_fb_init_with_funcs(struct drm_device *dev,
 		if (!objs[i]) {
 			drm_dbg_kms(dev, "Failed to lookup GEM object\n");
 			ret = -ENOENT;
-			goto err_gem_object_put;
+			goto err_gem_object_handle_put_unlocked;
 		}
+		drm_gem_object_handle_get_unlocked(objs[i]);
+		drm_gem_object_put(objs[i]);
 
 		min_size = (height - 1) * mode_cmd->pitches[i]
 			 + drm_format_info_min_pitch(info, i, width)
@@ -193,22 +196,22 @@ int drm_gem_fb_init_with_funcs(struct drm_device *dev,
 			drm_dbg_kms(dev,
 				    "GEM object size (%zu) smaller than minimum size (%u) for plane %d\n",
 				    objs[i]->size, min_size, i);
-			drm_gem_object_put(objs[i]);
+			drm_gem_object_handle_put_unlocked(objs[i]);
 			ret = -EINVAL;
-			goto err_gem_object_put;
+			goto err_gem_object_handle_put_unlocked;
 		}
 	}
 
 	ret = drm_gem_fb_init(dev, fb, mode_cmd, objs, i, funcs);
 	if (ret)
-		goto err_gem_object_put;
+		goto err_gem_object_handle_put_unlocked;
 
 	return 0;
 
-err_gem_object_put:
+err_gem_object_handle_put_unlocked:
 	while (i > 0) {
 		--i;
-		drm_gem_object_put(objs[i]);
+		drm_gem_object_handle_put_unlocked(objs[i]);
 	}
 	return ret;
 }
@@ -607,8 +610,11 @@ int drm_gem_fb_afbc_init(struct drm_device *dev,
 	if (ret < 0)
 		return ret;
 
-	if (objs[0]->size < afbc_fb->afbc_size)
+	if (objs[0]->size < afbc_fb->afbc_size) {
+		drm_dbg_kms(dev, "GEM object size (%zu) smaller than minimum afbc size (%u)\n",
+			    objs[0]->size, afbc_fb->afbc_size);
 		return -EINVAL;
+	}
 
 	return 0;
 }

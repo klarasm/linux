@@ -992,6 +992,7 @@ config MEMCG
 	select PAGE_COUNTER
 	select EVENTFD
 	select SLAB_OBJ_EXT
+	select VM_EVENT_COUNTERS
 	help
 	  Provides control over the memory footprint of tasks in a cgroup.
 
@@ -1065,6 +1066,9 @@ if CGROUP_SCHED
 config GROUP_SCHED_WEIGHT
 	def_bool n
 
+config GROUP_SCHED_BANDWIDTH
+        def_bool n
+
 config FAIR_GROUP_SCHED
 	bool "Group scheduling for SCHED_OTHER"
 	depends on CGROUP_SCHED
@@ -1074,6 +1078,7 @@ config FAIR_GROUP_SCHED
 config CFS_BANDWIDTH
 	bool "CPU bandwidth provisioning for FAIR_GROUP_SCHED"
 	depends on FAIR_GROUP_SCHED
+	select GROUP_SCHED_BANDWIDTH
 	default n
 	help
 	  This option allows users to define CPU bandwidth rates (limits) for
@@ -1108,6 +1113,7 @@ config EXT_GROUP_SCHED
 	bool
 	depends on SCHED_CLASS_EXT && CGROUP_SCHED
 	select GROUP_SCHED_WEIGHT
+	select GROUP_SCHED_BANDWIDTH
 	default y
 
 endif #CGROUP_SCHED
@@ -1667,6 +1673,18 @@ config PRINTK
 	  very difficult to diagnose system problems, saying N here is
 	  strongly discouraged.
 
+config PRINTK_RINGBUFFER_KUNIT_TEST
+	tristate "KUnit Test for the printk ringbuffer" if !KUNIT_ALL_TESTS
+	depends on PRINTK && KUNIT
+	default KUNIT_ALL_TESTS
+	help
+	  This builds the printk ringbuffer KUnit test suite.
+
+	  For more information on KUnit and unit tests in general, please refer
+	  to the KUnit documentation.
+
+	  If unsure, say N.
+
 config BUG
 	bool "BUG() support" if EXPERT
 	default y
@@ -1716,9 +1734,13 @@ config FUTEX_PI
 	depends on FUTEX && RT_MUTEXES
 	default y
 
+#
+# marked broken for performance reasons; gives us one more cycle to sort things out.
+#
 config FUTEX_PRIVATE_HASH
 	bool
 	depends on FUTEX && !BASE_SMALL && MMU
+	depends on BROKEN
 	default y
 
 config FUTEX_MPOL
@@ -1800,6 +1822,17 @@ config GCOV_PROFILE_URING
 	  Note that this will have a negative impact on the performance of
 	  the io_uring subsystem, hence this should only be enabled for
 	  specific test purposes.
+
+config IO_URING_MOCK_FILE
+	tristate "Enable io_uring mock files (Experimental)" if EXPERT
+	default n
+	depends on IO_URING
+	help
+	  Enable mock files for io_uring subststem testing. The ABI might
+	  still change, so it's still experimental and should only be enabled
+	  for specific test purposes.
+
+	  If unsure, say N.
 
 config ADVISE_SYSCALLS
 	bool "Enable madvise/fadvise syscalls" if EXPERT
