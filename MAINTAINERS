@@ -18818,6 +18818,11 @@ F:	Documentation/mm/page_table_check.rst
 F:	include/linux/page_table_check.h
 F:	mm/page_table_check.c
 
+PAGE STATE DEBUG SCRIPT
+M:	Ye Liu <liuye@kylinos.cn>
+S:	Maintained
+F:	tools/mm/show_page_info.py
+
 PANASONIC LAPTOP ACPI EXTRAS DRIVER
 M:	Kenneth Chan <kenneth.t.chan@gmail.com>
 L:	platform-driver-x86@vger.kernel.org
@@ -23053,6 +23058,7 @@ F:	drivers/md/md*
 F:	drivers/md/raid*
 F:	include/linux/raid/
 F:	include/uapi/linux/raid/
+F:	lib/raid6/
 
 SOLIDRUN CLEARFOG SUPPORT
 M:	Russell King <linux@armlinux.org.uk>
@@ -27376,6 +27382,13 @@ W:	http://www.qsl.net/dl1bke/
 F:	Documentation/networking/device_drivers/hamradio/z8530drv.rst
 F:	drivers/net/hamradio/*scc.c
 F:	drivers/net/hamradio/z8530.h
+
+ZBLOCK COMPRESSED SLAB MEMORY ALLOCATOR
+M:	Vitaly Wool <vitaly.wool@konsulko.se>
+L:	linux-mm@kvack.org
+S:	Maintained
+F:	Documentation/mm/zblock.rst
+F:	mm/zblock.[ch]
 
 ZD1211RW WIRELESS DRIVER
 L:	linux-wireless@vger.kernel.org
