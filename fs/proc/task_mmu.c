@@ -227,11 +227,16 @@ static struct vm_area_struct *proc_get_vma(struct seq_file *m, loff_t *ppos)
 		 */
 		*ppos = vma->vm_end;
 	} else {
-		*ppos = -2; /* -2 indicates gate vma */
+		*ppos = -2UL; /* -2 indicates gate vma */
 		vma = get_gate_vma(priv->mm);
 	}
 
 	return vma;
+}
+
+static inline bool is_sentinel_pos(unsigned long pos)
+{
+	return pos == -1UL || pos == -2UL;
 }
 
 static void *m_start(struct seq_file *m, loff_t *ppos)
@@ -266,9 +271,9 @@ static void *m_start(struct seq_file *m, loff_t *ppos)
 	 * Reset current position if last_addr was set before
 	 * and it's not a sentinel.
 	 */
-	if (last_addr > 0)
+	if (last_addr > 0 && !is_sentinel_pos(last_addr))
 		*ppos = last_addr = priv->last_pos;
-	vma_iter_init(&priv->iter, mm, (unsigned long)last_addr);
+	vma_iter_init(&priv->iter, mm, last_addr);
 	hold_task_mempolicy(priv);
 	if (last_addr == -2)
 		return get_gate_vma(mm);
@@ -278,8 +283,8 @@ static void *m_start(struct seq_file *m, loff_t *ppos)
 
 static void *m_next(struct seq_file *m, void *v, loff_t *ppos)
 {
-	if (*ppos == -2) {
-		*ppos = -1; /* -1 indicates no more vmas */
+	if (*ppos == -2UL) {
+		*ppos = -1UL; /* -1 indicates no more vmas */
 		return NULL;
 	}
 	return proc_get_vma(m, ppos);
@@ -491,6 +496,7 @@ static int pid_maps_open(struct inode *inode, struct file *file)
 
 static int query_vma_setup(struct proc_maps_private *priv)
 {
+	rcu_read_lock();
 	priv->locked_vma = NULL;
 	priv->mmap_locked = false;
 
@@ -500,19 +506,14 @@ static int query_vma_setup(struct proc_maps_private *priv)
 static void query_vma_teardown(struct proc_maps_private *priv)
 {
 	unlock_vma(priv);
+	rcu_read_unlock();
 }
 
 static struct vm_area_struct *query_vma_find_by_addr(struct proc_maps_private *priv,
 						     unsigned long addr)
 {
-	struct vm_area_struct *vma;
-
-	rcu_read_lock();
 	vma_iter_init(&priv->iter, priv->mm, addr);
-	vma = get_next_vma(priv, addr);
-	rcu_read_unlock();
-
-	return vma;
+	return get_next_vma(priv, addr);
 }
 
 #else /* CONFIG_PER_VMA_LOCK */
@@ -594,6 +595,7 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 	char build_id_buf[BUILD_ID_SIZE_MAX], *name_buf = NULL;
 	__u64 usize;
 	int err;
+	size_t name_buf_sz;
 
 	if (copy_from_user(&usize, (void __user *)uarg, sizeof(usize)))
 		return -EFAULT;
@@ -620,11 +622,17 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 	if (!mm || !mmget_not_zero(mm))
 		return -ESRCH;
 
-	err = query_vma_setup(priv);
-	if (err) {
+	name_buf_sz = min_t(size_t, PATH_MAX, karg.vma_name_size);
+
+	name_buf = kmalloc(name_buf_sz, GFP_KERNEL);
+	if (!name_buf) {
 		mmput(mm);
-		return err;
+		return -ENOMEM;
 	}
+
+	err = query_vma_setup(priv);
+	if (err)
+		goto fail_vma_setup;
 
 	vma = query_matching_vma(priv, karg.query_addr, karg.query_flags);
 	if (IS_ERR(vma)) {
@@ -678,20 +686,12 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 	}
 
 	if (karg.vma_name_size) {
-		size_t name_buf_sz = min_t(size_t, PATH_MAX, karg.vma_name_size);
 		const struct path *path;
 		const char *name_fmt;
 		size_t name_sz = 0;
 
 		get_vma_name(vma, &path, &name, &name_fmt);
 
-		if (path || name_fmt || name) {
-			name_buf = kmalloc(name_buf_sz, GFP_KERNEL);
-			if (!name_buf) {
-				err = -ENOMEM;
-				goto out;
-			}
-		}
 		if (path) {
 			name = d_path(path, name_buf, name_buf_sz);
 			if (IS_ERR(name)) {
@@ -732,6 +732,7 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 
 out:
 	query_vma_teardown(priv);
+fail_vma_setup:
 	mmput(mm);
 	kfree(name_buf);
 	return err;
