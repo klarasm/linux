@@ -87,6 +87,9 @@ SCHED_FEAT(TTWU_QUEUE, true)
  */
 SCHED_FEAT(SIS_UTIL, true)
 
+SCHED_FEAT(SCHED_CACHE, true)
+SCHED_FEAT(SCHED_CACHE_LB, true)
+SCHED_FEAT(SCHED_CACHE_WAKE, false)
 /*
  * Issue a WARN when we do multiple update_rq_clock() calls
  * in a single rq->lock section. Default disabled because the
