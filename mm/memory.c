@@ -5401,10 +5401,10 @@ fallback:
 
 	/*
 	 * Using per-page fault to maintain the uffd semantics, and same
-	 * approach also applies to non-anonymous-shmem faults to avoid
+	 * approach also applies to non shmem/tmpfs faults to avoid
 	 * inflating the RSS of the process.
 	 */
-	if (!vma_is_anon_shmem(vma) || unlikely(userfaultfd_armed(vma)) ||
+	if (!vma_is_shmem(vma) || unlikely(userfaultfd_armed(vma)) ||
 	    unlikely(needs_fallback)) {
 		nr_pages = 1;
 	} else if (nr_pages > 1) {
@@ -6716,6 +6716,7 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 	while (len) {
 		int bytes, offset;
 		void *maddr;
+		struct folio *folio;
 		struct vm_area_struct *vma = NULL;
 		struct page *page = get_user_page_vma_remote(mm, addr,
 							     gup_flags, &vma);
@@ -6747,21 +6748,22 @@ static int __access_remote_vm(struct mm_struct *mm, unsigned long addr,
 			if (bytes <= 0)
 				break;
 		} else {
+			folio = page_folio(page);
 			bytes = len;
 			offset = addr & (PAGE_SIZE-1);
 			if (bytes > PAGE_SIZE-offset)
 				bytes = PAGE_SIZE-offset;
 
-			maddr = kmap_local_page(page);
+			maddr = kmap_local_folio(folio, folio_page_idx(folio, page) * PAGE_SIZE);
 			if (write) {
 				copy_to_user_page(vma, page, addr,
 						  maddr + offset, buf, bytes);
-				set_page_dirty_lock(page);
+				folio_mark_dirty_lock(folio);
 			} else {
 				copy_from_user_page(vma, page, addr,
 						    buf, maddr + offset, bytes);
 			}
-			unmap_and_put_page(page, maddr);
+			folio_release_kmap(folio, maddr);
 		}
 		len -= bytes;
 		buf += bytes;
@@ -6840,6 +6842,7 @@ static int __copy_remote_vm_str(struct mm_struct *mm, unsigned long addr,
 	while (len) {
 		int bytes, offset, retval;
 		void *maddr;
+		struct folio *folio;
 		struct page *page;
 		struct vm_area_struct *vma = NULL;
 
@@ -6855,17 +6858,18 @@ static int __copy_remote_vm_str(struct mm_struct *mm, unsigned long addr,
 			goto out;
 		}
 
+		folio = page_folio(page);
 		bytes = len;
 		offset = addr & (PAGE_SIZE - 1);
 		if (bytes > PAGE_SIZE - offset)
 			bytes = PAGE_SIZE - offset;
 
-		maddr = kmap_local_page(page);
+		maddr = kmap_local_folio(folio, folio_page_idx(folio, page) * PAGE_SIZE);
 		retval = strscpy(buf, maddr + offset, bytes);
 		if (retval >= 0) {
 			/* Found the end of the string */
 			buf += retval;
-			unmap_and_put_page(page, maddr);
+			folio_release_kmap(folio, maddr);
 			break;
 		}
 
@@ -6883,7 +6887,7 @@ static int __copy_remote_vm_str(struct mm_struct *mm, unsigned long addr,
 		}
 		len -= bytes;
 
-		unmap_and_put_page(page, maddr);
+		folio_release_kmap(folio, maddr);
 	}
 
 out:
