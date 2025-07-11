@@ -13,7 +13,7 @@ pub type IdTable<T> = &'static dyn kernel::device_id::IdTable<DeviceId, T>;
 pub struct DeviceId(bindings::of_device_id);
 
 // SAFETY:
-// * `DeviceId` is a `#[repr(transparent)` wrapper of `struct of_device_id` and does not add
+// * `DeviceId` is a `#[repr(transparent)]` wrapper of `struct of_device_id` and does not add
 //   additional invariants, so it's safe to transmute to `RawType`.
 // * `DRIVER_DATA_OFFSET` is the offset to the `data` field.
 unsafe impl RawDeviceId for DeviceId {
@@ -22,7 +22,7 @@ unsafe impl RawDeviceId for DeviceId {
     const DRIVER_DATA_OFFSET: usize = core::mem::offset_of!(bindings::of_device_id, data);
 
     fn index(&self) -> usize {
-        self.0.data as _
+        self.0.data as usize
     }
 }
 
@@ -34,10 +34,10 @@ impl DeviceId {
         // SAFETY: FFI type is valid to be zero-initialized.
         let mut of: bindings::of_device_id = unsafe { core::mem::zeroed() };
 
-        // TODO: Use `clone_from_slice` once the corresponding types do match.
+        // TODO: Use `copy_from_slice` once stabilized for `const`.
         let mut i = 0;
         while i < src.len() {
-            of.compatible[i] = src[i] as _;
+            of.compatible[i] = src[i];
             i += 1;
         }
 
