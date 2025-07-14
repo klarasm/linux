@@ -2169,7 +2169,7 @@ static inline int folio_expected_ref_count(const struct folio *folio)
 	const int order = folio_order(folio);
 	int ref_count = 0;
 
-	if (WARN_ON_ONCE(page_has_type(&folio->page) && !folio_test_hugetlb(folio)))
+	if (WARN_ON_ONCE(!folio_has_mapcount(folio)))
 		return 0;
 
 	if (folio_test_anon(folio)) {
@@ -4200,5 +4200,24 @@ static inline bool page_pool_page_is_pp(struct page *page)
 	return false;
 }
 #endif
+
+#define PAGE_SNAPSHOT_FAITHFUL     (1 << 0)
+#define PAGE_SNAPSHOT_PG_FREE      (1 << 1)
+#define PAGE_SNAPSHOT_PG_IDLE      (1 << 2)
+
+struct page_snapshot {
+	struct folio folio_snapshot;
+	struct page page_snapshot;
+	unsigned long pfn;
+	unsigned long idx;
+	unsigned long flags;
+};
+
+static inline bool snapshot_page_is_faithful(const struct page_snapshot *ps)
+{
+	return ps->flags & PAGE_SNAPSHOT_FAITHFUL;
+}
+
+void snapshot_page(struct page_snapshot *ps, const struct page *page);
 
 #endif /* _LINUX_MM_H */
