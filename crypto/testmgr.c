@@ -4237,6 +4237,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "authenc(hmac(sha1),cbc(aes))",
+		.generic_driver = "authenc(hmac-sha1-lib,cbc(aes-generic))",
 		.test = alg_test_aead,
 		.fips_allowed = 1,
 		.suite = {
@@ -4244,12 +4245,14 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "authenc(hmac(sha1),cbc(des))",
+		.generic_driver = "authenc(hmac-sha1-lib,cbc(des-generic))",
 		.test = alg_test_aead,
 		.suite = {
 			.aead = __VECS(hmac_sha1_des_cbc_tv_temp)
 		}
 	}, {
 		.alg = "authenc(hmac(sha1),cbc(des3_ede))",
+		.generic_driver = "authenc(hmac-sha1-lib,cbc(des3_ede-generic))",
 		.test = alg_test_aead,
 		.suite = {
 			.aead = __VECS(hmac_sha1_des3_ede_cbc_tv_temp)
@@ -4260,6 +4263,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		.fips_allowed = 1,
 	}, {
 		.alg = "authenc(hmac(sha1),ecb(cipher_null))",
+		.generic_driver = "authenc(hmac-sha1-lib,ecb-cipher_null)",
 		.test = alg_test_aead,
 		.suite = {
 			.aead = __VECS(hmac_sha1_ecb_cipher_null_tv_temp)
@@ -4270,18 +4274,21 @@ static const struct alg_test_desc alg_test_descs[] = {
 		.fips_allowed = 1,
 	}, {
 		.alg = "authenc(hmac(sha224),cbc(des))",
+		.generic_driver = "authenc(hmac-sha224-lib,cbc(des-generic))",
 		.test = alg_test_aead,
 		.suite = {
 			.aead = __VECS(hmac_sha224_des_cbc_tv_temp)
 		}
 	}, {
 		.alg = "authenc(hmac(sha224),cbc(des3_ede))",
+		.generic_driver = "authenc(hmac-sha224-lib,cbc(des3_ede-generic))",
 		.test = alg_test_aead,
 		.suite = {
 			.aead = __VECS(hmac_sha224_des3_ede_cbc_tv_temp)
 		}
 	}, {
 		.alg = "authenc(hmac(sha256),cbc(aes))",
+		.generic_driver = "authenc(hmac-sha256-lib,cbc(aes-generic))",
 		.test = alg_test_aead,
 		.fips_allowed = 1,
 		.suite = {
@@ -4289,12 +4296,14 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "authenc(hmac(sha256),cbc(des))",
+		.generic_driver = "authenc(hmac-sha256-lib,cbc(des-generic))",
 		.test = alg_test_aead,
 		.suite = {
 			.aead = __VECS(hmac_sha256_des_cbc_tv_temp)
 		}
 	}, {
 		.alg = "authenc(hmac(sha256),cbc(des3_ede))",
+		.generic_driver = "authenc(hmac-sha256-lib,cbc(des3_ede-generic))",
 		.test = alg_test_aead,
 		.suite = {
 			.aead = __VECS(hmac_sha256_des3_ede_cbc_tv_temp)
@@ -4305,6 +4314,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		.fips_allowed = 1,
 	}, {
 		.alg = "authenc(hmac(sha256),cts(cbc(aes)))",
+		.generic_driver = "authenc(hmac-sha256-lib,cts(cbc(aes-generic)))",
 		.test = alg_test_aead,
 		.suite = {
 			.aead = __VECS(krb5_test_aes128_cts_hmac_sha256_128)
@@ -4315,12 +4325,14 @@ static const struct alg_test_desc alg_test_descs[] = {
 		.fips_allowed = 1,
 	}, {
 		.alg = "authenc(hmac(sha384),cbc(des))",
+		.generic_driver = "authenc(hmac-sha384-lib,cbc(des-generic))",
 		.test = alg_test_aead,
 		.suite = {
 			.aead = __VECS(hmac_sha384_des_cbc_tv_temp)
 		}
 	}, {
 		.alg = "authenc(hmac(sha384),cbc(des3_ede))",
+		.generic_driver = "authenc(hmac-sha384-lib,cbc(des3_ede-generic))",
 		.test = alg_test_aead,
 		.suite = {
 			.aead = __VECS(hmac_sha384_des3_ede_cbc_tv_temp)
@@ -4331,6 +4343,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		.fips_allowed = 1,
 	}, {
 		.alg = "authenc(hmac(sha384),cts(cbc(aes)))",
+		.generic_driver = "authenc(hmac-sha384-lib,cts(cbc(aes-generic)))",
 		.test = alg_test_aead,
 		.suite = {
 			.aead = __VECS(krb5_test_aes256_cts_hmac_sha384_192)
@@ -4341,6 +4354,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		.fips_allowed = 1,
 	}, {
 		.alg = "authenc(hmac(sha512),cbc(aes))",
+		.generic_driver = "authenc(hmac-sha512-lib,cbc(aes-generic))",
 		.fips_allowed = 1,
 		.test = alg_test_aead,
 		.suite = {
@@ -4348,12 +4362,14 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "authenc(hmac(sha512),cbc(des))",
+		.generic_driver = "authenc(hmac-sha512-lib,cbc(des-generic))",
 		.test = alg_test_aead,
 		.suite = {
 			.aead = __VECS(hmac_sha512_des_cbc_tv_temp)
 		}
 	}, {
 		.alg = "authenc(hmac(sha512),cbc(des3_ede))",
+		.generic_driver = "authenc(hmac-sha512-lib,cbc(des3_ede-generic))",
 		.test = alg_test_aead,
 		.suite = {
 			.aead = __VECS(hmac_sha512_des3_ede_cbc_tv_temp)
@@ -5009,6 +5025,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "essiv(authenc(hmac(sha256),cbc(aes)),sha256)",
+		.generic_driver = "essiv(authenc(hmac-sha256-lib,cbc(aes-generic)),sha256-lib)",
 		.test = alg_test_aead,
 		.fips_allowed = 1,
 		.suite = {
@@ -5016,6 +5033,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "essiv(cbc(aes),sha256)",
+		.generic_driver = "essiv(cbc(aes-generic),sha256-lib)",
 		.test = alg_test_skcipher,
 		.fips_allowed = 1,
 		.suite = {
@@ -5108,6 +5126,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "hmac(sha1)",
+		.generic_driver = "hmac-sha1-lib",
 		.test = alg_test_hash,
 		.fips_allowed = 1,
 		.suite = {
@@ -5115,6 +5134,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "hmac(sha224)",
+		.generic_driver = "hmac-sha224-lib",
 		.test = alg_test_hash,
 		.fips_allowed = 1,
 		.suite = {
@@ -5122,6 +5142,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "hmac(sha256)",
+		.generic_driver = "hmac-sha256-lib",
 		.test = alg_test_hash,
 		.fips_allowed = 1,
 		.suite = {
@@ -5157,6 +5178,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "hmac(sha384)",
+		.generic_driver = "hmac-sha384-lib",
 		.test = alg_test_hash,
 		.fips_allowed = 1,
 		.suite = {
@@ -5164,6 +5186,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "hmac(sha512)",
+		.generic_driver = "hmac-sha512-lib",
 		.test = alg_test_hash,
 		.fips_allowed = 1,
 		.suite = {
@@ -5444,6 +5467,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "sha1",
+		.generic_driver = "sha1-lib",
 		.test = alg_test_hash,
 		.fips_allowed = 1,
 		.suite = {
@@ -5451,6 +5475,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "sha224",
+		.generic_driver = "sha224-lib",
 		.test = alg_test_hash,
 		.fips_allowed = 1,
 		.suite = {
@@ -5458,6 +5483,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "sha256",
+		.generic_driver = "sha256-lib",
 		.test = alg_test_hash,
 		.fips_allowed = 1,
 		.suite = {
@@ -5493,6 +5519,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "sha384",
+		.generic_driver = "sha384-lib",
 		.test = alg_test_hash,
 		.fips_allowed = 1,
 		.suite = {
@@ -5500,6 +5527,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "sha512",
+		.generic_driver = "sha512-lib",
 		.test = alg_test_hash,
 		.fips_allowed = 1,
 		.suite = {
