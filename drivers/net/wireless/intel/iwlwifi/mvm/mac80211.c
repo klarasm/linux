@@ -165,12 +165,6 @@ struct ieee80211_regdomain *iwl_mvm_get_regdomain(struct wiphy *wiphy,
 	mvm->lar_regdom_set = true;
 	mvm->mcc_src = src_id;
 
-	if (!iwl_puncturing_is_allowed_in_bios(mvm->bios_enable_puncturing,
-					       le16_to_cpu(resp->mcc)))
-		ieee80211_hw_set(mvm->hw, DISALLOW_PUNCTURING);
-	else
-		__clear_bit(IEEE80211_HW_DISALLOW_PUNCTURING, mvm->hw->flags);
-
 	iwl_mei_set_country_code(__le16_to_cpu(resp->mcc));
 
 out:
@@ -298,7 +292,8 @@ static const struct wiphy_iftype_ext_capab add_iftypes_ext_capa[] = {
 	},
 };
 
-int iwl_mvm_op_get_antenna(struct ieee80211_hw *hw, u32 *tx_ant, u32 *rx_ant)
+int iwl_mvm_op_get_antenna(struct ieee80211_hw *hw, int radio_idx,
+			   u32 *tx_ant, u32 *rx_ant)
 {
 	struct iwl_mvm *mvm = IWL_MAC80211_GET_MVM(hw);
 	*tx_ant = iwl_mvm_get_valid_tx_ant(mvm);
@@ -306,13 +301,15 @@ int iwl_mvm_op_get_antenna(struct ieee80211_hw *hw, u32 *tx_ant, u32 *rx_ant)
 	return 0;
 }
 
-int iwl_mvm_op_set_antenna(struct ieee80211_hw *hw, u32 tx_ant, u32 rx_ant)
+int iwl_mvm_op_set_antenna(struct ieee80211_hw *hw, int radio_idx, u32 tx_ant,
+			   u32 rx_ant)
 {
 	struct iwl_mvm *mvm = IWL_MAC80211_GET_MVM(hw);
 
 	/* This has been tested on those devices only */
 	if (mvm->trans->mac_cfg->device_family != IWL_DEVICE_FAMILY_9000 &&
-	    mvm->trans->mac_cfg->device_family != IWL_DEVICE_FAMILY_22000)
+	    mvm->trans->mac_cfg->device_family != IWL_DEVICE_FAMILY_22000 &&
+	    mvm->trans->mac_cfg->device_family != IWL_DEVICE_FAMILY_AX210)
 		return -EOPNOTSUPP;
 
 	if (!mvm->nvm_data)
@@ -4249,7 +4246,8 @@ int iwl_mvm_mac_sta_state_common(struct ieee80211_hw *hw,
 	return ret;
 }
 
-int iwl_mvm_mac_set_rts_threshold(struct ieee80211_hw *hw, u32 value)
+int iwl_mvm_mac_set_rts_threshold(struct ieee80211_hw *hw, int radio_idx,
+				  u32 value)
 {
 	struct iwl_mvm *mvm = IWL_MAC80211_GET_MVM(hw);
 
@@ -4613,6 +4611,10 @@ int iwl_mvm_mac_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 			struct ieee80211_key_conf *key)
 {
 	struct iwl_mvm *mvm = IWL_MAC80211_GET_MVM(hw);
+
+	/* When resuming from wowlan, FW already knows about the newest keys */
+	if (test_bit(IWL_MVM_STATUS_IN_D3, &mvm->status))
+		return 0;
 
 	guard(mvm)(mvm);
 	return __iwl_mvm_mac_set_key(hw, cmd, vif, sta, key);

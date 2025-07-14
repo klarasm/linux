@@ -61,8 +61,10 @@ static int __init iwl_mvm_init(void)
 	}
 
 	ret = iwl_opmode_register("iwlmvm", &iwl_mvm_ops);
-	if (ret)
+	if (ret) {
 		pr_err("Unable to register MVM op_mode: %d\n", ret);
+		iwl_mvm_rate_control_unregister();
+	}
 
 	return ret;
 }
@@ -1395,8 +1397,6 @@ iwl_op_mode_mvm_start(struct iwl_trans *trans, const struct iwl_rf_cfg *cfg,
 		}
 	}
 
-	mvm->bios_enable_puncturing = iwl_uefi_get_puncturing(&mvm->fwrt);
-
 	if (iwl_mvm_has_new_tx_api(mvm)) {
 		/*
 		 * If we have the new TX/queue allocation API initialize them
@@ -2053,7 +2053,7 @@ static void iwl_mvm_nic_error(struct iwl_op_mode *op_mode,
 
 	if (type == IWL_ERR_TYPE_CMD_QUEUE_FULL)
 		IWL_ERR(mvm, "Command queue full!\n");
-	else if (!test_bit(STATUS_TRANS_DEAD, &mvm->trans->status) &&
+	else if (!iwl_trans_is_dead(mvm->trans) &&
 		 !test_and_clear_bit(IWL_MVM_STATUS_SUPPRESS_ERROR_LOG_ONCE,
 				     &mvm->status))
 		iwl_mvm_dump_nic_error_log(mvm);
