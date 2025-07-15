@@ -1166,10 +1166,326 @@ static s64 update_curr_se(struct rq *rq, struct sched_entity *curr)
 	return delta_exec;
 }
 
-static inline void update_curr_task(struct task_struct *p, s64 delta_exec)
+#ifdef CONFIG_SCHED_CACHE
+
+/*
+ * XXX numbers come from a place the sun don't shine -- probably wants to be SD
+ * tunable or so.
+ */
+#define EPOCH_PERIOD	(HZ/100)	/* 10 ms */
+#define EPOCH_OLD	5		/* 50 ms */
+
+static int llc_id(int cpu)
+{
+	if (cpu < 0)
+		return -1;
+
+	return per_cpu(sd_llc_id, cpu);
+}
+
+/*
+ * continous index.
+ * TBD: replace by xarray with key llc_id()
+ */
+static inline int llc_idx(int cpu)
+{
+	if (cpu < 0)
+		return -1;
+
+	return per_cpu(sd_llc_idx, cpu);
+}
+
+static inline int pref_llc_idx(struct task_struct *p)
+{
+	return llc_idx(p->preferred_llc);
+}
+
+static void account_llc_enqueue(struct rq *rq, struct task_struct *p)
+{
+	int pref_llc;
+
+	rq->nr_llc_running += (p->preferred_llc != -1);
+	rq->nr_pref_llc_running += (p->preferred_llc == task_llc(p));
+
+	if (p->preferred_llc < 0)
+		return;
+
+	pref_llc = pref_llc_idx(p);
+	if (pref_llc < 0)
+		return;
+
+	++rq->nr_pref_llc[pref_llc];
+}
+
+static void account_llc_dequeue(struct rq *rq, struct task_struct *p)
+{
+	int pref_llc;
+
+	rq->nr_llc_running -= (p->preferred_llc != -1);
+	rq->nr_pref_llc_running -= (p->preferred_llc == task_llc(p));
+
+	if (p->preferred_llc < 0)
+		return;
+
+	pref_llc = pref_llc_idx(p);
+	if (pref_llc < 0)
+		return;
+
+	/* avoid negative counter */
+	if (rq->nr_pref_llc[pref_llc] > 0)
+		--rq->nr_pref_llc[pref_llc];
+}
+
+void mm_init_sched(struct mm_struct *mm, struct mm_sched __percpu *_pcpu_sched)
+{
+	unsigned long epoch;
+	int i;
+
+	for_each_possible_cpu(i) {
+		struct mm_sched *pcpu_sched = per_cpu_ptr(_pcpu_sched, i);
+		struct rq *rq = cpu_rq(i);
+
+		pcpu_sched->runtime = 0;
+		pcpu_sched->epoch = epoch = rq->cpu_epoch;
+		pcpu_sched->occ = 0;
+	}
+
+	raw_spin_lock_init(&mm->mm_sched_lock);
+	mm->mm_sched_epoch = epoch;
+	mm->mm_sched_cpu = -1;
+
+	smp_store_release(&mm->pcpu_sched, _pcpu_sched);
+}
+
+/* because why would C be fully specified */
+static __always_inline void __shr_u64(u64 *val, unsigned int n)
+{
+	if (n >= 64) {
+		*val = 0;
+		return;
+	}
+	*val >>= n;
+}
+
+static inline void __update_mm_sched(struct rq *rq, struct mm_sched *pcpu_sched)
+{
+	lockdep_assert_held(&rq->cpu_epoch_lock);
+
+	unsigned long n, now = jiffies;
+	long delta = now - rq->cpu_epoch_next;
+
+	if (delta > 0) {
+		n = (delta + EPOCH_PERIOD - 1) / EPOCH_PERIOD;
+		rq->cpu_epoch += n;
+		rq->cpu_epoch_next += n * EPOCH_PERIOD;
+		__shr_u64(&rq->cpu_runtime, n);
+	}
+
+	n = rq->cpu_epoch - pcpu_sched->epoch;
+	if (n) {
+		pcpu_sched->epoch += n;
+		__shr_u64(&pcpu_sched->runtime, n);
+	}
+}
+
+static unsigned long fraction_mm_sched(struct rq *rq, struct mm_sched *pcpu_sched)
+{
+	guard(raw_spinlock_irqsave)(&rq->cpu_epoch_lock);
+
+	__update_mm_sched(rq, pcpu_sched);
+
+	/*
+	 * Runtime is a geometric series (r=0.5) and as such will sum to twice
+	 * the accumulation period, this means the multiplcation here should
+	 * not overflow.
+	 */
+	return div64_u64(NICE_0_LOAD * pcpu_sched->runtime, rq->cpu_runtime + 1);
+}
+
+static inline
+void account_mm_sched(struct rq *rq, struct task_struct *p, s64 delta_exec)
+{
+	struct mm_struct *mm = p->mm;
+	struct mm_sched *pcpu_sched;
+	unsigned long epoch;
+	int mm_sched_llc = -1;
+
+	/*
+	 * init_task and kthreads don't be having no mm
+	 */
+	if (!mm || !mm->pcpu_sched)
+		return;
+
+	pcpu_sched = per_cpu_ptr(p->mm->pcpu_sched, cpu_of(rq));
+
+	scoped_guard (raw_spinlock, &rq->cpu_epoch_lock) {
+		__update_mm_sched(rq, pcpu_sched);
+		pcpu_sched->runtime += delta_exec;
+		rq->cpu_runtime += delta_exec;
+		epoch = rq->cpu_epoch;
+	}
+
+	/*
+	 * If this task hasn't hit task_cache_work() for a while, or it
+	 * has only 1 thread, invalidate
+	 * it's preferred state.
+	 */
+	if (epoch - READ_ONCE(mm->mm_sched_epoch) > EPOCH_OLD ||
+	    get_nr_threads(p) <= 1) {
+		mm->mm_sched_cpu = -1;
+		pcpu_sched->occ = 0;
+	}
+
+	if (mm->mm_sched_cpu != -1)
+		mm_sched_llc = per_cpu(sd_llc_id, mm->mm_sched_cpu);
+
+	if (p->preferred_llc != mm_sched_llc) {
+		account_llc_dequeue(rq, p);
+		p->preferred_llc = mm_sched_llc;
+		account_llc_enqueue(rq, p);
+	}
+}
+
+static void task_tick_cache(struct rq *rq, struct task_struct *p)
+{
+	struct callback_head *work = &p->cache_work;
+	struct mm_struct *mm = p->mm;
+
+	if (!mm || !mm->pcpu_sched)
+		return;
+
+	if (mm->mm_sched_epoch == rq->cpu_epoch)
+		return;
+
+	guard(raw_spinlock)(&mm->mm_sched_lock);
+
+	if (work->next == work) {
+		task_work_add(p, work, TWA_RESUME);
+		WRITE_ONCE(mm->mm_sched_epoch, rq->cpu_epoch);
+	}
+}
+
+static void task_cache_work(struct callback_head *work)
+{
+	struct task_struct *p = current;
+	struct mm_struct *mm = p->mm;
+	unsigned long m_a_occ = 0;
+	unsigned long last_m_a_occ = 0;
+	int cpu, m_a_cpu = -1;
+	cpumask_var_t cpus;
+
+	WARN_ON_ONCE(work != &p->cache_work);
+
+	work->next = work;
+
+	if (p->flags & PF_EXITING)
+		return;
+
+	if (!alloc_cpumask_var(&cpus, GFP_KERNEL))
+		return;
+
+	scoped_guard (cpus_read_lock) {
+		cpumask_copy(cpus, cpu_online_mask);
+
+		for_each_cpu(cpu, cpus) {
+			/* XXX sched_cluster_active */
+			struct sched_domain *sd = per_cpu(sd_llc, cpu);
+			unsigned long occ, m_occ = 0, a_occ = 0;
+			int m_cpu = -1, nr = 0, i;
+
+			if (!sd)
+				continue;
+
+			for_each_cpu(i, sched_domain_span(sd)) {
+				occ = fraction_mm_sched(cpu_rq(i),
+							per_cpu_ptr(mm->pcpu_sched, i));
+				a_occ += occ;
+				if (occ > m_occ) {
+					m_occ = occ;
+					m_cpu = i;
+				}
+				nr++;
+				trace_printk("(%d) occ: %ld m_occ: %ld m_cpu: %d nr: %d\n",
+					     per_cpu(sd_llc_id, i), occ, m_occ, m_cpu, nr);
+			}
+
+			// a_occ /= nr;
+			if (a_occ > m_a_occ) {
+				m_a_occ = a_occ;
+				m_a_cpu = m_cpu;
+			}
+			if (llc_id(cpu) == llc_id(mm->mm_sched_cpu))
+				last_m_a_occ = a_occ;
+
+			trace_printk("(%d) a_occ: %ld m_a_occ: %ld\n",
+				     per_cpu(sd_llc_id, cpu), a_occ, m_a_occ);
+
+			for_each_cpu(i, sched_domain_span(sd)) {
+				/* XXX threshold ? */
+				per_cpu_ptr(mm->pcpu_sched, i)->occ = a_occ;
+			}
+
+			cpumask_andnot(cpus, cpus, sched_domain_span(sd));
+		}
+	}
+
+	if (m_a_occ > (2 * last_m_a_occ)) {
+		/* avoid the bouncing of mm_sched_cpu */
+		mm->mm_sched_cpu = m_a_cpu;
+	}
+
+	free_cpumask_var(cpus);
+}
+
+void init_sched_mm(struct task_struct *p)
+{
+	struct callback_head *work = &p->cache_work;
+	init_task_work(work, task_cache_work);
+	work->next = work;
+}
+
+void reset_llc_stats(struct rq *rq)
+{
+	int i;
+
+	if (rq->nr_llc_running) {
+		for (i = 0; i < MAX_LLC; ++i)
+			rq->nr_pref_llc[i] = 0;
+		rq->nr_llc_running = 0;
+	}
+
+	rq->nr_pref_llc_running = 0;
+}
+
+#else
+
+static inline void account_mm_sched(struct rq *rq, struct task_struct *p,
+				    s64 delta_exec) { }
+
+
+void init_sched_mm(struct task_struct *p) { }
+
+static void task_tick_cache(struct rq *rq, struct task_struct *p) { }
+
+static void account_llc_enqueue(struct rq *rq, struct task_struct *p)
+{
+}
+
+static void account_llc_dequeue(struct rq *rq, struct task_struct *p)
+{
+}
+
+void reset_llc_stats(struct rq *rq)
+{
+}
+#endif
+
+static inline
+void update_curr_task(struct rq *rq, struct task_struct *p, s64 delta_exec)
 {
 	trace_sched_stat_runtime(p, delta_exec);
 	account_group_exec_runtime(p, delta_exec);
+	account_mm_sched(rq, p, delta_exec);
 	cgroup_account_cputime(p, delta_exec);
 }
 
@@ -1215,7 +1531,7 @@ s64 update_curr_common(struct rq *rq)
 
 	delta_exec = update_curr_se(rq, &donor->se);
 	if (likely(delta_exec > 0))
-		update_curr_task(donor, delta_exec);
+		update_curr_task(rq, donor, delta_exec);
 
 	return delta_exec;
 }
@@ -1244,7 +1560,7 @@ static void update_curr(struct cfs_rq *cfs_rq)
 	if (entity_is_task(curr)) {
 		struct task_struct *p = task_of(curr);
 
-		update_curr_task(p, delta_exec);
+		update_curr_task(rq, p, delta_exec);
 
 		/*
 		 * If the fair_server is active, we need to account for the
@@ -3701,6 +4017,7 @@ account_entity_enqueue(struct cfs_rq *cfs_rq, struct sched_entity *se)
 		struct rq *rq = rq_of(cfs_rq);
 
 		account_numa_enqueue(rq, task_of(se));
+		account_llc_enqueue(rq, task_of(se));
 		list_add(&se->group_node, &rq->cfs_tasks);
 	}
 #endif
@@ -3714,10 +4031,15 @@ account_entity_dequeue(struct cfs_rq *cfs_rq, struct sched_entity *se)
 #ifdef CONFIG_SMP
 	if (entity_is_task(se)) {
 		account_numa_dequeue(rq_of(cfs_rq), task_of(se));
+		account_llc_dequeue(rq_of(cfs_rq), task_of(se));
 		list_del_init(&se->group_node);
 	}
 #endif
 	cfs_rq->nr_queued--;
+
+	/* safeguard? */
+	if (!parent_entity(se) && !cfs_rq->nr_queued)
+		reset_llc_stats(rq_of(cfs_rq));
 }
 
 /*
@@ -7711,8 +8033,6 @@ static int select_idle_cpu(struct task_struct *p, struct sched_domain *sd, bool 
 	int i, cpu, idle_cpu = -1, nr = INT_MAX;
 	struct sched_domain_shared *sd_share;
 
-	cpumask_and(cpus, sched_domain_span(sd), p->cpus_ptr);
-
 	if (sched_feat(SIS_UTIL)) {
 		sd_share = rcu_dereference(per_cpu(sd_llc_shared, target));
 		if (sd_share) {
@@ -7723,6 +8043,8 @@ static int select_idle_cpu(struct task_struct *p, struct sched_domain *sd, bool 
 				return -1;
 		}
 	}
+
+	cpumask_and(cpus, sched_domain_span(sd), p->cpus_ptr);
 
 	if (static_branch_unlikely(&sched_cluster_active)) {
 		struct sched_group *sg = sd->groups;
@@ -7862,7 +8184,7 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
 	 * per-cpu select_rq_mask usage
 	 */
 	lockdep_assert_irqs_disabled();
-
+again:
 	if ((available_idle_cpu(target) || sched_idle_cpu(target)) &&
 	    asym_fits_cpu(task_util, util_min, util_max, target))
 		return target;
@@ -7900,7 +8222,8 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
 	/* Check a recently used CPU as a potential idle candidate: */
 	recent_used_cpu = p->recent_used_cpu;
 	p->recent_used_cpu = prev;
-	if (recent_used_cpu != prev &&
+	if (prev == p->wake_cpu &&
+	    recent_used_cpu != prev &&
 	    recent_used_cpu != target &&
 	    cpus_share_cache(recent_used_cpu, target) &&
 	    (available_idle_cpu(recent_used_cpu) || sched_idle_cpu(recent_used_cpu)) &&
@@ -7952,6 +8275,18 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
 	i = select_idle_cpu(p, sd, has_idle_core, target);
 	if ((unsigned)i < nr_cpumask_bits)
 		return i;
+
+	if (prev != p->wake_cpu && !cpus_share_cache(prev, p->wake_cpu)) {
+		/*
+		 * Most likely select_cache_cpu() will have re-directed
+		 * the wakeup, but getting here means the preferred cache is
+		 * too busy, so re-try with the actual previous.
+		 *
+		 * XXX wake_affine is lost for this pass.
+		 */
+		prev = target = p->wake_cpu;
+		goto again;
+	}
 
 	/*
 	 * For cluster machines which have lower sharing cache like L2 or
@@ -8575,6 +8910,173 @@ unlock:
 	return target;
 }
 
+#ifdef CONFIG_SCHED_CACHE
+static long __migrate_degrades_locality(struct task_struct *p,
+					int src_cpu, int dst_cpu,
+					bool idle);
+__read_mostly unsigned int sysctl_llc_aggr_cap       = 50;
+__read_mostly unsigned int sysctl_llc_aggr_imb       = 20;
+
+/*
+ * The margin used when comparing LLC utilization with CPU capacity.
+ * Parameter sysctl_llc_aggr_cap determines the LLC load level where
+ * active LLC aggregation is done.
+ * Derived from fits_capacity().
+ *
+ * (default: ~50%)
+ */
+#define fits_llc_capacity(util, max)	\
+	((util) * 100 < (max) * sysctl_llc_aggr_cap)
+
+/*
+ * The margin used when comparing utilization.
+ * is 'util1' noticeably greater than 'util2'
+ * Derived from capacity_greater().
+ * Bias is in perentage.
+ */
+/* Allows dst util to be bigger than src util by up to bias percent */
+#define util_greater(util1, util2) \
+	((util1) * 100 > (util2) * (100 + sysctl_llc_aggr_imb))
+
+enum llc_mig_hint {
+	mig_allow = 0,
+	mig_ignore,
+	mig_forbid
+};
+
+
+/* expected to be protected by rcu_read_lock() */
+static bool get_llc_stats(int cpu, unsigned long *util,
+			  unsigned long *cap)
+{
+	struct sched_domain_shared *sd_share;
+
+	sd_share = rcu_dereference(per_cpu(sd_llc_shared, cpu));
+	if (!sd_share)
+		return false;
+
+	*util = READ_ONCE(sd_share->util_avg);
+	*cap = per_cpu(sd_llc_size, cpu) * SCHED_CAPACITY_SCALE;
+
+	return true;
+}
+
+static enum llc_mig_hint _get_migrate_hint(int src_cpu, int dst_cpu,
+					   unsigned long tsk_util,
+					   bool to_pref)
+{
+	unsigned long src_util, dst_util, src_cap, dst_cap;
+
+	if (cpus_share_cache(src_cpu, dst_cpu))
+		return mig_allow;
+
+	if (!get_llc_stats(src_cpu, &src_util, &src_cap) ||
+	    !get_llc_stats(dst_cpu, &dst_util, &dst_cap))
+		return mig_allow;
+
+	if (!fits_llc_capacity(dst_util, dst_cap) &&
+	    !fits_llc_capacity(src_util, src_cap))
+		return mig_ignore;
+
+	src_util = src_util < tsk_util ? 0 : src_util - tsk_util;
+	dst_util = dst_util + tsk_util;
+	if (to_pref) {
+		/*
+		 * sysctl_llc_aggr_imb is the imbalance allowed between
+		 * preferred LLC and non-preferred LLC.
+		 * Don't migrate if we will get preferred LLC too
+		 * heavily loaded and if the dest is much busier
+		 * than the src, in which case migration will
+		 * increase the imbalance too much.
+		 */
+		if (!fits_llc_capacity(dst_util, dst_cap) &&
+		    util_greater(dst_util, src_util))
+			return mig_forbid;
+	} else {
+		/*
+		 * Don't migrate if we will leave preferred LLC
+		 * too idle, or if this migration leads to the
+		 * non-preferred LLC falls within sysctl_aggr_imb percent
+		 * of preferred LLC, leading to migration again
+		 * back to preferred LLC.
+		 */
+		if (fits_llc_capacity(src_util, src_cap) ||
+		    !util_greater(src_util, dst_util))
+			return mig_forbid;
+	}
+	return mig_allow;
+}
+
+/*
+ * Give suggestion when task p is migrated from src_cpu to dst_cpu.
+ */
+static __maybe_unused enum llc_mig_hint get_migrate_hint(int src_cpu, int dst_cpu,
+							 struct task_struct *p)
+{
+	struct mm_struct *mm;
+	int cpu;
+
+	if (cpus_share_cache(src_cpu, dst_cpu))
+		return mig_allow;
+
+	mm = p->mm;
+	if (!mm)
+		return mig_allow;
+
+	cpu = mm->mm_sched_cpu;
+	if (cpu < 0)
+		return mig_allow;
+
+	if (cpus_share_cache(dst_cpu, cpu))
+		return _get_migrate_hint(src_cpu, dst_cpu,
+					 task_util(p), true);
+	else if (cpus_share_cache(src_cpu, cpu))
+		return _get_migrate_hint(src_cpu, dst_cpu,
+					 task_util(p), false);
+	else
+		return mig_allow;
+}
+
+static int select_cache_cpu(struct task_struct *p, int prev_cpu)
+{
+	struct mm_struct *mm = p->mm;
+	int cpu;
+
+	if (!sched_feat(SCHED_CACHE) || !sched_feat(SCHED_CACHE_WAKE))
+		return prev_cpu;
+
+	if (!mm || p->nr_cpus_allowed == 1)
+		return prev_cpu;
+
+	cpu = mm->mm_sched_cpu;
+	if (cpu < 0)
+		return prev_cpu;
+
+	if (cpus_share_cache(cpu, prev_cpu))
+		return prev_cpu;
+
+	if (_get_migrate_hint(prev_cpu, cpu,
+			      task_util(p), true) == mig_forbid)
+		return prev_cpu;
+
+	if (static_branch_likely(&sched_numa_balancing) &&
+	    __migrate_degrades_locality(p, prev_cpu, cpu, false) > 0) {
+		/*
+		 * XXX look for max occupancy inside prev_cpu's node
+		 */
+		return prev_cpu;
+	}
+
+	return cpu;
+}
+#else
+static int select_cache_cpu(struct task_struct *p, int prev_cpu)
+{
+	return prev_cpu;
+}
+#endif
+
+
 /*
  * select_task_rq_fair: Select target runqueue for the waking task in domains
  * that have the relevant SD flag set. In practice, this is SD_BALANCE_WAKE,
@@ -8600,12 +9102,16 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int wake_flags)
 	 * required for stable ->cpus_allowed
 	 */
 	lockdep_assert_held(&p->pi_lock);
+	guard(rcu)();
+
 	if (wake_flags & WF_TTWU) {
 		record_wakee(p);
 
 		if ((wake_flags & WF_CURRENT_CPU) &&
 		    cpumask_test_cpu(cpu, p->cpus_ptr))
 			return cpu;
+
+		new_cpu = prev_cpu = select_cache_cpu(p, prev_cpu);
 
 		if (!is_rd_overutilized(this_rq()->rd)) {
 			new_cpu = find_energy_efficient_cpu(p, prev_cpu);
@@ -8617,7 +9123,6 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int wake_flags)
 		want_affine = !wake_wide(p) && cpumask_test_cpu(cpu, p->cpus_ptr);
 	}
 
-	rcu_read_lock();
 	for_each_domain(cpu, tmp) {
 		/*
 		 * If both 'cpu' and 'prev_cpu' are part of this domain,
@@ -8650,7 +9155,6 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int wake_flags)
 		/* Fast path */
 		new_cpu = select_idle_sibling(p, prev_cpu, new_cpu);
 	}
-	rcu_read_unlock();
 
 	return new_cpu;
 }
@@ -9225,7 +9729,8 @@ enum migration_type {
 	migrate_load = 0,
 	migrate_util,
 	migrate_task,
-	migrate_misfit
+	migrate_misfit,
+	migrate_llc_task
 };
 
 #define LBF_ALL_PINNED	0x01
@@ -9311,27 +9816,25 @@ static int task_hot(struct task_struct *p, struct lb_env *env)
  * Returns 0, if task migration is not affected by locality.
  * Returns a negative value, if task migration improves locality i.e migration preferred.
  */
-static long migrate_degrades_locality(struct task_struct *p, struct lb_env *env)
+static long __migrate_degrades_locality(struct task_struct *p, int src_cpu, int dst_cpu, bool idle)
 {
 	struct numa_group *numa_group = rcu_dereference(p->numa_group);
 	unsigned long src_weight, dst_weight;
 	int src_nid, dst_nid, dist;
 
-	if (!static_branch_likely(&sched_numa_balancing))
+	if (!p->numa_faults)
 		return 0;
 
-	if (!p->numa_faults || !(env->sd->flags & SD_NUMA))
-		return 0;
-
-	src_nid = cpu_to_node(env->src_cpu);
-	dst_nid = cpu_to_node(env->dst_cpu);
+	src_nid = cpu_to_node(src_cpu);
+	dst_nid = cpu_to_node(dst_cpu);
 
 	if (src_nid == dst_nid)
 		return 0;
 
 	/* Migrating away from the preferred node is always bad. */
 	if (src_nid == p->numa_preferred_nid) {
-		if (env->src_rq->nr_running > env->src_rq->nr_preferred_running)
+		struct rq *src_rq = cpu_rq(src_cpu);
+		if (src_rq->nr_running > src_rq->nr_preferred_running)
 			return 1;
 		else
 			return 0;
@@ -9342,7 +9845,7 @@ static long migrate_degrades_locality(struct task_struct *p, struct lb_env *env)
 		return -1;
 
 	/* Leaving a core idle is often worse than degrading locality. */
-	if (env->idle == CPU_IDLE)
+	if (idle)
 		return 0;
 
 	dist = node_distance(src_nid, dst_nid);
@@ -9357,7 +9860,24 @@ static long migrate_degrades_locality(struct task_struct *p, struct lb_env *env)
 	return src_weight - dst_weight;
 }
 
+static long migrate_degrades_locality(struct task_struct *p, struct lb_env *env)
+{
+	if (!static_branch_likely(&sched_numa_balancing))
+		return 0;
+
+	if (!(env->sd->flags & SD_NUMA))
+		return 0;
+
+	return __migrate_degrades_locality(p, env->src_cpu, env->dst_cpu,
+					   env->idle == CPU_IDLE);
+}
+
 #else
+static __maybe_unused long __migrate_degrades_locality(struct task_struct *p, int src_cpu, int dst_cpu, bool idle)
+{
+	return 0;
+}
+
 static inline long migrate_degrades_locality(struct task_struct *p,
 					     struct lb_env *env)
 {
@@ -9479,6 +9999,12 @@ int can_migrate_task(struct task_struct *p, struct lb_env *env)
 	if (env->flags & LBF_ACTIVE_LB)
 		return 1;
 
+#ifdef CONFIG_SCHED_CACHE
+	if (sched_feat(SCHED_CACHE) && sched_feat(SCHED_CACHE_LB) &&
+	    get_migrate_hint(env->src_cpu, env->dst_cpu, p) == mig_forbid)
+		return 0;
+#endif
+
 	degrades = migrate_degrades_locality(p, env);
 	if (!degrades)
 		hot = task_hot(p, env);
@@ -9543,6 +10069,68 @@ static struct task_struct *detach_one_task(struct lb_env *env)
 	return NULL;
 }
 
+#ifdef CONFIG_SCHED_CACHE
+/*
+ * Prepare lists to detach tasks in the following order:
+ * 1. tasks that prefer dst cpu's LLC
+ * 2. tasks that have no preference in LLC
+ * 3. tasks that prefer LLC other than the ones they are on
+ * 4. tasks that prefer the LLC that they are currently on.
+ */
+static struct list_head
+*order_tasks_by_llc(struct lb_env *env, struct list_head *tasks)
+{
+	struct task_struct *p;
+	LIST_HEAD(pref_old_llc);
+	LIST_HEAD(pref_new_llc);
+	LIST_HEAD(no_pref_llc);
+	LIST_HEAD(pref_other_llc);
+
+	if (!sched_feat(SCHED_CACHE) || !sched_feat(SCHED_CACHE_LB))
+		return tasks;
+
+	if (cpus_share_cache(env->dst_cpu, env->src_cpu))
+		return tasks;
+
+	while (!list_empty(tasks)) {
+		p = list_last_entry(tasks, struct task_struct, se.group_node);
+
+		if (p->preferred_llc == llc_id(env->dst_cpu)) {
+			list_move(&p->se.group_node, &pref_new_llc);
+			continue;
+		}
+
+		if (p->preferred_llc == llc_id(env->src_cpu)) {
+			list_move(&p->se.group_node, &pref_old_llc);
+			continue;
+		}
+
+		if (p->preferred_llc == -1) {
+			list_move(&p->se.group_node, &no_pref_llc);
+			continue;
+		}
+
+		list_move(&p->se.group_node, &pref_other_llc);
+	}
+
+	/*
+	 * We detach tasks from list tail in detach tasks.  Put tasks
+	 * to be chosen first at end of list.
+	 */
+	list_splice(&pref_new_llc, tasks);
+	list_splice(&no_pref_llc, tasks);
+	list_splice(&pref_other_llc, tasks);
+	list_splice(&pref_old_llc, tasks);
+	return tasks;
+}
+#else
+static inline struct list_head
+*order_tasks_by_llc(struct lb_env *env, struct list_head *tasks)
+{
+	return tasks;
+}
+#endif
+
 /*
  * detach_tasks() -- tries to detach up to imbalance load/util/tasks from
  * busiest_rq, as part of a balancing operation within domain "sd".
@@ -9551,7 +10139,7 @@ static struct task_struct *detach_one_task(struct lb_env *env)
  */
 static int detach_tasks(struct lb_env *env)
 {
-	struct list_head *tasks = &env->src_rq->cfs_tasks;
+	struct list_head *tasks;
 	unsigned long util, load;
 	struct task_struct *p;
 	int detached = 0;
@@ -9569,6 +10157,8 @@ static int detach_tasks(struct lb_env *env)
 
 	if (env->imbalance <= 0)
 		return 0;
+
+	tasks = order_tasks_by_llc(env, &env->src_rq->cfs_tasks);
 
 	while (!list_empty(tasks)) {
 		/*
@@ -9631,6 +10221,15 @@ static int detach_tasks(struct lb_env *env)
 			env->imbalance -= util;
 			break;
 
+		case migrate_llc_task:
+			/*
+			 * Since can_migrate_task() succeed, when we reach here, it means that p
+			 * can be migrated even if dst_cpu is not p's preferred_llc, because there
+			 * are no idle cores for p to do in-llc load balance.
+			 */
+			env->imbalance--;
+			break;
+
 		case migrate_task:
 			env->imbalance--;
 			break;
@@ -9665,6 +10264,18 @@ static int detach_tasks(struct lb_env *env)
 		 */
 		if (env->imbalance <= 0)
 			break;
+
+#ifdef CONFIG_SCHED_CACHE
+		/*
+		 * Don't detach more tasks if remaining tasks want to stay:
+		 * The tasks have already been sorted by order_tasks_by_llc(),
+		 * they are tasks that prefer the current LLC.
+		 */
+		if (sched_feat(SCHED_CACHE) && sched_feat(SCHED_CACHE_LB) &&
+		    p->preferred_llc != -1 &&
+		    llc_id(env->src_cpu) == p->preferred_llc)
+			break;
+#endif
 
 		continue;
 next:
@@ -9942,10 +10553,14 @@ struct sg_lb_stats {
 	enum group_type group_type;
 	unsigned int group_asym_packing;	/* Tasks should be moved to preferred CPU */
 	unsigned int group_smt_balance;		/* Task on busy SMT be moved */
+	unsigned int group_llc_balance;		/* Tasks should be moved to preferred LLC */
 	unsigned long group_misfit_task_load;	/* A CPU has a task too big for its capacity */
 #ifdef CONFIG_NUMA_BALANCING
 	unsigned int nr_numa_running;
 	unsigned int nr_preferred_running;
+#endif
+#ifdef CONFIG_SCHED_CACHE
+	unsigned int nr_pref_llc[MAX_LLC];
 #endif
 };
 
@@ -10303,6 +10918,67 @@ static inline bool smt_balance(struct lb_env *env, struct sg_lb_stats *sgs,
 	return false;
 }
 
+/*
+ * Do LLC balance on sched group that contains LLC, and have tasks preferring
+ * to run on LLC in idle dst_cpu.
+ */
+#ifdef CONFIG_SCHED_CACHE
+static inline bool llc_balance(struct lb_env *env, struct sg_lb_stats *sgs,
+			       struct sched_group *group)
+{
+	struct sched_domain *child = env->sd->child;
+	int llc;
+
+	if (!sched_feat(SCHED_CACHE) || !sched_feat(SCHED_CACHE_LB))
+		return false;
+
+	if (env->sd->flags & SD_SHARE_LLC)
+		return false;
+
+	/* only care about task migration among LLCs */
+	if (child && !(child->flags & SD_SHARE_LLC))
+		return false;
+
+	llc = llc_idx(env->dst_cpu);
+	if (sgs->nr_pref_llc[llc] > 0 &&
+	    _get_migrate_hint(env->src_cpu, env->dst_cpu,
+			      0, true) == mig_allow)
+		return true;
+
+	return false;
+}
+
+static bool update_llc_busiest(struct lb_env *env,
+			       struct sg_lb_stats *busiest,
+			       struct sg_lb_stats *sgs)
+{
+	int idx;
+
+	/* Only the candidate with llc_balance need to be taken care of */
+	if (!sgs->group_llc_balance)
+		return false;
+
+	/*
+	 * There are more tasks that want to run on dst_cpu's LLC.
+	 */
+	idx = llc_idx(env->dst_cpu);
+	return sgs->nr_pref_llc[idx] > busiest->nr_pref_llc[idx];
+}
+#else
+static inline bool llc_balance(struct lb_env *env, struct sg_lb_stats *sgs,
+			       struct sched_group *group)
+{
+	return false;
+}
+
+static bool update_llc_busiest(struct lb_env *env,
+			       struct sg_lb_stats *busiest,
+			       struct sg_lb_stats *sgs)
+{
+	return false;
+}
+#endif
+
 static inline long sibling_imbalance(struct lb_env *env,
 				    struct sd_lb_stats *sds,
 				    struct sg_lb_stats *busiest,
@@ -10351,6 +11027,43 @@ sched_reduced_capacity(struct rq *rq, struct sched_domain *sd)
 	return check_cpu_capacity(rq, sd);
 }
 
+#ifdef CONFIG_SCHED_CACHE
+/*
+ * Save this sched group's statistic for later use:
+ * The task wakeup and load balance can make better
+ * decision based on these statistics.
+ */
+static void update_sg_if_llc(struct lb_env *env, struct sg_lb_stats *sgs,
+			     struct sched_group *group)
+{
+	/* Find the sched domain that spans this group. */
+	struct sched_domain *sd = env->sd->child;
+	struct sched_domain_shared *sd_share;
+
+	if (!sched_feat(SCHED_CACHE) || env->idle == CPU_NEWLY_IDLE ||
+	    !sched_feat(SCHED_CACHE_LB))
+		return;
+
+	/* only care the sched domain that spans 1 LLC */
+	if (!sd || !(sd->flags & SD_SHARE_LLC) ||
+	    !sd->parent || (sd->parent->flags & SD_SHARE_LLC))
+		return;
+
+	sd_share = rcu_dereference(per_cpu(sd_llc_shared,
+				   cpumask_first(sched_group_span(group))));
+	if (!sd_share)
+		return;
+
+	if (likely(READ_ONCE(sd_share->util_avg) != sgs->group_util))
+		WRITE_ONCE(sd_share->util_avg, sgs->group_util);
+}
+#else
+static inline void update_sg_if_llc(struct lb_env *env, struct sg_lb_stats *sgs,
+				    struct sched_group *group)
+{
+}
+#endif
+
 /**
  * update_sg_lb_stats - Update sched_group's statistics for load balancing.
  * @env: The load balancing environment.
@@ -10389,6 +11102,14 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 		if (cpu_overutilized(i))
 			*sg_overutilized = 1;
 
+#ifdef CONFIG_SCHED_CACHE
+		if (sched_feat(SCHED_CACHE) && sched_feat(SCHED_CACHE_LB)) {
+			int j;
+
+			for (j = 0; j < max_llcs; ++j)
+				sgs->nr_pref_llc[j] += rq->nr_pref_llc[j];
+		}
+#endif
 		/*
 		 * No need to call idle_cpu() if nr_running is not 0
 		 */
@@ -10440,6 +11161,12 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 
 	sgs->group_type = group_classify(env->sd->imbalance_pct, group, sgs);
 
+	update_sg_if_llc(env, sgs, group);
+
+	/* Check for tasks in this group can be moved to their preferred LLC */
+	if (!local_group && llc_balance(env, sgs, group))
+		sgs->group_llc_balance = 1;
+
 	/* Computing avg_load makes sense only when group is overloaded */
 	if (sgs->group_type == group_overloaded)
 		sgs->avg_load = (sgs->group_load * SCHED_CAPACITY_SCALE) /
@@ -10480,6 +11207,14 @@ static bool update_sd_pick_busiest(struct lb_env *env,
 	    (sgs->group_type == group_misfit_task) &&
 	    (!capacity_greater(capacity_of(env->dst_cpu), sg->sgc->max_capacity) ||
 	     sds->local_stat.group_type != group_has_spare))
+		return false;
+
+	/* deal with prefer LLC load balance, if failed, fall into normal load balance */
+	if (update_llc_busiest(env, busiest, sgs))
+		return true;
+
+	/* if there is already a busy group, skip the normal load balance */
+	if (busiest->group_llc_balance)
 		return false;
 
 	if (sgs->group_type > busiest->group_type)
@@ -11145,6 +11880,15 @@ static inline void calculate_imbalance(struct lb_env *env, struct sd_lb_stats *s
 		return;
 	}
 
+#ifdef CONFIG_SCHED_CACHE
+	if (busiest->group_llc_balance) {
+		/* Move a task that prefer local LLC */
+		env->migration_type = migrate_llc_task;
+		env->imbalance = 1;
+		return;
+	}
+#endif
+
 	if (busiest->group_type == group_imbalanced) {
 		/*
 		 * In the group_imb case we cannot rely on group-wide averages
@@ -11389,9 +12133,11 @@ static struct sched_group *sched_balance_find_src_group(struct lb_env *env)
 	/*
 	 * Try to move all excess tasks to a sibling domain of the busiest
 	 * group's child domain.
+	 * Also do so if we can move some tasks that prefer the local LLC.
 	 */
 	if (sds.prefer_sibling && local->group_type == group_has_spare &&
-	    sibling_imbalance(env, &sds, busiest, local) > 1)
+	    (busiest->group_llc_balance ||
+	    sibling_imbalance(env, &sds, busiest, local) > 1))
 		goto force_balance;
 
 	if (busiest->group_type != group_overloaded) {
@@ -11451,6 +12197,10 @@ static struct rq *sched_balance_find_src_rq(struct lb_env *env,
 	struct rq *busiest = NULL, *rq;
 	unsigned long busiest_util = 0, busiest_load = 0, busiest_capacity = 1;
 	unsigned int busiest_nr = 0;
+#ifdef CONFIG_SCHED_CACHE
+	unsigned int busiest_pref_llc = 0;
+	int dst_llc;
+#endif
 	int i;
 
 	for_each_cpu_and(i, sched_group_span(group), env->cpus) {
@@ -11559,6 +12309,16 @@ static struct rq *sched_balance_find_src_rq(struct lb_env *env,
 			}
 			break;
 
+		case migrate_llc_task:
+#ifdef CONFIG_SCHED_CACHE
+			dst_llc = llc_idx(env->dst_cpu);
+			if (!cpus_share_cache(env->dst_cpu, rq->cpu) &&
+			    busiest_pref_llc < rq->nr_pref_llc[dst_llc]) {
+				busiest_pref_llc = rq->nr_pref_llc[dst_llc];
+				busiest = rq;
+			}
+#endif
+			break;
 		case migrate_task:
 			if (busiest_nr < nr_running) {
 				busiest_nr = nr_running;
@@ -11625,9 +12385,42 @@ imbalanced_active_balance(struct lb_env *env)
 	return 0;
 }
 
+#ifdef CONFIG_SCHED_CACHE
+static inline bool
+break_llc_locality(struct lb_env *env)
+{
+	if (!sched_feat(SCHED_CACHE) || !sched_feat(SCHED_CACHE_LB))
+		return 0;
+
+	if (cpus_share_cache(env->src_cpu, env->dst_cpu))
+		return 0;
+	/*
+	 * All tasks want to stay put. Move only if LLC is
+	 * heavily loaded or don't pull a task from its
+	 * preferred CPU if it is the only one running.
+	 */
+	if (env->src_rq->nr_pref_llc_running == env->src_rq->cfs.h_nr_runnable &&
+	    (env->src_rq->nr_running <= 1 ||
+	    _get_migrate_hint(env->src_cpu, env->dst_cpu,
+			      0, false) == mig_forbid))
+		return 1;
+
+	return 0;
+}
+#else
+static inline bool
+break_llc_locality(struct lb_env *env)
+{
+	return 0;
+}
+#endif
+
 static int need_active_balance(struct lb_env *env)
 {
 	struct sched_domain *sd = env->sd;
+
+	if (break_llc_locality(env))
+		return 0;
 
 	if (asym_active_balance(env))
 		return 1;
@@ -11648,7 +12441,8 @@ static int need_active_balance(struct lb_env *env)
 			return 1;
 	}
 
-	if (env->migration_type == migrate_misfit)
+	if (env->migration_type == migrate_misfit ||
+	    env->migration_type == migrate_llc_task)
 		return 1;
 
 	return 0;
@@ -11740,6 +12534,8 @@ static void update_lb_imbalance_stat(struct lb_env *env, struct sched_domain *sd
 		break;
 	case migrate_misfit:
 		__schedstat_add(sd->lb_imbalance_misfit[idle], env->imbalance);
+		break;
+	case migrate_llc_task:
 		break;
 	}
 }
@@ -12091,9 +12887,20 @@ static int active_load_balance_cpu_stop(void *data)
 		goto out_unlock;
 
 	/* Is there any task to move? */
-	if (busiest_rq->nr_running <= 1)
-		goto out_unlock;
+	if (busiest_rq->nr_running <= 1) {
+#ifdef CONFIG_SCHED_CACHE
+		int llc = llc_idx(target_cpu);
 
+		if (!sched_feat(SCHED_CACHE) || !sched_feat(SCHED_CACHE_LB))
+			goto out_unlock;
+
+		if (llc < 0)
+			goto out_unlock;
+		/* don't migrate if task does not prefer target */
+		if (busiest_rq->nr_pref_llc[llc] < 1)
+#endif
+			goto out_unlock;
+	}
 	/*
 	 * This condition is "impossible", if it occurs
 	 * we need to fix it. Originally reported by
@@ -13117,8 +13924,8 @@ static inline void task_tick_core(struct rq *rq, struct task_struct *curr) {}
  */
 static void task_tick_fair(struct rq *rq, struct task_struct *curr, int queued)
 {
-	struct cfs_rq *cfs_rq;
 	struct sched_entity *se = &curr->se;
+	struct cfs_rq *cfs_rq;
 
 	for_each_sched_entity(se) {
 		cfs_rq = cfs_rq_of(se);
@@ -13127,6 +13934,8 @@ static void task_tick_fair(struct rq *rq, struct task_struct *curr, int queued)
 
 	if (static_branch_unlikely(&sched_numa_balancing))
 		task_tick_numa(rq, curr);
+
+	task_tick_cache(rq, curr);
 
 	update_misfit_status(curr, rq);
 	check_update_overutilized_status(task_rq(curr));
