@@ -49,7 +49,6 @@ struct drm_mock_scheduler {
 
 	spinlock_t		lock;
 	struct list_head	job_list;
-	struct list_head	done_list;
 
 	struct {
 		u64		context;
@@ -106,7 +105,6 @@ struct drm_mock_sched_job {
 	unsigned int		duration_us;
 	ktime_t			finish_at;
 
-	spinlock_t		lock;
 	struct dma_fence	hw_fence;
 
 	struct kunit		*test;
