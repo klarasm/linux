@@ -71,6 +71,9 @@ static void iomap_set_range_uptodate(struct folio *folio, size_t off,
 	unsigned long flags;
 	bool uptodate = true;
 
+	if (folio_test_uptodate(folio))
+		return;
+
 	if (ifs) {
 		spin_lock_irqsave(&ifs->state_lock, flags);
 		uptodate = ifs_set_range_uptodate(folio, ifs, off, len);
@@ -923,8 +926,7 @@ static bool iomap_write_end(struct iomap_iter *iter, size_t len, size_t copied,
 	if (srcmap->flags & IOMAP_F_BUFFER_HEAD) {
 		size_t bh_written;
 
-		bh_written = block_write_end(NULL, iter->inode->i_mapping, pos,
-					len, copied, folio, NULL);
+		bh_written = block_write_end(pos, len, copied, folio);
 		WARN_ON_ONCE(bh_written != copied && bh_written != 0);
 		return bh_written == copied;
 	}
