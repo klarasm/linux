@@ -1112,6 +1112,7 @@ static void unmap_source_vma(struct vma_remap_struct *vrm)
 
 	err = do_vmi_munmap(&vmi, mm, addr, len, vrm->uf_unmap, /* unlock= */false);
 	vrm->vma = NULL; /* Invalidated. */
+	vrm->vmi_needs_reset = true;
 	if (err) {
 		/* OOM: unable to split vma, just get accounts right */
 		vm_acct_memory(len >> PAGE_SHIFT);
@@ -1367,6 +1368,7 @@ static unsigned long mremap_to(struct vma_remap_struct *vrm)
 		err = do_munmap(mm, vrm->new_addr, vrm->new_len,
 				vrm->uf_unmap_early);
 		vrm->vma = NULL; /* Invalidated. */
+		vrm->vmi_needs_reset = true;
 		if (err)
 			return err;
 
@@ -1649,7 +1651,7 @@ static int check_prep_vma(struct vma_remap_struct *vrm)
 		return -EFAULT;
 
 	/* If mseal()'d, mremap() is prohibited. */
-	if (!can_modify_vma(vma))
+	if (vma_is_sealed(vma))
 		return -EPERM;
 
 	/* Align to hugetlb page size, if required. */
