@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/watchdog/brcm,kona-wdt.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Spacemit K1 watchdog
+
+description: |
+  The Spacemit K1 watchdog supports the Spacemit K1 Soc
+
+maintainers:
+  - Klara Modin <klarasmodin@gmail.com>
+
+allOf:
+  - $ref: watchdog.yaml#
+
+properties:
+  compatible:
+    items:
+      - const: spacemit,k1-wdt
+
+  reg:
+    maxItems: 1
+
+required:
+  - compatible
+  - reg
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    watchdog: watchdog@d4080000 {
+            compatible = "spacemit,k1-wdt";
+            reg = <0x0 0xd4080000 0x0 0xff>;
+    };
