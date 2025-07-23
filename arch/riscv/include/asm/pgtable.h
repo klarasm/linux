@@ -541,6 +541,12 @@ static inline void update_mmu_cache_pmd(struct vm_area_struct *vma,
 	update_mmu_cache(vma, address, ptep);
 }
 
+/*
+ * Request exec memory is read into pagecache in at least 64K folios. Once
+ * Svnapot is utilized for mTHP, this should result in better iTLB utilization.
+ */
+#define exec_folio_order() ilog2(SZ_64K >> PAGE_SHIFT)
+
 #define __HAVE_ARCH_PTE_SAME
 static inline int pte_same(pte_t pte_a, pte_t pte_b)
 {
