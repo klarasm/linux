@@ -30,6 +30,7 @@
 #include <linux/msi.h>
 #include <linux/of.h>
 #include <linux/aperture.h>
+#include <asm/video.h>
 #include "pci.h"
 
 #ifndef ARCH_PCI_DEV_GROUPS
@@ -679,6 +680,13 @@ const struct attribute_group *pcibus_groups[] = {
 	NULL,
 };
 
+static ssize_t boot_display_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "1\n");
+}
+static DEVICE_ATTR_RO(boot_display);
+
 static ssize_t boot_vga_show(struct device *dev, struct device_attribute *attr,
 			     char *buf)
 {
@@ -857,7 +865,7 @@ static size_t pci_dev_config_attr_bin_size(struct kobject *kobj,
 }
 
 static const struct attribute_group pci_dev_config_attr_group = {
-	.bin_attrs_new = pci_dev_config_attrs,
+	.bin_attrs = pci_dev_config_attrs,
 	.bin_size = pci_dev_config_attr_bin_size,
 };
 
@@ -1004,8 +1012,8 @@ void pci_create_legacy_files(struct pci_bus *b)
 	b->legacy_io->attr.name = "legacy_io";
 	b->legacy_io->size = 0xffff;
 	b->legacy_io->attr.mode = 0600;
-	b->legacy_io->read_new = pci_read_legacy_io;
-	b->legacy_io->write_new = pci_write_legacy_io;
+	b->legacy_io->read = pci_read_legacy_io;
+	b->legacy_io->write = pci_write_legacy_io;
 	/* See pci_create_attr() for motivation */
 	b->legacy_io->llseek = pci_llseek_resource;
 	b->legacy_io->mmap = pci_mmap_legacy_io;
@@ -1050,6 +1058,37 @@ void pci_remove_legacy_files(struct pci_bus *b)
 	}
 }
 #endif /* HAVE_PCI_LEGACY */
+
+/**
+ * pci_create_boot_display_file - create "boot_display"
+ * @pdev: dev in question
+ *
+ * Create "boot_display" in sysfs for the PCI device @pdev if it is the
+ * boot display device.
+ */
+static int pci_create_boot_display_file(struct pci_dev *pdev)
+{
+#ifdef CONFIG_VIDEO
+	if (video_is_primary_device(&pdev->dev))
+		return sysfs_create_file(&pdev->dev.kobj, &dev_attr_boot_display.attr);
+#endif
+	return 0;
+}
+
+/**
+ * pci_remove_boot_display_file - remove "boot_display"
+ * @pdev: dev in question
+ *
+ * Remove "boot_display" in sysfs for the PCI device @pdev if it is the
+ * boot display device.
+ */
+static void pci_remove_boot_display_file(struct pci_dev *pdev)
+{
+#ifdef CONFIG_VIDEO
+	if (video_is_primary_device(&pdev->dev))
+		sysfs_remove_file(&pdev->dev.kobj, &dev_attr_boot_display.attr);
+#endif
+}
 
 #if defined(HAVE_PCI_MMAP) || defined(ARCH_GENERIC_PCI_MMAP_RESOURCE)
 /**
@@ -1211,8 +1250,8 @@ static int pci_create_attr(struct pci_dev *pdev, int num, int write_combine)
 	} else {
 		sprintf(res_attr_name, "resource%d", num);
 		if (pci_resource_flags(pdev, num) & IORESOURCE_IO) {
-			res_attr->read_new = pci_read_resource_io;
-			res_attr->write_new = pci_write_resource_io;
+			res_attr->read = pci_read_resource_io;
+			res_attr->write = pci_write_resource_io;
 			if (arch_can_pci_mmap_io())
 				res_attr->mmap = pci_mmap_resource_uc;
 		} else {
@@ -1377,7 +1416,7 @@ static size_t pci_dev_rom_attr_bin_size(struct kobject *kobj,
 }
 
 static const struct attribute_group pci_dev_rom_attr_group = {
-	.bin_attrs_new = pci_dev_rom_attrs,
+	.bin_attrs = pci_dev_rom_attrs,
 	.is_bin_visible = pci_dev_rom_attr_is_visible,
 	.bin_size = pci_dev_rom_attr_bin_size,
 };
@@ -1654,8 +1693,14 @@ static const struct attribute_group pci_dev_resource_resize_group = {
 
 int __must_check pci_create_sysfs_dev_files(struct pci_dev *pdev)
 {
+	int retval;
+
 	if (!sysfs_initialized)
 		return -EACCES;
+
+	retval = pci_create_boot_display_file(pdev);
+	if (retval)
+		return retval;
 
 	return pci_create_resource_files(pdev);
 }
@@ -1671,6 +1716,7 @@ void pci_remove_sysfs_dev_files(struct pci_dev *pdev)
 	if (!sysfs_initialized)
 		return;
 
+	pci_remove_boot_display_file(pdev);
 	pci_remove_resource_files(pdev);
 }
 

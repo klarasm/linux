@@ -58,7 +58,7 @@ ENTRY(ret_to_user)
 	mov	r0, sp				@ 'regs'
 	bl	arm_exit_to_user_mode
 
-#ifdef CONFIG_GCC_PLUGIN_STACKLEAK
+#ifdef CONFIG_KSTACK_ERASE
 	bl	stackleak_erase_on_task_stack
 #endif
 	restore_user_regs
