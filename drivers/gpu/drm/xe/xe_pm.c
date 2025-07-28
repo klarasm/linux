@@ -19,9 +19,11 @@
 #include "xe_ggtt.h"
 #include "xe_gt.h"
 #include "xe_guc.h"
+#include "xe_i2c.h"
 #include "xe_irq.h"
 #include "xe_pcode.h"
 #include "xe_pxp.h"
+#include "xe_sriov_vf_ccs.h"
 #include "xe_trace.h"
 #include "xe_wa.h"
 
@@ -146,6 +148,8 @@ int xe_pm_suspend(struct xe_device *xe)
 
 	xe_display_pm_suspend_late(xe);
 
+	xe_i2c_pm_suspend(xe);
+
 	drm_dbg(&xe->drm, "Device suspended\n");
 	return 0;
 
@@ -189,6 +193,8 @@ int xe_pm_resume(struct xe_device *xe)
 	err = xe_bo_restore_early(xe);
 	if (err)
 		goto err;
+
+	xe_i2c_pm_resume(xe, xe->d3cold.allowed);
 
 	xe_irq_resume(xe);
 
@@ -487,6 +493,8 @@ int xe_pm_runtime_suspend(struct xe_device *xe)
 
 	xe_display_pm_runtime_suspend_late(xe);
 
+	xe_i2c_pm_suspend(xe);
+
 	xe_rpm_lockmap_release(xe);
 	xe_pm_write_callback_task(xe, NULL);
 	return 0;
@@ -534,6 +542,8 @@ int xe_pm_runtime_resume(struct xe_device *xe)
 			goto out;
 	}
 
+	xe_i2c_pm_resume(xe, xe->d3cold.allowed);
+
 	xe_irq_resume(xe);
 
 	for_each_gt(gt, xe, id)
@@ -548,6 +558,9 @@ int xe_pm_runtime_resume(struct xe_device *xe)
 	}
 
 	xe_pxp_pm_resume(xe->pxp);
+
+	if (IS_SRIOV_VF(xe))
+		xe_sriov_vf_ccs_register_context(xe);
 
 out:
 	xe_rpm_lockmap_release(xe);
