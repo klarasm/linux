@@ -152,6 +152,18 @@ config ZSWAP_ZPOOL_DEFAULT
        default "zsmalloc" if ZSWAP_ZPOOL_DEFAULT_ZSMALLOC
        default ""
 
+config ZBLOCK
+	tristate "Fast compression allocator with high density"
+	depends on ZPOOL
+	help
+	  A special purpose allocator for storing compressed pages.
+	  It stores integer number of same size compressed objects per
+	  its block. These blocks consist of several physical pages
+	  (2**n, i. e. 1/2/4/8).
+
+	  With zblock, it is possible to densely arrange objects of
+	  various sizes resulting in low internal fragmentation.
+
 config ZSMALLOC
 	tristate
 	prompt "N:1 compression allocator (zsmalloc)" if (ZSWAP || ZRAM)
@@ -1240,10 +1252,6 @@ config KMAP_LOCAL
 	bool
 
 config KMAP_LOCAL_NON_LINEAR_PTE_ARRAY
-	bool
-
-# struct io_mapping based helper.  Selected by drivers that need them
-config IO_MAPPING
 	bool
 
 config MEMFD_CREATE
