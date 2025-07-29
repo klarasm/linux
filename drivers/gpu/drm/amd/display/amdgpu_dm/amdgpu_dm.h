@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 /*
  * Copyright (C) 2015-2020 Advanced Micro Devices, Inc. All rights reserved.
  *
@@ -636,8 +637,9 @@ struct amdgpu_display_manager {
 	 * @bb_from_dmub:
 	 *
 	 * Bounding box data read from dmub during early initialization for DCN4+
+	 * Data is stored as a byte array that should be casted to the appropriate bb struct
 	 */
-	struct dml2_soc_bb *bb_from_dmub;
+	void *bb_from_dmub;
 
 	/**
 	 * @oem_i2c:
