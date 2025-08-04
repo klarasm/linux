@@ -1622,7 +1622,7 @@ int folio_alloc_swap(struct folio *folio, gfp_t gfp)
 		return -ENOMEM;
 	}
 
-	if (mem_cgroup_try_charge_swap(folio, folio->swap)) {
+	if (mem_cgroup_try_charge_swap(folio)) {
 		swap_cache_del_folio(folio);
 		return -ENOMEM;
 	}
