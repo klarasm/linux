@@ -129,6 +129,11 @@ static bool zswap_shrinker_enabled = IS_ENABLED(
 		CONFIG_ZSWAP_SHRINKER_DEFAULT_ON);
 module_param_named(shrinker_enabled, zswap_shrinker_enabled, bool, 0644);
 
+/* Enable/disable incompressible pages storing */
+static bool zswap_save_incompressible_pages;
+module_param_named(save_incompressible_pages, zswap_save_incompressible_pages,
+		bool, 0644);
+
 bool zswap_is_enabled(void)
 {
 	return zswap_enabled;
@@ -937,6 +942,29 @@ static void acomp_ctx_put_unlock(struct crypto_acomp_ctx *acomp_ctx)
 	mutex_unlock(&acomp_ctx->mutex);
 }
 
+/*
+ * Determine whether to save given page as-is.
+ *
+ * If a page cannot be compressed into a size smaller than PAGE_SIZE, it can be
+ * beneficial to saving the content as is without compression, to keep the LRU
+ * order.  This can increase memory overhead from metadata, but in common zswap
+ * use cases where there are sufficient amount of compressible pages, the
+ * overhead should be not critical, and can be mitigated by the writeback.
+ * Also, the decompression overhead is optimized.
+ *
+ * When the writeback is disabled, however, the additional overhead could be
+ * problematic.  For the case, just return the failure.  swap_writeout() will
+ * put the page back to the active LRU list in the case.
+ */
+static bool zswap_save_as_is(int comp_ret, unsigned int dlen,
+		struct page *page)
+{
+	return zswap_save_incompressible_pages &&
+			(comp_ret || dlen == PAGE_SIZE) &&
+			mem_cgroup_zswap_writeback_enabled(
+					folio_memcg(page_folio(page)));
+}
+
 static bool zswap_compress(struct page *page, struct zswap_entry *entry,
 			   struct zswap_pool *pool)
 {
@@ -976,8 +1004,13 @@ static bool zswap_compress(struct page *page, struct zswap_entry *entry,
 	 */
 	comp_ret = crypto_wait_req(crypto_acomp_compress(acomp_ctx->req), &acomp_ctx->wait);
 	dlen = acomp_ctx->req->dlen;
-	if (comp_ret)
+	if (zswap_save_as_is(comp_ret, dlen, page)) {
+		comp_ret = 0;
+		dlen = PAGE_SIZE;
+		memcpy_from_page(dst, page, 0, dlen);
+	} else if (comp_ret) {
 		goto unlock;
+	}
 
 	zpool = pool->zpool;
 	gfp = GFP_NOWAIT | __GFP_NORETRY | __GFP_HIGHMEM | __GFP_MOVABLE;
@@ -1001,6 +1034,17 @@ unlock:
 	return comp_ret == 0 && alloc_ret == 0;
 }
 
+/*
+ * If save_incompressible_pages is set and writeback is enabled, incompressible
+ * pages are saved as is without compression.  For more details, refer to the
+ * comments of zswap_save_as_is().
+ */
+static bool zswap_saved_as_is(struct zswap_entry *entry, struct folio *folio)
+{
+	return entry->length == PAGE_SIZE && zswap_save_incompressible_pages &&
+		mem_cgroup_zswap_writeback_enabled(folio_memcg(folio));
+}
+
 static bool zswap_decompress(struct zswap_entry *entry, struct folio *folio)
 {
 	struct zpool *zpool = entry->pool->zpool;
@@ -1011,6 +1055,13 @@ static bool zswap_decompress(struct zswap_entry *entry, struct folio *folio)
 
 	acomp_ctx = acomp_ctx_get_cpu_lock(entry->pool);
 	obj = zpool_obj_read_begin(zpool, entry->handle, acomp_ctx->buffer);
+
+	if (zswap_saved_as_is(entry, folio)) {
+		memcpy_to_folio(folio, 0, obj, entry->length);
+		zpool_obj_read_end(zpool, entry->handle, obj);
+		acomp_ctx_put_unlock(acomp_ctx);
+		return true;
+	}
 
 	/*
 	 * zpool_obj_read_begin() might return a kmap address of highmem when
