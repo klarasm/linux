@@ -1041,8 +1041,7 @@ unlock:
  */
 static bool zswap_saved_as_is(struct zswap_entry *entry, struct folio *folio)
 {
-	return entry->length == PAGE_SIZE && zswap_save_incompressible_pages &&
-		mem_cgroup_zswap_writeback_enabled(folio_memcg(folio));
+	return entry->length == PAGE_SIZE;
 }
 
 static bool zswap_decompress(struct zswap_entry *entry, struct folio *folio)
