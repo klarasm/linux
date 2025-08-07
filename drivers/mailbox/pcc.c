@@ -857,19 +857,19 @@ static int pcc_mbox_probe(struct platform_device *pdev)
 					 GFP_KERNEL);
 	if (!pcc_mbox_channels) {
 		rc = -ENOMEM;
-		goto put_table;
+		goto err;
 	}
 
 	chan_info = devm_kcalloc(dev, count, sizeof(*chan_info), GFP_KERNEL);
 	if (!chan_info) {
 		rc = -ENOMEM;
-		goto put_table;
+		goto err;
 	}
 
 	pcc_mbox_ctrl = devm_kzalloc(dev, sizeof(*pcc_mbox_ctrl), GFP_KERNEL);
 	if (!pcc_mbox_ctrl) {
 		rc = -ENOMEM;
-		goto put_table;
+		goto err;
 	}
 
 	/* Point to the first PCC subspace entry */
@@ -890,17 +890,17 @@ static int pcc_mbox_probe(struct platform_device *pdev)
 		    !pcc_mbox_ctrl->txdone_irq) {
 			pr_err("Platform Interrupt flag must be set to 1");
 			rc = -EINVAL;
-			goto put_table;
+			goto err;
 		}
 
 		if (pcc_mbox_ctrl->txdone_irq) {
 			rc = pcc_parse_subspace_irq(pchan, pcct_entry);
 			if (rc < 0)
-				goto put_table;
+				goto err;
 		}
 		rc = pcc_parse_subspace_db_reg(pchan, pcct_entry);
 		if (rc < 0)
-			goto put_table;
+			goto err;
 
 		pcc_parse_subspace_shmem(pchan, pcct_entry);
 
@@ -921,8 +921,9 @@ static int pcc_mbox_probe(struct platform_device *pdev)
 	rc = mbox_controller_register(pcc_mbox_ctrl);
 	if (rc)
 		pr_err("Err registering PCC as Mailbox controller: %d\n", rc);
-
-put_table:
+	else
+		return 0;
+err:
 	acpi_put_table(pcct_tbl);
 	return rc;
 }
