@@ -71,6 +71,7 @@
 #include <linux/unwind_deferred.h>
 #include <linux/uaccess.h>
 #include <linux/pidfs.h>
+#include <linux/vmalloc.h>
 
 #include <uapi/linux/wait.h>
 
@@ -780,24 +781,44 @@ static void exit_notify(struct task_struct *tsk, int group_dead)
 }
 
 #ifdef CONFIG_DEBUG_STACK_USAGE
+#ifdef CONFIG_STACK_GROWSUP
 unsigned long stack_not_used(struct task_struct *p)
 {
 	unsigned long *n = end_of_stack(p);
 
 	do {	/* Skip over canary */
-# ifdef CONFIG_STACK_GROWSUP
 		n--;
-# else
-		n++;
-# endif
 	} while (!*n);
 
-# ifdef CONFIG_STACK_GROWSUP
 	return (unsigned long)end_of_stack(p) - (unsigned long)n;
-# else
-	return (unsigned long)n - (unsigned long)end_of_stack(p);
-# endif
 }
+#else /* !CONFIG_STACK_GROWSUP */
+#ifdef CONFIG_DYNAMIC_STACK
+unsigned long stack_not_used(struct task_struct *p)
+{
+	struct vm_struct *vm_area = p->stack_vm_area;
+	unsigned long alloc_size = vm_area->nr_pages << PAGE_SHIFT;
+	unsigned long stack = (unsigned long)p->stack;
+	unsigned long *n = (unsigned long *)(stack + THREAD_SIZE - alloc_size);
+
+	while (!*n)
+		n++;
+
+	return (unsigned long)n - stack;
+}
+#else
+unsigned long stack_not_used(struct task_struct *p)
+{
+	unsigned long *n = end_of_stack(p);
+
+	do {	/* Skip over canary */
+		n++;
+	} while (!*n);
+
+	return (unsigned long)n - (unsigned long)end_of_stack(p);
+}
+#endif /* CONFIG_DYNAMIC_STACK */
+#endif /* CONFIG_STACK_GROWSUP */
 
 /* Count the maximum pages reached in kernel stacks */
 static inline void kstack_histogram(unsigned long used_stack)
@@ -856,9 +877,9 @@ static void check_stack_usage(void)
 	}
 	spin_unlock(&low_water_lock);
 }
-#else
+#else /* !CONFIG_DEBUG_STACK_USAGE */
 static inline void check_stack_usage(void) {}
-#endif
+#endif /* CONFIG_DEBUG_STACK_USAGE */
 
 static void synchronize_group_exit(struct task_struct *tsk, long code)
 {
