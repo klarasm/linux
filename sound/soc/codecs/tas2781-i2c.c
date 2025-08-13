@@ -1480,7 +1480,7 @@ static ssize_t acoustic_ctl_write(struct file *file,
 		return PTR_ERR(src);
 
 	if (src[0] > max_pkg_len && src[0] != count) {
-		dev_err(priv->dev, "pkg(%u), max(%u), count(%u) dismatch.\n",
+		dev_err(priv->dev, "pkg(%u), max(%u), count(%u) mismatch.\n",
 			src[0], max_pkg_len, (unsigned int)count);
 		ret = 0;
 		goto exit;
@@ -1640,6 +1640,12 @@ static void tasdevice_fw_ready(const struct firmware *fmw,
 
 	tasdevice_prmg_load(tas_priv, 0);
 	tas_priv->cur_prog = 0;
+
+	/* Init common setting for different audio profiles */
+	if (tas_priv->rcabin.init_profile_id >= 0)
+		tasdevice_select_cfg_blk(tas_priv,
+			tas_priv->rcabin.init_profile_id,
+			TASDEVICE_BIN_BLK_PRE_POWER_UP);
 
 #ifdef CONFIG_SND_SOC_TAS2781_ACOUST_I2C
 	if (tas_priv->name_prefix)

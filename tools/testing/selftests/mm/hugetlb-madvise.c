@@ -50,12 +50,14 @@ void read_fault_pages(void *addr, unsigned long nr_pages)
 	unsigned long i;
 
 	for (i = 0; i < nr_pages; i++) {
+		unsigned long *addr2 =
+			((unsigned long *)(addr + (i * huge_page_size)));
 		/* Prevent the compiler from optimizing out the entire loop: */
-		FORCE_READ(((unsigned long *)(addr + (i * huge_page_size))));
+		FORCE_READ(*addr2);
 	}
 }
 
-int main(int argc, char **argv)
+int main(int __unused argc, char **argv)
 {
 	unsigned long free_hugepages;
 	void *addr, *addr2;

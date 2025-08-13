@@ -23,7 +23,7 @@
  * anything with it in order to trigger a read page fault. We therefore must use
  * volatile to stop the compiler from optimising this away.
  */
-#define FORCE_READ(x) (*(volatile typeof(x) *)x)
+#define FORCE_READ(x) (*(const volatile typeof(x) *)&(x))
 
 extern unsigned int __page_size;
 extern unsigned int __page_shift;
@@ -93,6 +93,7 @@ int uffd_register_with_ioctls(int uffd, void *addr, uint64_t len,
 			      bool miss, bool wp, bool minor, uint64_t *ioctls);
 unsigned long get_free_hugepages(void);
 bool check_vmflag_io(void *addr);
+bool check_vmflag_pfnmap(void *addr);
 int open_procmap(pid_t pid, struct procmap_fd *procmap_out);
 int query_procmap(struct procmap_fd *procmap);
 bool find_vma_procmap(struct procmap_fd *procmap, void *address);
