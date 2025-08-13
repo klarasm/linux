@@ -181,10 +181,6 @@ unsafe impl Allocator for KVmalloc {
         flags: Flags,
         nid: NumaNode,
     ) -> Result<NonNull<[u8]>, AllocError> {
-        // `KVmalloc` may use the `Kmalloc` backend, hence we have to enforce a `Kmalloc`
-        // compatible layout.
-        let layout = Kmalloc::aligned_layout(layout);
-
         // SAFETY: If not `None`, `ptr` is guaranteed to point to valid memory, which was previously
         // allocated with this `Allocator`.
         unsafe { ReallocFunc::KVREALLOC.call(ptr, layout, old_layout, flags, nid) }

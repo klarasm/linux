@@ -60,6 +60,8 @@ static u64 zswap_written_back_pages;
 static u64 zswap_reject_reclaim_fail;
 /* Store failed due to compression algorithm failure */
 static u64 zswap_reject_compress_fail;
+/* Compression into a size of <PAGE_SIZE failed */
+static u64 zswap_compress_fail;
 /* Compressed page was too big for the allocator to (optimally) store */
 static u64 zswap_reject_compress_poor;
 /* Load or writeback failed due to decompression failure */
@@ -985,13 +987,14 @@ static bool zswap_compress(struct page *page, struct zswap_entry *entry,
 	 * to the active LRU list in the case.
 	 */
 	if (comp_ret || dlen >= PAGE_SIZE) {
+		zswap_compress_fail++;
 		if (mem_cgroup_zswap_writeback_enabled(
 					folio_memcg(page_folio(page)))) {
 			comp_ret = 0;
 			dlen = PAGE_SIZE;
-			memcpy_from_page(dst, page, 0, dlen);
+			dst = kmap_local_page(page);
 		} else {
-			comp_ret = comp_ret ? : -EINVAL;
+			comp_ret = comp_ret ? comp_ret : -EINVAL;
 			goto unlock;
 		}
 	}
@@ -1007,6 +1010,8 @@ static bool zswap_compress(struct page *page, struct zswap_entry *entry,
 	entry->length = dlen;
 
 unlock:
+	if (dst != acomp_ctx->buffer)
+		kunmap_local(dst);
 	if (comp_ret == -ENOSPC || alloc_ret == -ENOSPC)
 		zswap_reject_compress_poor++;
 	else if (comp_ret)
@@ -1029,7 +1034,7 @@ static bool zswap_decompress(struct zswap_entry *entry, struct folio *folio)
 	acomp_ctx = acomp_ctx_get_cpu_lock(entry->pool);
 	obj = zpool_obj_read_begin(zpool, entry->handle, acomp_ctx->buffer);
 
-	/* zswap entries of PAGE_SIZE are not compressed. */
+	/* zswap entries of length PAGE_SIZE are not compressed. */
 	if (entry->length == PAGE_SIZE) {
 		memcpy_to_folio(folio, 0, obj, entry->length);
 		zpool_obj_read_end(zpool, entry->handle, obj);
@@ -1834,6 +1839,8 @@ static int zswap_debugfs_init(void)
 			   zswap_debugfs_root, &zswap_reject_kmemcache_fail);
 	debugfs_create_u64("reject_compress_fail", 0444,
 			   zswap_debugfs_root, &zswap_reject_compress_fail);
+	debugfs_create_u64("compress_fail", 0444,
+			   zswap_debugfs_root, &zswap_compress_fail);
 	debugfs_create_u64("reject_compress_poor", 0444,
 			   zswap_debugfs_root, &zswap_reject_compress_poor);
 	debugfs_create_u64("decompress_fail", 0444,
