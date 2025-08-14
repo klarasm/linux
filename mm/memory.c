@@ -4522,7 +4522,8 @@ static unsigned long thp_swapin_suiltable_orders(struct vm_fault *vmf,
 }
 #else /* !CONFIG_TRANSPARENT_HUGEPAGE */
 static bool can_swapin_thp(struct vm_fault *vmf, pte_t *ptep,
-			   unsigned long addr, unsigned int nr_pages)
+			   unsigned long addr, unsigned int nr_pages,
+			   bool locked)
 {
 	return false;
 }

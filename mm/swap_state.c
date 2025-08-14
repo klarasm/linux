@@ -231,9 +231,11 @@ struct folio *swap_cache_alloc_folio(swp_entry_t target_entry, gfp_t gfp_mask,
 		if (unlikely(err))
 			goto fallback;
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
 		if (order && vmf)
 			gfp = thp_limit_gfp_mask(vma_thp_gfp_mask(vmf->vma), gfp_mask);
 		else
+#endif
 			gfp = gfp_mask;
 
 		if (mpol) {

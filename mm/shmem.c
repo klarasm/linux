@@ -2442,6 +2442,7 @@ repeat:
 		return 0;
 	}
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
 	/* Find hugepage orders that are allowed for anonymous shmem and tmpfs. */
 	orders = shmem_allowable_huge_orders(inode, vma, index, write_end, false);
 	if (orders > 0) {
@@ -2460,6 +2461,7 @@ repeat:
 		if (PTR_ERR(folio) == -EEXIST)
 			goto repeat;
 	}
+#endif
 
 	folio = shmem_alloc_and_add_folio(vmf, gfp, inode, index, fault_mm, 0);
 	if (IS_ERR(folio)) {
