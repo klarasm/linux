@@ -3724,8 +3724,10 @@ static int do_new_mount_fc(struct fs_context *fc, struct path *mountpoint,
 	int error;
 
 	error = security_sb_kern_mount(sb);
-	if (!error && mount_too_revealing(sb, &mnt_flags))
+	if (!error && mount_too_revealing(sb, &mnt_flags)) {
+		errorfcp(fc, "VFS", "Mount too revealing");
 		error = -EPERM;
+	}
 
 	if (unlikely(error)) {
 		fc_drop_locked(fc);
@@ -4441,7 +4443,7 @@ SYSCALL_DEFINE3(fsmount, int, fs_fd, unsigned int, flags,
 
 	ret = -EPERM;
 	if (mount_too_revealing(fc->root->d_sb, &mnt_flags)) {
-		pr_warn("VFS: Mount too revealing\n");
+		errorfcp(fc, "VFS", "Mount too revealing");
 		goto err_unlock;
 	}
 
@@ -5176,7 +5178,8 @@ SYSCALL_DEFINE5(open_tree_attr, int, dfd, const char __user *, filename,
 		int ret;
 		struct mount_kattr kattr = {};
 
-		kattr.kflags = MOUNT_KATTR_IDMAP_REPLACE;
+		if (flags & OPEN_TREE_CLONE)
+			kattr.kflags = MOUNT_KATTR_IDMAP_REPLACE;
 		if (flags & AT_RECURSIVE)
 			kattr.kflags |= MOUNT_KATTR_RECURSE;
 
