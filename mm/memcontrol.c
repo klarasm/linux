@@ -54,7 +54,6 @@
 #include <linux/vmpressure.h>
 #include <linux/memremap.h>
 #include <linux/mm_inline.h>
-#include <linux/swap_cgroup.h>
 #include <linux/cpu.h>
 #include <linux/oom.h>
 #include <linux/lockdep.h>
@@ -3584,7 +3583,7 @@ static void mem_cgroup_id_put_many(struct mem_cgroup *memcg, unsigned int n)
 	}
 }
 
-static inline void mem_cgroup_id_put(struct mem_cgroup *memcg)
+void mem_cgroup_id_put(struct mem_cgroup *memcg)
 {
 	mem_cgroup_id_put_many(memcg, 1);
 }
@@ -4768,21 +4767,20 @@ out:
  *
  * Returns 0 on success. Otherwise, an error code is returned.
  */
-int mem_cgroup_swapin_charge_folio(struct folio *folio, struct mm_struct *mm,
-				  gfp_t gfp, swp_entry_t entry)
+int mem_cgroup_swapin_charge_folio(struct folio *folio, gfp_t gfp,
+				   swp_entry_t entry, unsigned short memcgid)
 {
 	struct mem_cgroup *memcg;
-	unsigned short id;
 	int ret;
 
 	if (mem_cgroup_disabled())
 		return 0;
 
-	id = lookup_swap_cgroup_id(entry);
 	rcu_read_lock();
-	memcg = mem_cgroup_from_id(id);
+	/* TODO: if memcg is dead, still need to uncharge its swap */
+	memcg = mem_cgroup_from_id(memcgid);
 	if (!memcg || !css_tryget_online(&memcg->css))
-		memcg = get_mem_cgroup_from_mm(mm);
+		memcg = get_mem_cgroup_from_current();
 	rcu_read_unlock();
 
 	ret = charge_memcg(folio, memcg, gfp);
@@ -5133,7 +5131,7 @@ int __init mem_cgroup_init(void)
  *
  * Returns 0 on success, -ENOMEM on failure.
  */
-int __mem_cgroup_try_charge_swap(struct folio *folio, swp_entry_t entry)
+int __mem_cgroup_try_charge_swap(struct folio *folio)
 {
 	unsigned int nr_pages = folio_nr_pages(folio);
 	struct page_counter *counter;
@@ -5143,17 +5141,15 @@ int __mem_cgroup_try_charge_swap(struct folio *folio, swp_entry_t entry)
 		return 0;
 
 	memcg = folio_memcg(folio);
-
 	VM_WARN_ON_ONCE_FOLIO(!memcg, folio);
+	VM_WARN_ON_ONCE_FOLIO(!folio_test_swapcache(folio), folio);
 	if (!memcg)
 		return 0;
 
-	if (!entry.val) {
-		memcg_memory_event(memcg, MEMCG_SWAP_FAIL);
-		return 0;
-	}
-
 	memcg = mem_cgroup_id_get_online(memcg);
+	if (memcg != folio_memcg(folio)) {
+		// pr_err_once("Dying cg swapout\n");
+	}
 
 	if (!mem_cgroup_is_root(memcg) &&
 	    !page_counter_try_charge(&memcg->swap, nr_pages, &counter)) {
@@ -5168,24 +5164,20 @@ int __mem_cgroup_try_charge_swap(struct folio *folio, swp_entry_t entry)
 		mem_cgroup_id_get_many(memcg, nr_pages - 1);
 	mod_memcg_state(memcg, MEMCG_SWAP, nr_pages);
 
-	swap_cgroup_record(folio, mem_cgroup_id(memcg), entry);
-
 	return 0;
 }
 
 /**
- * __mem_cgroup_uncharge_swap - uncharge swap space
- * @entry: swap entry to uncharge
- * @nr_pages: the amount of swap space to uncharge
+ * __mem_cgroup_uncharge_swap_entries - uncharge swap space
  */
-void __mem_cgroup_uncharge_swap(swp_entry_t entry, unsigned int nr_pages)
+void __mem_cgroup_uncharge_swap_entries(swp_entry_t entry,
+					unsigned int nr_pages,
+					unsigned short memcgid)
 {
 	struct mem_cgroup *memcg;
-	unsigned short id;
 
-	id = swap_cgroup_clear(entry, nr_pages);
 	rcu_read_lock();
-	memcg = mem_cgroup_from_id(id);
+	memcg = mem_cgroup_from_id(memcgid);
 	if (memcg) {
 		if (!mem_cgroup_is_root(memcg)) {
 			if (do_memsw_account())
@@ -5197,6 +5189,39 @@ void __mem_cgroup_uncharge_swap(swp_entry_t entry, unsigned int nr_pages)
 		mem_cgroup_id_put_many(memcg, nr_pages);
 	}
 	rcu_read_unlock();
+}
+
+/**
+ * __mem_cgroup_uncharge_swap - uncharge swap space
+ * @entry: swap entry to uncharge
+ * @nr_pages: the amount of swap space to uncharge
+ */
+void __mem_cgroup_uncharge_swap(struct folio *folio, int nr_subpage)
+{
+	long nr_pages = nr_subpage < 0 ? folio_nr_pages(folio) : 1;
+	swp_entry_t entry = folio->swap;
+	struct mem_cgroup *memcg;
+
+	memcg = folio_memcg(folio);
+
+	VM_WARN_ON_ONCE_FOLIO(!memcg, folio);
+	VM_WARN_ON_ONCE_FOLIO(!folio_test_locked(folio), folio);
+
+	if (nr_subpage > 0) {
+		pr_err("Error\n");
+		entry.val += nr_subpage;
+	}
+
+	if (memcg) {
+		if (!mem_cgroup_is_root(memcg)) {
+			if (do_memsw_account())
+				page_counter_uncharge(&memcg->memsw, nr_pages);
+			else
+				page_counter_uncharge(&memcg->swap, nr_pages);
+		}
+		mod_memcg_state(memcg, MEMCG_SWAP, -nr_pages);
+		mem_cgroup_id_put_many(memcg, nr_pages);
+	}
 }
 
 long mem_cgroup_get_nr_swap_pages(struct mem_cgroup *memcg)

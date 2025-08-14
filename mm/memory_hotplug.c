@@ -1477,7 +1477,7 @@ static int create_altmaps_and_memory_blocks(int nid, struct memory_group *group,
 		}
 
 		/* create memory block devices after memory was added */
-		ret = create_memory_block_devices(cur_start, memblock_size,
+		ret = create_memory_block_devices(cur_start, memblock_size, nid,
 						  params.altmap, group);
 		if (ret) {
 			arch_remove_memory(cur_start, memblock_size, NULL);
@@ -1539,8 +1539,16 @@ int add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 
 	ret = __try_online_node(nid, false);
 	if (ret < 0)
-		goto error;
-	new_node = ret;
+		goto error_memblock_remove;
+	if (ret) {
+		node_set_online(nid);
+		ret = register_one_node(nid);
+		if (WARN_ON(ret)) {
+			node_set_offline(nid);
+			goto error_memblock_remove;
+		}
+		new_node = true;
+	}
 
 	/*
 	 * Self hosted memmap array
@@ -1556,22 +1564,11 @@ int add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 			goto error;
 
 		/* create memory block devices after memory was added */
-		ret = create_memory_block_devices(start, size, NULL, group);
+		ret = create_memory_block_devices(start, size, nid, NULL, group);
 		if (ret) {
 			arch_remove_memory(start, size, params.altmap);
 			goto error;
 		}
-	}
-
-	if (new_node) {
-		/* If sysfs file of new node can't be created, cpu on the node
-		 * can't be hot-added. There is no rollback way now.
-		 * So, check by BUG_ON() to catch it reluctantly..
-		 * We online node here. We can't roll back from here.
-		 */
-		node_set_online(nid);
-		ret = register_one_node(nid);
-		BUG_ON(ret);
 	}
 
 	register_memory_blocks_under_node_hotplug(nid, PFN_DOWN(start),
@@ -1597,6 +1594,11 @@ int add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 
 	return ret;
 error:
+	if (new_node) {
+		node_set_offline(nid);
+		unregister_one_node(nid);
+	}
+error_memblock_remove:
 	if (IS_ENABLED(CONFIG_ARCH_KEEP_MEMBLOCK))
 		memblock_remove(start, size);
 error_mem_hotplug_end:
@@ -1791,7 +1793,7 @@ found:
 	return 0;
 }
 
-static void do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
+static int do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 {
 	struct folio *folio;
 	unsigned long pfn;
@@ -1815,8 +1817,10 @@ static void do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 			pfn = folio_pfn(folio) + folio_nr_pages(folio) - 1;
 
 		if (folio_contain_hwpoisoned_page(folio)) {
-			if (WARN_ON(folio_test_lru(folio)))
-				folio_isolate_lru(folio);
+			if (folio_test_large(folio) && !folio_test_hugetlb(folio))
+				goto err_out;
+			if (folio_test_lru(folio) && !folio_isolate_lru(folio))
+				goto err_out;
 			if (folio_mapped(folio)) {
 				folio_lock(folio);
 				unmap_poisoned_folio(folio, pfn, false);
@@ -1873,6 +1877,11 @@ put_folio:
 			putback_movable_pages(&source);
 		}
 	}
+	return 0;
+err_out:
+	folio_put(folio);
+	putback_movable_pages(&source);
+	return -EBUSY;
 }
 
 static int __init cmdline_parse_movable_node(char *p)
@@ -2006,11 +2015,9 @@ int offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 
 			ret = scan_movable_pages(pfn, end_pfn, &pfn);
 			if (!ret) {
-				/*
-				 * TODO: fatal migration failures should bail
-				 * out
-				 */
-				do_migrate_range(pfn, end_pfn);
+				ret = do_migrate_range(pfn, end_pfn);
+				if (ret)
+					break;
 			}
 		} while (!ret);
 

@@ -1961,7 +1961,7 @@ no_page:
 			gfp &= ~__GFP_FS;
 		if (fgp_flags & FGP_NOWAIT) {
 			gfp &= ~GFP_KERNEL;
-			gfp |= GFP_NOWAIT | __GFP_NOWARN;
+			gfp |= GFP_NOWAIT;
 		}
 		if (WARN_ON_ONCE(!(fgp_flags & (FGP_LOCK | FGP_FOR_MMAP))))
 			fgp_flags |= FGP_LOCK;
@@ -2584,8 +2584,9 @@ static int filemap_get_pages(struct kiocb *iocb, size_t count,
 	unsigned int flags;
 	int err = 0;
 
-	/* "last_index" is the index of the page beyond the end of the read */
-	last_index = DIV_ROUND_UP(iocb->ki_pos + count, PAGE_SIZE);
+	/* "last_index" is the index of the folio beyond the end of the read */
+	last_index = round_up(iocb->ki_pos + count,
+			mapping_min_folio_nrbytes(mapping)) >> PAGE_SHIFT;
 retry:
 	if (fatal_signal_pending(current))
 		return -EINTR;
@@ -4475,23 +4476,17 @@ static void filemap_cachestat(struct address_space *mapping,
 #ifdef CONFIG_SWAP /* implies CONFIG_MMU */
 			if (shmem_mapping(mapping)) {
 				/* shmem file - in swap cache */
+				struct swap_info_struct *si;
 				swp_entry_t swp = radix_to_swp_entry(folio);
 
-				/* swapin error results in poisoned entry */
-				if (non_swap_entry(swp))
+				/* prevent swapoff from releasing the device */
+				si = get_swap_device(swp);
+				if (!si)
 					goto resched;
 
-				/*
-				 * Getting a swap entry from the shmem
-				 * inode means we beat
-				 * shmem_unuse(). rcu_read_lock()
-				 * ensures swapoff waits for us before
-				 * freeing the swapper space. However,
-				 * we can race with swapping and
-				 * invalidation, so there might not be
-				 * a shadow in the swapcache (yet).
-				 */
-				shadow = get_shadow_from_swap_cache(swp);
+				shadow = swap_cache_get_shadow(swp);
+				put_swap_device(si);
+
 				if (!shadow)
 					goto resched;
 			}
