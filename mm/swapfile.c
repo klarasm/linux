@@ -2002,7 +2002,7 @@ void free_swap_page_of_entry(swp_entry_t entry)
 		return;
 	ci = swap_lock_cluster(si, offset);
 	WARN_ON(swap_put_entry_locked(si, ci, offset));
-	__swap_free_entries(si, ci, offset, 1);
+	__swap_free_entries(si, ci, offset, 1, 0);
 	/* It might got added to swap cache accidentally by read ahead */
 	__try_to_reclaim_swap(si, offset, TTRS_ANYWAY);
 	swap_unlock_cluster(ci);
