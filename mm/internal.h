@@ -16,7 +16,6 @@
 #include <linux/rmap.h>
 #include <linux/swap.h>
 #include <linux/swapops.h>
-#include <linux/swap_cgroup.h>
 #include <linux/tracepoint-defs.h>
 
 /* Internal core VMA manipulation functions. */
@@ -378,25 +377,22 @@ static inline pte_t pte_next_swp_offset(pte_t pte)
  *
  * Return: the number of table entries in the batch.
  */
-static inline int swap_pte_batch(pte_t *start_ptep, int max_nr, pte_t pte)
+static inline int swap_pte_batch(pte_t *start_ptep, int max_nr,
+				 pte_t pte, bool locked)
 {
 	pte_t expected_pte = pte_next_swp_offset(pte);
 	const pte_t *end_ptep = start_ptep + max_nr;
 	swp_entry_t entry = pte_to_swp_entry(pte);
 	pte_t *ptep = start_ptep + 1;
-	unsigned short cgroup_id;
 
 	VM_WARN_ON(max_nr < 1);
 	VM_WARN_ON(!is_swap_pte(pte));
 	VM_WARN_ON(non_swap_entry(entry));
 
-	cgroup_id = lookup_swap_cgroup_id(entry);
 	while (ptep < end_ptep) {
-		pte = ptep_get(ptep);
+		pte = locked ? ptep_get(ptep) : ptep_get_lockless(ptep);
 
 		if (!pte_same(pte, expected_pte))
-			break;
-		if (lookup_swap_cgroup_id(pte_to_swp_entry(pte)) != cgroup_id)
 			break;
 		expected_pte = pte_next_swp_offset(expected_pte);
 		ptep++;
@@ -1613,6 +1609,19 @@ static inline void shrinker_debugfs_remove(struct dentry *debugfs_entry,
 
 /* Only track the nodes of mappings with shadow entries */
 void workingset_update_node(struct xa_node *node);
+#define WORKINGSET_SHIFT 1
+static inline unsigned short shadow_memcgid(void *shadow)
+{
+	unsigned long entry = xa_to_value(shadow);
+	unsigned short memcgid;
+
+	entry >>= WORKINGSET_SHIFT;
+	entry >>= NODES_SHIFT;
+	memcgid = entry & ((1UL << MEM_CGROUP_ID_SHIFT) - 1);
+
+	return memcgid;
+}
+
 extern struct list_lru shadow_nodes;
 #define mapping_set_update(xas, mapping) do {			\
 	if (!dax_mapping(mapping) && !shmem_mapping(mapping)) {	\

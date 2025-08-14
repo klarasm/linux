@@ -656,8 +656,8 @@ static inline int mem_cgroup_charge(struct folio *folio, struct mm_struct *mm,
 
 int mem_cgroup_charge_hugetlb(struct folio* folio, gfp_t gfp);
 
-int mem_cgroup_swapin_charge_folio(struct folio *folio, struct mm_struct *mm,
-				  gfp_t gfp, swp_entry_t entry);
+int mem_cgroup_swapin_charge_folio(struct folio *folio, gfp_t gfp,
+				   swp_entry_t entry, unsigned short memcg_id);
 
 void __mem_cgroup_uncharge(struct folio *folio);
 
@@ -1149,8 +1149,8 @@ static inline int mem_cgroup_charge_hugetlb(struct folio* folio, gfp_t gfp)
         return 0;
 }
 
-static inline int mem_cgroup_swapin_charge_folio(struct folio *folio,
-			struct mm_struct *mm, gfp_t gfp, swp_entry_t entry)
+static inline int mem_cgroup_swapin_charge_folio(struct folio *folio, gfp_t gfp,
+				   swp_entry_t entry, unsigned short memcg_id);
 {
 	return 0;
 }
@@ -1877,7 +1877,7 @@ static inline void mem_cgroup_exit_user_fault(void)
 }
 
 void memcg1_swapout(struct folio *folio, swp_entry_t entry);
-void memcg1_swapin(swp_entry_t entry, unsigned int nr_pages);
+void memcg1_swapin(struct folio *folio);
 
 #else /* CONFIG_MEMCG_V1 */
 static inline
@@ -1910,7 +1910,7 @@ static inline void memcg1_swapout(struct folio *folio, swp_entry_t entry)
 {
 }
 
-static inline void memcg1_swapin(swp_entry_t entry, unsigned int nr_pages)
+static inline void memcg1_swapin(struct folio *folio)
 {
 }
 
