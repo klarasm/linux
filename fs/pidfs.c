@@ -357,8 +357,11 @@ static long pidfd_info(struct file *file, unsigned int cmd, unsigned long arg)
 
 	if ((kinfo.mask & PIDFD_INFO_COREDUMP) && !(kinfo.coredump_mask)) {
 		task_lock(task);
-		if (task->mm)
-			kinfo.coredump_mask = pidfs_coredump_mask(task->mm->flags);
+		if (task->mm) {
+			unsigned long flags = __mm_flags_get_dumpable(task->mm);
+
+			kinfo.coredump_mask = pidfs_coredump_mask(flags);
+		}
 		task_unlock(task);
 	}
 
@@ -397,7 +400,7 @@ static long pidfd_info(struct file *file, unsigned int cmd, unsigned long arg)
 	 * the fields are set correctly, or return ESRCH to avoid providing
 	 * incomplete information. */
 
-	kinfo.ppid = task_ppid_nr_ns(task, NULL);
+	kinfo.ppid = task_ppid_vnr(task);
 	kinfo.tgid = task_tgid_vnr(task);
 	kinfo.pid = task_pid_vnr(task);
 	kinfo.mask |= PIDFD_INFO_PID;
