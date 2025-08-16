@@ -856,6 +856,7 @@ static int hwpoison_hugetlb_range(pte_t *ptep, unsigned long hmask,
 static int hwpoison_test_walk(unsigned long start, unsigned long end,
 			     struct mm_walk *walk)
 {
+	/* We also want to consider pages mapped into VM_PFNMAP. */
 	return 0;
 }
 
