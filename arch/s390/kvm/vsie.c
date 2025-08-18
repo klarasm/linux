@@ -1377,15 +1377,15 @@ static int vsie_run(struct kvm_vcpu *vcpu, struct vsie_page *vsie_page)
 /* Try getting a given vsie page, returning "true" on success. */
 static inline bool try_get_vsie_page(struct vsie_page *vsie_page)
 {
-	if (test_bit(VSIE_PAGE_IN_USE, &vsie_page->flags))
+	if (test_bit(VSIE_PAGE_IN_USE, &vsie_page->flags.f))
 		return false;
-	return !test_and_set_bit(VSIE_PAGE_IN_USE, &vsie_page->flags);
+	return !test_and_set_bit(VSIE_PAGE_IN_USE, &vsie_page->flags.f);
 }
 
 /* Put a vsie page acquired through get_vsie_page / try_get_vsie_page. */
 static void put_vsie_page(struct vsie_page *vsie_page)
 {
-	clear_bit(VSIE_PAGE_IN_USE, &vsie_page->flags);
+	clear_bit(VSIE_PAGE_IN_USE, &vsie_page->flags.f);
 }
 
 /*
@@ -1428,7 +1428,7 @@ static struct vsie_page *get_vsie_page(struct kvm *kvm, unsigned long addr)
 			mutex_unlock(&kvm->arch.vsie.mutex);
 			return ERR_PTR(-ENOMEM);
 		}
-		__set_bit(VSIE_PAGE_IN_USE, &vsie_page->flags);
+		__set_bit(VSIE_PAGE_IN_USE, &vsie_page->flags.f);
 		kvm->arch.vsie.pages[kvm->arch.vsie.page_count] = vsie_page;
 		kvm->arch.vsie.page_count++;
 	} else {

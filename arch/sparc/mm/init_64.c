@@ -2287,10 +2287,10 @@ void __init paging_init(void)
 	setup_page_offset();
 
 	/* These build time checkes make sure that the dcache_dirty_cpu()
-	 * folio->flags usage will work.
+	 * folio->flags.f usage will work.
 	 *
 	 * When a page gets marked as dcache-dirty, we store the
-	 * cpu number starting at bit 32 in the folio->flags.  Also,
+	 * cpu number starting at bit 32 in the folio->flags.f.  Also,
 	 * functions like clear_dcache_dirty_cpu use the cpu mask
 	 * in 13-bit signed-immediate instruction fields.
 	 */
