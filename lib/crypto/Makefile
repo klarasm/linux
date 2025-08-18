@@ -59,6 +59,18 @@ libcurve25519-$(CONFIG_CRYPTO_SELFTESTS)	+= curve25519-selftest.o
 obj-$(CONFIG_CRYPTO_LIB_DES)			+= libdes.o
 libdes-y					:= des.o
 
+################################################################################
+
+obj-$(CONFIG_CRYPTO_LIB_MD5) += libmd5.o
+libmd5-y := md5.o
+ifeq ($(CONFIG_CRYPTO_LIB_MD5_ARCH),y)
+CFLAGS_md5.o += -I$(src)/$(SRCARCH)
+libmd5-$(CONFIG_PPC) += powerpc/md5-asm.o
+libmd5-$(CONFIG_SPARC) += sparc/md5_asm.o
+endif # CONFIG_CRYPTO_LIB_MD5_ARCH
+
+################################################################################
+
 obj-$(CONFIG_CRYPTO_LIB_POLY1305)		+= libpoly1305.o
 libpoly1305-y					+= poly1305.o
 
@@ -100,7 +112,6 @@ ifeq ($(CONFIG_ARM),y)
 libsha256-y += arm/sha256-ce.o arm/sha256-core.o
 $(obj)/arm/sha256-core.S: $(src)/arm/sha256-armv4.pl
 	$(call cmd,perlasm)
-clean-files += arm/sha256-core.S
 AFLAGS_arm/sha256-core.o += $(aflags-thumb2-y)
 endif
 
@@ -108,7 +119,6 @@ ifeq ($(CONFIG_ARM64),y)
 libsha256-y += arm64/sha256-core.o
 $(obj)/arm64/sha256-core.S: $(src)/arm64/sha2-armv8.pl
 	$(call cmd,perlasm_with_args)
-clean-files += arm64/sha256-core.S
 libsha256-$(CONFIG_KERNEL_MODE_NEON) += arm64/sha256-ce.o
 endif
 
@@ -132,7 +142,6 @@ ifeq ($(CONFIG_ARM),y)
 libsha512-y += arm/sha512-core.o
 $(obj)/arm/sha512-core.S: $(src)/arm/sha512-armv4.pl
 	$(call cmd,perlasm)
-clean-files += arm/sha512-core.S
 AFLAGS_arm/sha512-core.o += $(aflags-thumb2-y)
 endif
 
@@ -140,7 +149,6 @@ ifeq ($(CONFIG_ARM64),y)
 libsha512-y += arm64/sha512-core.o
 $(obj)/arm64/sha512-core.S: $(src)/arm64/sha2-armv8.pl
 	$(call cmd,perlasm_with_args)
-clean-files += arm64/sha512-core.S
 libsha512-$(CONFIG_KERNEL_MODE_NEON) += arm64/sha512-ce-core.o
 endif
 
@@ -167,3 +175,7 @@ obj-$(CONFIG_PPC) += powerpc/
 obj-$(CONFIG_RISCV) += riscv/
 obj-$(CONFIG_S390) += s390/
 obj-$(CONFIG_X86) += x86/
+
+# clean-files must be defined unconditionally
+clean-files += arm/sha256-core.S arm/sha512-core.S
+clean-files += arm64/sha256-core.S arm64/sha512-core.S
