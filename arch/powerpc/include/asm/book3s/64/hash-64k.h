@@ -8,8 +8,8 @@
 #define H_PGD_INDEX_SIZE   8  // size: 8B <<  8 = 2KB, maps 2^8  x 16TB =  4PB
 
 /*
- * If we store section details in page->flags we can't increase the MAX_PHYSMEM_BITS
- * if we increase SECTIONS_WIDTH we will not store node details in page->flags and
+ * If we store section details in page->flags.f we can't increase the MAX_PHYSMEM_BITS
+ * if we increase SECTIONS_WIDTH we will not store node details in page->flags.f and
  * page_to_nid does a page->section->node lookup
  * Hence only increase for VMEMMAP. Further depending on SPARSEMEM_EXTREME reduce
  * memory requirements with large number of sections.
