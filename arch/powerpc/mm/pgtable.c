@@ -88,9 +88,9 @@ static pte_t set_pte_filter_hash(pte_t pte, unsigned long addr)
 		struct folio *folio = maybe_pte_to_folio(pte);
 		if (!folio)
 			return pte;
-		if (!test_bit(PG_dcache_clean, &folio->flags)) {
+		if (!test_bit(PG_dcache_clean, &folio->flags.f)) {
 			flush_dcache_icache_folio(folio);
-			set_bit(PG_dcache_clean, &folio->flags);
+			set_bit(PG_dcache_clean, &folio->flags.f);
 		}
 	}
 	return pte;
@@ -106,7 +106,7 @@ static pte_t set_pte_filter_hash(pte_t pte, unsigned long addr) { return pte; }
  * as we don't have two bits to spare for _PAGE_EXEC and _PAGE_HWEXEC so
  * instead we "filter out" the exec permission for non clean pages.
  *
- * This is also called once for the folio. So only work with folio->flags here.
+ * This is also called once for the folio. So only work with folio->flags.f here.
  */
 static inline pte_t set_pte_filter(pte_t pte, unsigned long addr)
 {
@@ -128,13 +128,13 @@ static inline pte_t set_pte_filter(pte_t pte, unsigned long addr)
 		return pte;
 
 	/* If the page clean, we move on */
-	if (test_bit(PG_dcache_clean, &folio->flags))
+	if (test_bit(PG_dcache_clean, &folio->flags.f))
 		return pte;
 
 	/* If it's an exec fault, we flush the cache and make it clean */
 	if (is_exec_fault()) {
 		flush_dcache_icache_folio(folio);
-		set_bit(PG_dcache_clean, &folio->flags);
+		set_bit(PG_dcache_clean, &folio->flags.f);
 		return pte;
 	}
 
@@ -176,12 +176,12 @@ static pte_t set_access_flags_filter(pte_t pte, struct vm_area_struct *vma,
 		goto bail;
 
 	/* If the page is already clean, we move on */
-	if (test_bit(PG_dcache_clean, &folio->flags))
+	if (test_bit(PG_dcache_clean, &folio->flags.f))
 		goto bail;
 
 	/* Clean the page and set PG_dcache_clean */
 	flush_dcache_icache_folio(folio);
-	set_bit(PG_dcache_clean, &folio->flags);
+	set_bit(PG_dcache_clean, &folio->flags.f);
 
  bail:
 	return pte_mkexec(pte);
