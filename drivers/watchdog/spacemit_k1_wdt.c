@@ -93,17 +93,32 @@ static inline int k1_wdt_set_timeout_ticks(struct k1_wdt *wdt,
 	return 0;
 }
 
+static inline int k1_wdt_set_timeout_sec(struct k1_wdt *wdt,
+				  unsigned int timeout)
+{
+	return k1_wdt_set_timeout_ticks(wdt, WDT_TIME_TO_TICKS(timeout));
+}
+
 static int k1_wdt_start(struct watchdog_device *wdd)
 {
 	struct k1_wdt *wdt = container_of(wdd, struct k1_wdt, wdd);
-	uint32_t enable = WDT_MATCH_EXPIRE_ENABLE | WDT_MATCH_EXPIRE_RESET;
+	uint32_t enable = WDT_MATCH_EXPIRE_ENABLE;
+	unsigned int timeout;
 	int ret;
 
 	spin_lock_irqsave(&wdt->lock, wdt->irqflags);
 
 	enable |= k1_wdt_read(wdt, WDT_MATCH_ENABLE);
 
-	ret = k1_wdt_set_timeout_ticks(wdt, WDT_TIME_TO_TICKS(wdd->timeout));
+	if (wdd->pretimeout) {
+		enable &= ~WDT_MATCH_EXPIRE_RESET;
+		timeout = wdd->pretimeout;
+	} else {
+		enable |= WDT_MATCH_EXPIRE_RESET;
+		timeout = wdd->timeout;
+	}
+
+	ret = k1_wdt_set_timeout_sec(wdt, timeout);
 	if (ret) {
 		dev_err(wdd->parent, "could not set timeout\n");
 		goto unlock;
@@ -121,10 +136,11 @@ unlock:
 static int k1_wdt_stop(struct watchdog_device *wdd)
 {
 	struct k1_wdt *wdt = container_of(wdd, struct k1_wdt, wdd);
-	uint32_t enable = k1_wdt_read(wdt, WDT_MATCH_ENABLE);
+	uint32_t enable;
 
 	spin_lock_irqsave(&wdt->lock, wdt->irqflags);
 
+	enable = k1_wdt_read(wdt, WDT_MATCH_ENABLE);
 	k1_wdt_write(wdt, WDT_MATCH_ENABLE, enable & ~WDT_MATCH_EXPIRE_ENABLE);
 	k1_wdt_write(wdt, WDT_COUNTER_RESET, 1);
 	k1_wdt_write(wdt, WDT_INTERRUPT_CLEAR, 1);
@@ -160,6 +176,27 @@ static int k1_wdt_restart(struct watchdog_device *wdd, unsigned long action,
 	return 0;
 }
 
+static irqreturn_t k1_wdt_irq_handler(int irqnr, void *data)
+{
+	struct k1_wdt *wdt = data;
+	uint32_t enable = WDT_MATCH_EXPIRE_RESET;
+
+	spin_lock_irqsave(&wdt->lock, wdt->irqflags);
+
+	k1_wdt_write(wdt, WDT_INTERRUPT_CLEAR, 1);
+
+	enable |= k1_wdt_read(wdt, WDT_MATCH_ENABLE);
+	k1_wdt_set_timeout_sec(wdt, wdt->wdd.timeout - wdt->wdd.pretimeout);
+	k1_wdt_write(wdt, WDT_MATCH_ENABLE, enable);
+	k1_wdt_write(wdt, WDT_COUNTER_RESET, 1);
+
+	spin_unlock_irqrestore(&wdt->lock, wdt->irqflags);
+
+	watchdog_notify_pretimeout(&wdt->wdd);
+
+	return IRQ_HANDLED;
+}
+
 static const struct of_device_id k1_wdt_match[] = {
 	{ .compatible = "spacemit,k1-wdt", .data = NULL },
 	{}
@@ -175,7 +212,8 @@ static const struct watchdog_ops k1_wdt_ops = {
 };
 
 static const struct watchdog_info k1_wdt_info = {
-	.options = WDIOF_SETTIMEOUT | WDIOF_MAGICCLOSE | WDIOF_KEEPALIVEPING,
+	.options = WDIOF_SETTIMEOUT | WDIOF_MAGICCLOSE | WDIOF_PRETIMEOUT |
+		   WDIOF_KEEPALIVEPING,
 	.identity = "SpacemiT K1 watchdog timer",
 };
 
@@ -185,7 +223,7 @@ static int k1_wdt_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct watchdog_device *wdd;
 	struct resource wdt_mem;
-	int ret;
+	int irq, ret;
 
 	wdt = devm_kzalloc(dev, sizeof(*wdt), GFP_KERNEL);
 	if (!wdt)
@@ -231,7 +269,19 @@ static int k1_wdt_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(wdt->reset),
 				     "failed to get watchdog reset\n");
 
+	/* clears the interrupt if any and stops timer */
 	k1_wdt_stop(wdd);
+
+	irq = of_irq_get(to_of_node(dev->fwnode), 0);
+	ret = irq ? irq : -ENODEV;
+	/* TODO: handle deferred probe? */
+	if (ret < 0)
+		return dev_err_probe(dev, ret, "failed to map irq\n");
+
+	ret = devm_request_irq(dev, irq, k1_wdt_irq_handler, IRQF_TRIGGER_NONE,
+			       KBUILD_MODNAME, wdt);
+	if (ret < 0)
+		return dev_err_probe(dev, ret, "irq was not granted\n");
 
 	ret = watchdog_init_timeout(wdd, timeout, dev);
 	if (ret)

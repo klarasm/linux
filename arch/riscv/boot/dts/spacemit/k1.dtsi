@@ -594,6 +594,7 @@
 				<&syscon_mpmu CLK_WDT_BUS>;
 			clock-names = "core", "bus";
 			resets = <&syscon_mpmu RESET_WDT>;
+			interrupts = <35>;
 			status = "disabled";
 		};
 

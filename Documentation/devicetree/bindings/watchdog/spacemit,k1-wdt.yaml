@@ -29,6 +29,9 @@ properties:
       - const: core
       - const: bus
 
+  interrupts:
+    maxItems: 1
+
   resets:
     maxItems: 1
 
@@ -37,6 +40,7 @@ required:
   - reg
   - clocks
   - clock-names
+  - interrupts
   - resets
 
 unevaluatedProperties: false
@@ -52,4 +56,5 @@ examples:
                     <&syscon_mpmu CLK_WDT_BUS>;
             clock-names = "core", "bus";
             resets = <&syscon_mpmu RESET_WDT>;
+            interrupts = <35>;
     };
