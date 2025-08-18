@@ -106,7 +106,7 @@ static pte_t set_pte_filter_hash(pte_t pte, unsigned long addr) { return pte; }
  * as we don't have two bits to spare for _PAGE_EXEC and _PAGE_HWEXEC so
  * instead we "filter out" the exec permission for non clean pages.
  *
- * This is also called once for the folio. So only work with folio->flags here.
+ * This is also called once for the folio. So only work with folio->flags.f here.
  */
 static inline pte_t set_pte_filter(pte_t pte, unsigned long addr)
 {
