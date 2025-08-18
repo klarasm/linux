@@ -322,7 +322,7 @@ static void sgx_reclaim_pages(void)
 			/* The owner is freeing the page. No need to add the
 			 * page back to the list of reclaimable pages.
 			 */
-			epc_page->flags &= ~SGX_EPC_PAGE_RECLAIMER_TRACKED;
+			epc_page->flags.f &= ~SGX_EPC_PAGE_RECLAIMER_TRACKED;
 	}
 	spin_unlock(&sgx_reclaimer_lock);
 
@@ -371,7 +371,7 @@ skip:
 		sgx_reclaimer_write(epc_page, &backing[i]);
 
 		kref_put(&encl_page->encl->refcount, sgx_encl_release);
-		epc_page->flags &= ~SGX_EPC_PAGE_RECLAIMER_TRACKED;
+		epc_page->flags.f &= ~SGX_EPC_PAGE_RECLAIMER_TRACKED;
 
 		sgx_free_epc_page(epc_page);
 	}
@@ -454,7 +454,7 @@ static struct sgx_epc_page *__sgx_alloc_epc_page_from_node(int nid)
 
 	page = list_first_entry(&node->free_page_list, struct sgx_epc_page, list);
 	list_del_init(&page->list);
-	page->flags = 0;
+	page->flags.f = 0;
 
 	spin_unlock(&node->lock);
 	atomic_long_dec(&sgx_nr_free_pages);
@@ -509,7 +509,7 @@ struct sgx_epc_page *__sgx_alloc_epc_page(void)
 void sgx_mark_page_reclaimable(struct sgx_epc_page *page)
 {
 	spin_lock(&sgx_reclaimer_lock);
-	page->flags |= SGX_EPC_PAGE_RECLAIMER_TRACKED;
+	page->flags.f |= SGX_EPC_PAGE_RECLAIMER_TRACKED;
 	list_add_tail(&page->list, &sgx_active_page_list);
 	spin_unlock(&sgx_reclaimer_lock);
 }
@@ -527,7 +527,7 @@ void sgx_mark_page_reclaimable(struct sgx_epc_page *page)
 int sgx_unmark_page_reclaimable(struct sgx_epc_page *page)
 {
 	spin_lock(&sgx_reclaimer_lock);
-	if (page->flags & SGX_EPC_PAGE_RECLAIMER_TRACKED) {
+	if (page->flags.f & SGX_EPC_PAGE_RECLAIMER_TRACKED) {
 		/* The page is being reclaimed. */
 		if (list_empty(&page->list)) {
 			spin_unlock(&sgx_reclaimer_lock);
@@ -535,7 +535,7 @@ int sgx_unmark_page_reclaimable(struct sgx_epc_page *page)
 		}
 
 		list_del(&page->list);
-		page->flags &= ~SGX_EPC_PAGE_RECLAIMER_TRACKED;
+		page->flags.f &= ~SGX_EPC_PAGE_RECLAIMER_TRACKED;
 	}
 	spin_unlock(&sgx_reclaimer_lock);
 
@@ -614,7 +614,7 @@ void sgx_free_epc_page(struct sgx_epc_page *page)
 		list_add(&page->list, &node->sgx_poison_page_list);
 	else
 		list_add_tail(&page->list, &node->free_page_list);
-	page->flags = SGX_EPC_PAGE_IS_FREE;
+	page->flags.f = SGX_EPC_PAGE_IS_FREE;
 
 	spin_unlock(&node->lock);
 	atomic_long_inc(&sgx_nr_free_pages);
@@ -715,7 +715,7 @@ int arch_memory_failure(unsigned long pfn, int flags)
 	 * If the page is on a free list, move it to the per-node
 	 * poison page list.
 	 */
-	if (page->flags & SGX_EPC_PAGE_IS_FREE) {
+	if (page->flags.f & SGX_EPC_PAGE_IS_FREE) {
 		list_move(&page->list, &node->sgx_poison_page_list);
 		goto out;
 	}
