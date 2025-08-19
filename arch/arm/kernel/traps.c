@@ -442,7 +442,7 @@ int call_undef_hook(struct pt_regs *regs, unsigned int instr)
 	return fn ? fn(regs, instr) : 1;
 }
 
-asmlinkage void do_undefinstr(struct pt_regs *regs)
+noinstr void do_undefinstr(struct pt_regs *regs)
 {
 	unsigned int instr;
 	void __user *pc;
@@ -496,31 +496,6 @@ die_sig:
 NOKPROBE_SYMBOL(do_undefinstr)
 
 /*
- * Handle FIQ similarly to NMI on x86 systems.
- *
- * The runtime environment for NMIs is extremely restrictive
- * (NMIs can pre-empt critical sections meaning almost all locking is
- * forbidden) meaning this default FIQ handling must only be used in
- * circumstances where non-maskability improves robustness, such as
- * watchdog or debug logic.
- *
- * This handler is not appropriate for general purpose use in drivers
- * platform code and can be overrideen using set_fiq_handler.
- */
-asmlinkage void __exception_irq_entry handle_fiq_as_nmi(struct pt_regs *regs)
-{
-	struct pt_regs *old_regs = set_irq_regs(regs);
-
-	nmi_enter();
-
-	/* nop. FIQ handlers for special arch/arm features can be added here. */
-
-	nmi_exit();
-
-	set_irq_regs(old_regs);
-}
-
-/*
  * bad_mode handles the impossible case in the vectors.  If you see one of
  * these, then it's extremely serious, and could mean you have buggy hardware.
  * It never returns, and never tries to sync.  We hope that we can at least
@@ -533,7 +508,6 @@ asmlinkage void bad_mode(struct pt_regs *regs, int reason)
 	pr_crit("Bad mode in %s handler detected\n", handler[reason]);
 
 	die("Oops - bad mode", regs, 0);
-	local_irq_disable();
 	panic("bad mode");
 }
 
@@ -602,7 +576,7 @@ do_cache_op(unsigned long start, unsigned long end, int flags)
  *  0x9f0000 - 0x9fffff are some more esoteric system calls
  */
 #define NR(x) ((__ARM_NR_##x) - __ARM_NR_BASE)
-asmlinkage int arm_syscall(int no, struct pt_regs *regs)
+int arm_syscall(int no, struct pt_regs *regs)
 {
 	if ((no >> 16) != (__ARM_NR_BASE>> 16))
 		return bad_syscall(no, regs);
