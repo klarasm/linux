@@ -79,7 +79,6 @@
 #include <asm/tlbflush.h>
 
 #define CREATE_TRACE_POINTS
-#include <trace/events/tlb.h>
 #include <trace/events/migrate.h>
 
 #include "internal.h"
@@ -1703,7 +1702,7 @@ static __always_inline void __folio_remove_rmap(struct folio *folio,
 			nr = folio_sub_return_large_mapcount(folio, nr_pages, vma);
 			if (!nr) {
 				/* Now completely unmapped. */
-				nr = folio_nr_pages(folio);
+				nr = folio_large_nr_pages(folio);
 			} else {
 				partially_mapped = nr < folio_large_nr_pages(folio) &&
 						   !folio_entire_mapcount(folio);
@@ -1749,7 +1748,7 @@ static __always_inline void __folio_remove_rmap(struct folio *folio,
 				nr_pages = folio_large_nr_pages(folio);
 				if (level == PGTABLE_LEVEL_PMD)
 					nr_pmdmapped = nr_pages;
-				nr = nr_pages - (nr & FOLIO_PAGES_MAPPED);
+				nr = nr_pages - nr;
 				/* Raced ahead of another remove and an add? */
 				if (unlikely(nr < 0))
 					nr = 0;
