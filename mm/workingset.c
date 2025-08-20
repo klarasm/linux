@@ -243,6 +243,7 @@ static void *lru_gen_eviction(struct folio *folio)
 	int tier = lru_tier_from_refs(refs, workingset);
 	struct mem_cgroup *memcg = folio_memcg(folio);
 	struct pglist_data *pgdat = folio_pgdat(folio);
+	int memcgid;
 
 	BUILD_BUG_ON(LRU_GEN_WIDTH + LRU_REFS_WIDTH > BITS_PER_LONG - EVICTION_SHIFT);
 
@@ -254,7 +255,9 @@ static void *lru_gen_eviction(struct folio *folio)
 	hist = lru_hist_from_seq(min_seq);
 	atomic_long_add(delta, &lrugen->evicted[hist][type][tier]);
 
-	return pack_shadow(mem_cgroup_id(memcg), pgdat, token, workingset);
+	memcgid = mem_cgroup_id(lruvec_memcg(lruvec));
+
+	return pack_shadow(memcgid, pgdat, token, workingset);
 }
 
 /*
