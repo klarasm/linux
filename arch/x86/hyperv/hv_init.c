@@ -17,7 +17,6 @@
 #include <asm/desc.h>
 #include <asm/e820/api.h>
 #include <asm/sev.h>
-#include <asm/ibt.h>
 #include <asm/hypervisor.h>
 #include <hyperv/hvhdk.h>
 #include <asm/mshyperv.h>
@@ -37,7 +36,45 @@
 #include <linux/export.h>
 
 void *hv_hypercall_pg;
+
+#ifdef CONFIG_X86_64
+static u64 __hv_hyperfail(u64 control, u64 param1, u64 param2)
+{
+	return U64_MAX;
+}
+
+DEFINE_STATIC_CALL(__hv_hypercall, __hv_hyperfail);
+
+u64 hv_std_hypercall(u64 control, u64 param1, u64 param2)
+{
+	u64 hv_status;
+
+	register u64 __r8 asm("r8") = param2;
+	asm volatile ("call " STATIC_CALL_TRAMP_STR(__hv_hypercall)
+		      : "=a" (hv_status), ASM_CALL_CONSTRAINT,
+		        "+c" (control), "+d" (param1), "+r" (__r8)
+		      : : "cc", "memory", "r9", "r10", "r11");
+
+	return hv_status;
+}
+
+typedef u64 (*hv_hypercall_f)(u64 control, u64 param1, u64 param2);
+
+static inline void hv_set_hypercall_pg(void *ptr)
+{
+	hv_hypercall_pg = ptr;
+
+	if (!ptr)
+		ptr = &__hv_hyperfail;
+	static_call_update(__hv_hypercall, (hv_hypercall_f)ptr);
+}
+#else
+static inline void hv_set_hypercall_pg(void *ptr)
+{
+	hv_hypercall_pg = ptr;
+}
 EXPORT_SYMBOL_GPL(hv_hypercall_pg);
+#endif
 
 union hv_ghcb * __percpu *hv_ghcb_pg;
 
@@ -330,7 +367,7 @@ static int hv_suspend(void)
 	 * pointer is restored on resume.
 	 */
 	hv_hypercall_pg_saved = hv_hypercall_pg;
-	hv_hypercall_pg = NULL;
+	hv_set_hypercall_pg(NULL);
 
 	/* Disable the hypercall page in the hypervisor */
 	rdmsrq(HV_X64_MSR_HYPERCALL, hypercall_msr.as_uint64);
@@ -356,7 +393,7 @@ static void hv_resume(void)
 		vmalloc_to_pfn(hv_hypercall_pg_saved);
 	wrmsrq(HV_X64_MSR_HYPERCALL, hypercall_msr.as_uint64);
 
-	hv_hypercall_pg = hv_hypercall_pg_saved;
+	hv_set_hypercall_pg(hv_hypercall_pg_saved);
 	hv_hypercall_pg_saved = NULL;
 
 	/*
@@ -453,16 +490,16 @@ void __init hyperv_init(void)
 	 * A TDX VM with no paravisor only uses TDX GHCI rather than hv_hypercall_pg:
 	 * when the hypercall input is a page, such a VM must pass a decrypted
 	 * page to Hyper-V, e.g. hv_post_message() uses the per-CPU page
-	 * hyperv_pcpu_input_arg, which is decrypted if no paravisor is present.
+	 * hyperv_pcpu_arg, which is decrypted if no paravisor is present.
 	 *
 	 * A TDX VM with the paravisor uses hv_hypercall_pg for most hypercalls,
 	 * which are handled by the paravisor and the VM must use an encrypted
-	 * input page: in such a VM, the hyperv_pcpu_input_arg is encrypted and
+	 * input page: in such a VM, the hyperv_pcpu_arg is encrypted and
 	 * used in the hypercalls, e.g. see hv_mark_gpa_visibility() and
 	 * hv_arch_irq_unmask(). Such a VM uses TDX GHCI for two hypercalls:
 	 * 1. HVCALL_SIGNAL_EVENT: see vmbus_set_event() and _hv_do_fast_hypercall8().
 	 * 2. HVCALL_POST_MESSAGE: the input page must be a decrypted page, i.e.
-	 * hv_post_message() in such a VM can't use the encrypted hyperv_pcpu_input_arg;
+	 * hv_post_message() in such a VM can't use the encrypted hyperv_pcpu_arg;
 	 * instead, hv_post_message() uses the post_msg_page, which is decrypted
 	 * in such a VM and is only used in such a VM.
 	 */
@@ -476,8 +513,8 @@ void __init hyperv_init(void)
 	if (hv_isolation_type_tdx() && !ms_hyperv.paravisor_present)
 		goto skip_hypercall_pg_init;
 
-	hv_hypercall_pg = __vmalloc_node_range(PAGE_SIZE, 1, VMALLOC_START,
-			VMALLOC_END, GFP_KERNEL, PAGE_KERNEL_ROX,
+	hv_hypercall_pg = __vmalloc_node_range(PAGE_SIZE, 1, MODULES_VADDR,
+			MODULES_END, GFP_KERNEL, PAGE_KERNEL_ROX,
 			VM_FLUSH_RESET_PERMS, NUMA_NO_NODE,
 			__builtin_return_address(0));
 	if (hv_hypercall_pg == NULL)
@@ -515,27 +552,9 @@ void __init hyperv_init(void)
 		wrmsrq(HV_X64_MSR_HYPERCALL, hypercall_msr.as_uint64);
 	}
 
-skip_hypercall_pg_init:
-	/*
-	 * Some versions of Hyper-V that provide IBT in guest VMs have a bug
-	 * in that there's no ENDBR64 instruction at the entry to the
-	 * hypercall page. Because hypercalls are invoked via an indirect call
-	 * to the hypercall page, all hypercall attempts fail when IBT is
-	 * enabled, and Linux panics. For such buggy versions, disable IBT.
-	 *
-	 * Fixed versions of Hyper-V always provide ENDBR64 on the hypercall
-	 * page, so if future Linux kernel versions enable IBT for 32-bit
-	 * builds, additional hypercall page hackery will be required here
-	 * to provide an ENDBR32.
-	 */
-#ifdef CONFIG_X86_KERNEL_IBT
-	if (cpu_feature_enabled(X86_FEATURE_IBT) &&
-	    *(u32 *)hv_hypercall_pg != gen_endbr()) {
-		setup_clear_cpu_cap(X86_FEATURE_IBT);
-		pr_warn("Disabling IBT because of Hyper-V bug\n");
-	}
-#endif
+	hv_set_hypercall_pg(hv_hypercall_pg);
 
+skip_hypercall_pg_init:
 	/*
 	 * hyperv_init() is called before LAPIC is initialized: see
 	 * apic_intr_mode_init() -> x86_platform.apic_post_init() and
@@ -685,12 +704,10 @@ int hv_apicid_to_vp_index(u32 apic_id)
 
 	local_irq_save(irq_flags);
 
-	input = *this_cpu_ptr(hyperv_pcpu_input_arg);
-	memset(input, 0, sizeof(*input));
+	hv_setup_inout_array(&input, sizeof(*input), sizeof(input->apic_ids[0]),
+			     &output, 0, sizeof(*output));
 	input->partition_id = HV_PARTITION_ID_SELF;
 	input->apic_ids[0] = apic_id;
-
-	output = *this_cpu_ptr(hyperv_pcpu_output_arg);
 
 	control = HV_HYPERCALL_REP_COMP_1 | HVCALL_GET_VP_INDEX_FROM_APIC_ID;
 	status = hv_do_hypercall(control, input, output);

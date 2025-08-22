@@ -207,8 +207,9 @@ static struct fuse_req *fuse_get_req(struct mnt_idmap *idmap,
 
 	if (fuse_block_alloc(fc, for_background)) {
 		err = -EINTR;
-		if (wait_event_killable_exclusive(fc->blocked_waitq,
-				!fuse_block_alloc(fc, for_background)))
+		if (wait_event_state_exclusive(fc->blocked_waitq,
+				!fuse_block_alloc(fc, for_background),
+				(TASK_KILLABLE | TASK_FREEZABLE)))
 			goto out;
 	}
 	/* Matches smp_wmb() in fuse_set_initialized() */
@@ -322,6 +323,7 @@ unsigned int fuse_req_hash(u64 unique)
 {
 	return hash_long(unique & ~FUSE_INT_REQ_BIT, FUSE_PQ_HASH_BITS);
 }
+EXPORT_SYMBOL_GPL(fuse_req_hash);
 
 /*
  * A new request is available, wake fiq->waitq
@@ -935,7 +937,7 @@ static int fuse_check_folio(struct folio *folio)
 {
 	if (folio_mapped(folio) ||
 	    folio->mapping != NULL ||
-	    (folio->flags & PAGE_FLAGS_CHECK_AT_PREP &
+	    (folio->flags.f & PAGE_FLAGS_CHECK_AT_PREP &
 	     ~(1 << PG_locked |
 	       1 << PG_referenced |
 	       1 << PG_lru |
