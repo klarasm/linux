@@ -808,7 +808,6 @@ static int ov5645_s_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	}
 
-	pm_runtime_mark_last_busy(ov5645->dev);
 	pm_runtime_put_autosuspend(ov5645->dev);
 
 	return ret;
@@ -979,7 +978,6 @@ static int ov5645_disable_streams(struct v4l2_subdev *sd,
 			       OV5645_SYSTEM_CTRL0_STOP);
 
 rpm_put:
-	pm_runtime_mark_last_busy(ov5645->dev);
 	pm_runtime_put_autosuspend(ov5645->dev);
 
 	return ret;
@@ -1044,7 +1042,7 @@ static int ov5645_probe(struct i2c_client *client)
 				     "invalid bus type, must be CSI2\n");
 
 	/* get system clock (xclk) */
-	ov5645->xclk = devm_clk_get(dev, NULL);
+	ov5645->xclk = devm_v4l2_sensor_clk_get(dev, NULL);
 	if (IS_ERR(ov5645->xclk))
 		return dev_err_probe(dev, PTR_ERR(ov5645->xclk),
 				     "could not get xclk");
@@ -1196,7 +1194,6 @@ static int ov5645_probe(struct i2c_client *client)
 
 	pm_runtime_set_autosuspend_delay(dev, 1000);
 	pm_runtime_use_autosuspend(dev);
-	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 
 	return 0;
