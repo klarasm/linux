@@ -139,6 +139,29 @@ struct snd_usb_audio_quirk {
 int snd_usb_lock_shutdown(struct snd_usb_audio *chip);
 void snd_usb_unlock_shutdown(struct snd_usb_audio *chip);
 
+/* auto-cleanup */
+struct __snd_usb_lock {
+	struct snd_usb_audio *chip;
+	int err;
+};
+
+static inline struct __snd_usb_lock __snd_usb_lock_shutdown(struct snd_usb_audio *chip)
+{
+	struct __snd_usb_lock T = { .chip = chip };
+	T.err = snd_usb_lock_shutdown(chip);
+	return T;
+}
+
+static inline void __snd_usb_unlock_shutdown(struct __snd_usb_lock *lock)
+{
+	if (!lock->err)
+		snd_usb_unlock_shutdown(lock->chip);
+}
+
+DEFINE_CLASS(snd_usb_lock, struct __snd_usb_lock,
+	     __snd_usb_unlock_shutdown(&(_T)), __snd_usb_lock_shutdown(chip),
+	     struct snd_usb_audio *chip)
+
 extern bool snd_usb_use_vmalloc;
 extern bool snd_usb_skip_validation;
 
@@ -196,6 +219,9 @@ extern bool snd_usb_skip_validation;
  *  for the given endpoint.
  * QUIRK_FLAG_MIC_RES_16 and QUIRK_FLAG_MIC_RES_384
  *  Set the fixed resolution for Mic Capture Volume (mostly for webcams)
+ * QUIRK_FLAG_MIXER_MIN_MUTE
+ *  Set minimum volume control value as mute for devices where the lowest
+ *  playback value represents muted state instead of minimum audible volume
  */
 
 #define QUIRK_FLAG_GET_SAMPLE_RATE	(1U << 0)
@@ -222,5 +248,6 @@ extern bool snd_usb_skip_validation;
 #define QUIRK_FLAG_FIXED_RATE		(1U << 21)
 #define QUIRK_FLAG_MIC_RES_16		(1U << 22)
 #define QUIRK_FLAG_MIC_RES_384		(1U << 23)
+#define QUIRK_FLAG_MIXER_MIN_MUTE	(1U << 24)
 
 #endif /* __USBAUDIO_H */
