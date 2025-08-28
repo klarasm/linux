@@ -2155,6 +2155,9 @@ static int shmem_replace_folio(struct folio **foliop, gfp_t gfp,
 
 	ci = swap_cluster_lock_by_folio_irq(old);
 	__swap_cache_replace_folio(ci, entry, old, new);
+	mem_cgroup_replace_folio(old, new);
+	shmem_update_stats(new, nr_pages);
+	shmem_update_stats(old, -nr_pages);
 	swap_cluster_unlock(ci);
 
 	folio_add_lru(new);
