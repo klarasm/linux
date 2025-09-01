@@ -146,6 +146,9 @@ config RUSTC_HAS_UNNECESSARY_TRANSMUTES
 config RUSTC_HAS_FILE_WITH_NUL
 	def_bool RUSTC_VERSION >= 108900
 
+config RUSTC_HAS_FILE_AS_C_STR
+	def_bool RUSTC_VERSION >= 109100
+
 config PAHOLE_VERSION
 	int
 	default $(shell,$(srctree)/scripts/pahole-version.sh $(PAHOLE))
@@ -1692,6 +1695,18 @@ config PRINTK
 	  and makes the kernel more or less silent. As this makes it
 	  very difficult to diagnose system problems, saying N here is
 	  strongly discouraged.
+
+config PRINTK_RINGBUFFER_KUNIT_TEST
+	tristate "KUnit Test for the printk ringbuffer" if !KUNIT_ALL_TESTS
+	depends on PRINTK && KUNIT
+	default KUNIT_ALL_TESTS
+	help
+	  This builds the printk ringbuffer KUnit test suite.
+
+	  For more information on KUnit and unit tests in general, please refer
+	  to the KUnit documentation.
+
+	  If unsure, say N.
 
 config BUG
 	bool "BUG() support" if EXPERT

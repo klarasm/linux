@@ -148,7 +148,7 @@ int __must_check try_grab_folio(struct folio *folio, int refs,
 	if (WARN_ON_ONCE(folio_ref_count(folio) <= 0))
 		return -ENOMEM;
 
-	if (unlikely(!(flags & FOLL_PCI_P2PDMA) && is_pci_p2pdma_page(&folio->page)))
+	if (unlikely(!(flags & FOLL_PCI_P2PDMA) && folio_is_pci_p2pdma(folio)))
 		return -EREMOTEIO;
 
 	if (flags & FOLL_GET)
@@ -475,10 +475,10 @@ EXPORT_SYMBOL_GPL(unpin_folios);
  * lifecycle.  Avoid setting the bit unless necessary, or it might cause write
  * cache bouncing on large SMP machines for concurrent pinned gups.
  */
-static inline void mm_set_has_pinned_flag(unsigned long *mm_flags)
+static inline void mm_set_has_pinned_flag(struct mm_struct *mm)
 {
-	if (!test_bit(MMF_HAS_PINNED, mm_flags))
-		set_bit(MMF_HAS_PINNED, mm_flags);
+	if (!mm_flags_test(MMF_HAS_PINNED, mm))
+		mm_flags_set(MMF_HAS_PINNED, mm);
 }
 
 #ifdef CONFIG_MMU
@@ -1693,7 +1693,7 @@ static __always_inline long __get_user_pages_locked(struct mm_struct *mm,
 		mmap_assert_locked(mm);
 
 	if (flags & FOLL_PIN)
-		mm_set_has_pinned_flag(&mm->flags);
+		mm_set_has_pinned_flag(mm);
 
 	/*
 	 * FOLL_PIN and FOLL_GET are mutually exclusive. Traditional behavior
@@ -2291,6 +2291,8 @@ static unsigned long collect_longterm_unpinnable_folios(
 	struct folio *folio;
 	long i = 0;
 
+	lru_add_drain();
+
 	for (folio = pofs_get_folio(pofs, i); folio;
 	     folio = pofs_next_folio(folio, pofs, &i)) {
 
@@ -2307,7 +2309,9 @@ static unsigned long collect_longterm_unpinnable_folios(
 			continue;
 		}
 
-		if (!folio_test_lru(folio) && drain_allow) {
+		if (drain_allow && folio_may_be_cached(folio) &&
+				folio_ref_count(folio) !=
+				folio_expected_ref_count(folio) + 1) {
 			lru_add_drain_all();
 			drain_allow = false;
 		}
@@ -3210,7 +3214,7 @@ static int gup_fast_fallback(unsigned long start, unsigned long nr_pages,
 		return -EINVAL;
 
 	if (gup_flags & FOLL_PIN)
-		mm_set_has_pinned_flag(&current->mm->flags);
+		mm_set_has_pinned_flag(current->mm);
 
 	if (!(gup_flags & FOLL_FAST_ONLY))
 		might_lock_read(&current->mm->mmap_lock);
