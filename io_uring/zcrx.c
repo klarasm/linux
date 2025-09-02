@@ -12,6 +12,7 @@
 #include <net/page_pool/helpers.h>
 #include <net/page_pool/memory_provider.h>
 #include <net/netlink.h>
+#include <net/netdev_queues.h>
 #include <net/netdev_rx_queue.h>
 #include <net/tcp.h>
 #include <net/rps.h>
@@ -554,8 +555,9 @@ int io_register_zcrx_ifq(struct io_ring_ctx *ctx,
 		return -EPERM;
 
 	/* mandatory io_uring features for zc rx */
-	if (!(ctx->flags & IORING_SETUP_DEFER_TASKRUN &&
-	      ctx->flags & IORING_SETUP_CQE32))
+	if (!(ctx->flags & IORING_SETUP_DEFER_TASKRUN))
+		return -EINVAL;
+	if (!(ctx->flags & (IORING_SETUP_CQE32|IORING_SETUP_CQE_MIXED)))
 		return -EINVAL;
 	if (copy_from_user(&reg, arg, sizeof(reg)))
 		return -EFAULT;
@@ -599,7 +601,7 @@ int io_register_zcrx_ifq(struct io_ring_ctx *ctx,
 		goto err;
 	}
 
-	ifq->dev = ifq->netdev->dev.parent;
+	ifq->dev = netdev_queue_get_dma_dev(ifq->netdev, ifq->if_rxq);
 	if (!ifq->dev) {
 		ret = -EOPNOTSUPP;
 		goto err;
@@ -920,17 +922,20 @@ static const struct memory_provider_ops io_uring_pp_zc_ops = {
 static bool io_zcrx_queue_cqe(struct io_kiocb *req, struct net_iov *niov,
 			      struct io_zcrx_ifq *ifq, int off, int len)
 {
+	struct io_ring_ctx *ctx = req->ctx;
 	struct io_uring_zcrx_cqe *rcqe;
 	struct io_zcrx_area *area;
 	struct io_uring_cqe *cqe;
 	u64 offset;
 
-	if (!io_defer_get_uncommited_cqe(req->ctx, &cqe))
+	if (!io_defer_get_uncommited_cqe(ctx, &cqe))
 		return false;
 
 	cqe->user_data = req->cqe.user_data;
 	cqe->res = len;
 	cqe->flags = IORING_CQE_F_MORE;
+	if (ctx->flags & IORING_SETUP_CQE_MIXED)
+		cqe->flags |= IORING_CQE_F_32;
 
 	area = io_zcrx_iov_to_area(niov);
 	offset = off + (net_iov_idx(niov) << PAGE_SHIFT);
