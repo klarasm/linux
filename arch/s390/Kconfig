@@ -547,15 +547,11 @@ config NODES_SHIFT
 	depends on NUMA
 	default "1"
 
-config SCHED_SMT
-	def_bool n
-
-config SCHED_MC
-	def_bool n
-
 config SCHED_TOPOLOGY
 	def_bool y
 	prompt "Topology scheduler support"
+	select ARCH_SUPPORTS_SCHED_SMT
+	select ARCH_SUPPORTS_SCHED_MC
 	select SCHED_SMT
 	select SCHED_MC
 	help
@@ -710,7 +706,6 @@ menu "Memory setup"
 config ARCH_SPARSEMEM_ENABLE
 	def_bool y
 	select SPARSEMEM_VMEMMAP_ENABLE
-	select SPARSEMEM_VMEMMAP
 
 config ARCH_SPARSEMEM_DEFAULT
 	def_bool y

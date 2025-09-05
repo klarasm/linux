@@ -2606,6 +2606,11 @@
 			for it. Intended to get systems with badly broken
 			firmware running.
 
+	irqhandler.duration_warn_us= [KNL]
+			Warn if an IRQ handler exceeds the specified duration
+			threshold in microseconds. Useful for identifying
+			long-running IRQs in the system.
+
 	irqpoll		[HW]
 			When an interrupt is not handled search all handlers
 			for it. Also check all handlers each timer
@@ -3700,7 +3705,7 @@
 			looking for corruption.  Enabling this will
 			both detect corruption and prevent the kernel
 			from using the memory being corrupted.
-			However, its intended as a diagnostic tool; if
+			However, it's intended as a diagnostic tool; if
 			repeatable BIOS-originated corruption always
 			affects the same memory, you can use memmap=
 			to prevent the kernel from using that memory.
@@ -4589,7 +4594,7 @@
 			bit 2: print timer info
 			bit 3: print locks info if CONFIG_LOCKDEP is on
 			bit 4: print ftrace buffer
-			bit 5: replay all messages on consoles at the end of panic
+			bit 5: replay all kernel messages on consoles at the end of panic
 			bit 6: print all CPUs backtrace (if available in the arch)
 			bit 7: print only tasks in uninterruptible (blocked) state
 			*Be aware* that this option may print a _lot_ of lines,
@@ -6428,6 +6433,9 @@
 
 	rootflags=	[KNL] Set root filesystem mount option string
 
+	initramfs_options= [KNL]
+                        Specify mount options for for the initramfs mount.
+
 	rootfstype=	[KNL] Set root filesystem type
 
 	rootwait	[KNL] Wait (indefinitely) for root device to show up.
@@ -7382,7 +7390,7 @@
 				(converted into nanoseconds). Fast, but
 				depending on the architecture, may not be
 				in sync between CPUs.
-			global - Event time stamps are synchronize across
+			global - Event time stamps are synchronized across
 				CPUs. May be slower than the local clock,
 				but better for some race conditions.
 			counter - Simple counting of events (1, 2, ..)
@@ -7502,12 +7510,12 @@
 			section.
 
 	trace_trigger=[trigger-list]
-			[FTRACE] Add a event trigger on specific events.
+			[FTRACE] Add an event trigger on specific events.
 			Set a trigger on top of a specific event, with an optional
 			filter.
 
-			The format is is "trace_trigger=<event>.<trigger>[ if <filter>],..."
-			Where more than one trigger may be specified that are comma deliminated.
+			The format is "trace_trigger=<event>.<trigger>[ if <filter>],..."
+			Where more than one trigger may be specified that are comma delimited.
 
 			For example:
 
@@ -7515,7 +7523,7 @@
 
 			The above will enable the "stacktrace" trigger on the "sched_switch"
 			event but only trigger it if the "prev_state" of the "sched_switch"
-			event is "2" (TASK_UNINTERUPTIBLE).
+			event is "2" (TASK_UNINTERRUPTIBLE).
 
 			See also "Event triggers" in Documentation/trace/events.rst
 

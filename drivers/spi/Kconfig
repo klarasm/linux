@@ -154,7 +154,7 @@ config SPI_ASPEED_SMC
 
 config SPI_ATMEL
 	tristate "Atmel SPI Controller"
-	depends on ARCH_AT91 || COMPILE_TEST
+	depends on ARCH_MICROCHIP || COMPILE_TEST
 	depends on OF
 	help
 	  This selects a driver for the Atmel SPI Controller, present on
@@ -916,7 +916,8 @@ config SPI_ROCKCHIP_SFC
 
 config SPI_RB4XX
 	tristate "Mikrotik RB4XX SPI master"
-	depends on SPI_MASTER && ATH79
+	depends on SPI_MASTER && (ATH79 || COMPILE_TEST)
+	depends on OF
 	help
 	  SPI controller driver for the Mikrotik RB4xx series boards.
 

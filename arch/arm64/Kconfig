@@ -108,6 +108,9 @@ config ARM64
 	select ARCH_SUPPORTS_PER_VMA_LOCK
 	select ARCH_SUPPORTS_HUGE_PFNMAP if TRANSPARENT_HUGEPAGE
 	select ARCH_SUPPORTS_RT
+	select ARCH_SUPPORTS_SCHED_SMT
+	select ARCH_SUPPORTS_SCHED_CLUSTER
+	select ARCH_SUPPORTS_SCHED_MC
 	select ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH
 	select ARCH_WANT_COMPAT_IPC_PARSE_VERSION if COMPAT
 	select ARCH_WANT_DEFAULT_BPF_JIT
@@ -1493,8 +1496,6 @@ choice
 
 config CPU_BIG_ENDIAN
 	bool "Build big-endian kernel"
-	# https://github.com/llvm/llvm-project/commit/1379b150991f70a5782e9a143c2ba5308da1161c
-	depends on AS_IS_GNU || AS_VERSION >= 150000
 	help
 	  Say Y if you plan on running a kernel with a big-endian userspace.
 
@@ -1505,29 +1506,6 @@ config CPU_LITTLE_ENDIAN
 	  This is usually the case for distributions targeting arm64.
 
 endchoice
-
-config SCHED_MC
-	bool "Multi-core scheduler support"
-	help
-	  Multi-core scheduler support improves the CPU scheduler's decision
-	  making when dealing with multi-core CPU chips at a cost of slightly
-	  increased overhead in some places. If unsure say N here.
-
-config SCHED_CLUSTER
-	bool "Cluster scheduler support"
-	help
-	  Cluster scheduler support improves the CPU scheduler's decision
-	  making when dealing with machines that have clusters of CPUs.
-	  Cluster usually means a couple of CPUs which are placed closely
-	  by sharing mid-level caches, last-level cache tags or internal
-	  busses.
-
-config SCHED_SMT
-	bool "SMT scheduler support"
-	help
-	  Improves the CPU scheduler's decision making when dealing with
-	  MultiThreading at a cost of slightly increased overhead in some
-	  places. If unsure say N here.
 
 config NR_CPUS
 	int "Maximum number of CPUs (2-4096)"
@@ -1571,7 +1549,6 @@ source "kernel/Kconfig.hz"
 config ARCH_SPARSEMEM_ENABLE
 	def_bool y
 	select SPARSEMEM_VMEMMAP_ENABLE
-	select SPARSEMEM_VMEMMAP
 
 config HW_PERF_EVENTS
 	def_bool y
@@ -2364,8 +2341,7 @@ config STACKPROTECTOR_PER_TASK
 
 config UNWIND_PATCH_PAC_INTO_SCS
 	bool "Enable shadow call stack dynamically using code patching"
-	# needs Clang with https://github.com/llvm/llvm-project/commit/de07cde67b5d205d58690be012106022aea6d2b3 incorporated
-	depends on CC_IS_CLANG && CLANG_VERSION >= 150000
+	depends on CC_IS_CLANG
 	depends on ARM64_PTR_AUTH_KERNEL && CC_HAS_BRANCH_PROT_PAC_RET
 	depends on SHADOW_CALL_STACK
 	select UNWIND_TABLES
