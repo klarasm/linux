@@ -109,7 +109,7 @@ static inline void io_uring_cmd_done(struct io_uring_cmd *cmd, s32 ret,
 {
 }
 static inline void __io_uring_cmd_do_in_task(struct io_uring_cmd *ioucmd,
-			    io_uring_tw_t task_work_cb,
+			    io_uring_cmd_tw_t task_work_cb,
 			    unsigned flags)
 {
 }
