@@ -3,6 +3,7 @@
 #define _MM_SWAP_H
 
 #include <linux/atomic.h> /* for atomic_long_t */
+#include <linux/swapops.h> /* for swp_offset */
 struct mempolicy;
 struct swap_iocb;
 
@@ -54,7 +55,6 @@ enum swap_cluster_flags {
 };
 
 #ifdef CONFIG_SWAP
-#include <linux/swapops.h> /* for swp_offset */
 #include <linux/blk_types.h> /* for bio_end_io_t */
 
 static inline unsigned int swp_cluster_offset(swp_entry_t entry)
