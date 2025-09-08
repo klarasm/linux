@@ -50,7 +50,7 @@ typedef union {
 
 /* Reuses the bits in struct page */
 struct slab {
-	unsigned long flags;
+	memdesc_flags_t flags;
 
 	struct kmem_cache *slab_cache;
 	union {
@@ -174,12 +174,12 @@ static inline void *slab_address(const struct slab *slab)
 
 static inline int slab_nid(const struct slab *slab)
 {
-	return folio_nid(slab_folio(slab));
+	return memdesc_nid(slab->flags);
 }
 
 static inline pg_data_t *slab_pgdat(const struct slab *slab)
 {
-	return folio_pgdat(slab_folio(slab));
+	return NODE_DATA(slab_nid(slab));
 }
 
 static inline struct slab *virt_to_slab(const void *addr)
@@ -235,6 +235,7 @@ struct kmem_cache {
 #ifndef CONFIG_SLUB_TINY
 	struct kmem_cache_cpu __percpu *cpu_slab;
 #endif
+	struct slub_percpu_sheaves __percpu *cpu_sheaves;
 	/* Used for retrieving partial slabs, etc. */
 	slab_flags_t flags;
 	unsigned long min_partial;
@@ -248,6 +249,7 @@ struct kmem_cache {
 	/* Number of per cpu partial slabs to keep around */
 	unsigned int cpu_partial_slabs;
 #endif
+	unsigned int sheaf_capacity;
 	struct kmem_cache_order_objects oo;
 
 	/* Allocation and freeing of slabs */
@@ -432,6 +434,8 @@ static inline bool is_kmalloc_normal(struct kmem_cache *s)
 		return false;
 	return !(s->flags & (SLAB_CACHE_DMA|SLAB_ACCOUNT|SLAB_RECLAIM_ACCOUNT));
 }
+
+bool __kfree_rcu_sheaf(struct kmem_cache *s, void *obj);
 
 #define SLAB_CORE_FLAGS (SLAB_HWCACHE_ALIGN | SLAB_CACHE_DMA | \
 			 SLAB_CACHE_DMA32 | SLAB_PANIC | \

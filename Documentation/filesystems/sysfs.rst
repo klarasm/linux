@@ -243,8 +243,8 @@ Other notes:
 - show() methods should return the number of bytes printed into the
   buffer.
 
-- show() should only use sysfs_emit() or sysfs_emit_at() when formatting
-  the value to be returned to user space.
+- New implementations of show() methods should only use sysfs_emit() or
+  sysfs_emit_at() when formatting the value to be returned to user space.
 
 - store() should return the number of bytes used from the buffer. If the
   entire buffer has been used, just return the count argument.
@@ -321,7 +321,7 @@ span multiple bus types).
 
 fs/ contains a directory for some filesystems.  Currently each
 filesystem wanting to export attributes must create its own hierarchy
-below fs/ (see ./fuse.rst for an example).
+below fs/ (see fuse/fuse.rst for an example).
 
 module/ contains parameter values and state information for all
 loaded system modules, for both builtin and loadable modules.

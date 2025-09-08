@@ -2,13 +2,13 @@
 
 //! DRM driver core.
 //!
-//! C header: [`include/linux/drm/drm_drv.h`](srctree/include/linux/drm/drm_drv.h)
+//! C header: [`include/drm/drm_drv.h`](srctree/include/drm/drm_drv.h)
 
 use crate::{
     bindings, device, devres, drm,
     error::{to_result, Result},
     prelude::*,
-    types::ARef,
+    sync::aref::ARef,
 };
 use macros::vtable;
 

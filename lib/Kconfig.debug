@@ -206,6 +206,16 @@ config DEBUG_BUGVERBOSE
 	  of the BUG call as well as the EIP and oops trace.  This aids
 	  debugging but costs about 70-100K of memory.
 
+config DEBUG_BUGVERBOSE_DETAILED
+	bool "Verbose WARN_ON_ONCE() reporting (adds 100K)" if DEBUG_BUGVERBOSE
+	help
+	  Say Y here to make WARN_ON_ONCE() output the condition string of the
+	  warning, in addition to the file name and line number.
+	  This helps debugging, but costs about 100K of memory.
+
+	  Say N if unsure.
+
+
 endmenu # "printk and dmesg options"
 
 config DEBUG_KERNEL
@@ -259,7 +269,7 @@ config DEBUG_INFO_NONE
 config DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT
 	bool "Rely on the toolchain's implicit default DWARF version"
 	select DEBUG_INFO
-	depends on !CC_IS_CLANG || AS_IS_LLVM || CLANG_VERSION < 140000 || (AS_IS_GNU && AS_VERSION >= 23502 && AS_HAS_NON_CONST_ULEB128)
+	depends on !CC_IS_CLANG || AS_IS_LLVM || (AS_IS_GNU && AS_VERSION >= 23502 && AS_HAS_NON_CONST_ULEB128)
 	help
 	  The implicit default version of DWARF debug info produced by a
 	  toolchain changes over time.
@@ -2478,6 +2488,20 @@ config STRING_HELPERS_KUNIT_TEST
 	tristate "KUnit test string helpers at runtime" if !KUNIT_ALL_TESTS
 	depends on KUNIT
 	default KUNIT_ALL_TESTS
+
+config FFS_KUNIT_TEST
+	tristate "KUnit test ffs-family functions at runtime" if !KUNIT_ALL_TESTS
+	depends on KUNIT
+	default KUNIT_ALL_TESTS
+	help
+	  This builds KUnit tests for ffs-family bit manipulation functions
+	  including ffs(), __ffs(), fls(), __fls(), fls64(), and __ffs64().
+
+	  These tests validate mathematical correctness, edge case handling,
+	  and cross-architecture consistency of bit scanning functions.
+
+	  For more information on KUnit and unit tests in general,
+	  please refer to Documentation/dev-tools/kunit/.
 
 config TEST_KSTRTOX
 	tristate "Test kstrto*() family of functions at runtime"

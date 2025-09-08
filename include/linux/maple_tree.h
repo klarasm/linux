@@ -57,17 +57,17 @@
  * MT_FLAGS_ALLOC_RANGE flag.
  *
  *  Node types:
- *   0x??1 = Root
- *   0x?00 = 16 bit nodes
- *   0x010 = 32 bit nodes
- *   0x110 = 64 bit nodes
+ *   0b??1 = Root
+ *   0b?00 = 16 bit nodes
+ *   0b010 = 32 bit nodes
+ *   0b110 = 64 bit nodes
  *
  *  Slot size and location in the parent pointer:
  *   type  : slot location
- *   0x??1 : Root
- *   0x?00 : 16 bit values, type in 0-1, slot in 2-6
- *   0x010 : 32 bit values, type in 0-2, slot in 3-6
- *   0x110 : 64 bit values, type in 0-2, slot in 3-6
+ *   0b??1 : Root
+ *   0b?00 : 16 bit values, type in 0-1, slot in 2-6
+ *   0b010 : 32 bit values, type in 0-2, slot in 3-6
+ *   0b110 : 64 bit values, type in 0-2, slot in 3-6
  */
 
 /*
@@ -442,7 +442,9 @@ struct ma_state {
 	struct maple_enode *node;	/* The node containing this entry */
 	unsigned long min;		/* The minimum index of this node - implied pivot min */
 	unsigned long max;		/* The maximum index of this node - implied pivot max */
-	struct maple_alloc *alloc;	/* Allocated nodes for this operation */
+	struct slab_sheaf *sheaf;	/* Allocated nodes for this operation */
+	struct maple_node *alloc;	/* allocated nodes */
+	unsigned long node_request;
 	enum maple_status status;	/* The status of the state (active, start, none, etc) */
 	unsigned char depth;		/* depth of tree descent during write */
 	unsigned char offset;
@@ -490,7 +492,9 @@ struct ma_wr_state {
 		.status = ma_start,					\
 		.min = 0,						\
 		.max = ULONG_MAX,					\
+		.sheaf = NULL,						\
 		.alloc = NULL,						\
+		.node_request= 0,					\
 		.mas_flags = 0,						\
 		.store_type = wr_invalid,				\
 	}

@@ -956,7 +956,7 @@ static const char * const action_page_types[] = {
 	[MF_MSG_BUDDY]			= "free buddy page",
 	[MF_MSG_DAX]			= "dax page",
 	[MF_MSG_UNSPLIT_THP]		= "unsplit thp",
-	[MF_MSG_ALREADY_POISONED]	= "already poisoned",
+	[MF_MSG_ALREADY_POISONED]	= "already poisoned page",
 	[MF_MSG_UNKNOWN]		= "unknown page",
 };
 
@@ -1349,9 +1349,10 @@ static int action_result(unsigned long pfn, enum mf_action_page_type type,
 {
 	trace_memory_failure_event(pfn, type, result);
 
-	num_poisoned_pages_inc(pfn);
-
-	update_per_node_mf_stats(pfn, result);
+	if (type != MF_MSG_ALREADY_POISONED) {
+		num_poisoned_pages_inc(pfn);
+		update_per_node_mf_stats(pfn, result);
+	}
 
 	pr_err("%#lx: recovery action for %s: %s\n",
 		pfn, action_page_types[type], action_name[result]);
@@ -1707,10 +1708,10 @@ static int identify_page_state(unsigned long pfn, struct page *p,
 	 * carried out only if the first check can't determine the page status.
 	 */
 	for (ps = error_states;; ps++)
-		if ((p->flags & ps->mask) == ps->res)
+		if ((p->flags.f & ps->mask) == ps->res)
 			break;
 
-	page_flags |= (p->flags & (1UL << PG_dirty));
+	page_flags |= (p->flags.f & (1UL << PG_dirty));
 
 	if (!ps->mask)
 		for (ps = error_states;; ps++)
@@ -2094,12 +2095,11 @@ retry:
 		*hugetlb = 0;
 		return 0;
 	} else if (res == -EHWPOISON) {
-		pr_err("%#lx: already hardware poisoned\n", pfn);
 		if (flags & MF_ACTION_REQUIRED) {
 			folio = page_folio(p);
 			res = kill_accessing_process(current, folio_pfn(folio), flags);
-			action_result(pfn, MF_MSG_ALREADY_POISONED, MF_FAILED);
 		}
+		action_result(pfn, MF_MSG_ALREADY_POISONED, MF_FAILED);
 		return res;
 	} else if (res == -EBUSY) {
 		if (!(flags & MF_NO_RETRY)) {
@@ -2137,7 +2137,7 @@ retry:
 		return action_result(pfn, MF_MSG_FREE_HUGE, res);
 	}
 
-	page_flags = folio->flags;
+	page_flags = folio->flags.f;
 
 	if (!hwpoison_user_mappings(folio, p, pfn, flags)) {
 		folio_unlock(folio);
@@ -2285,7 +2285,6 @@ try_again:
 		goto unlock_mutex;
 
 	if (TestSetPageHWPoison(p)) {
-		pr_err("%#lx: already hardware poisoned\n", pfn);
 		res = -EHWPOISON;
 		if (flags & MF_ACTION_REQUIRED)
 			res = kill_accessing_process(current, pfn, flags);
@@ -2398,7 +2397,7 @@ try_again:
 	 * folio_remove_rmap_*() in try_to_unmap_one(). So to determine page
 	 * status correctly, we save a copy of the page flags at this time.
 	 */
-	page_flags = folio->flags;
+	page_flags = folio->flags.f;
 
 	/*
 	 * __munlock_folio() may clear a writeback folio's LRU flag without
@@ -2569,10 +2568,9 @@ int unpoison_memory(unsigned long pfn)
 	static DEFINE_RATELIMIT_STATE(unpoison_rs, DEFAULT_RATELIMIT_INTERVAL,
 					DEFAULT_RATELIMIT_BURST);
 
-	if (!pfn_valid(pfn))
-		return -ENXIO;
-
-	p = pfn_to_page(pfn);
+	p = pfn_to_online_page(pfn);
+	if (!p)
+		return -EIO;
 	folio = page_folio(p);
 
 	mutex_lock(&mf_mutex);
@@ -2744,13 +2742,13 @@ static int soft_offline_in_use_page(struct page *page)
 				putback_movable_pages(&pagelist);
 
 			pr_info("%#lx: %s migration failed %ld, type %pGp\n",
-				pfn, msg_page[huge], ret, &page->flags);
+				pfn, msg_page[huge], ret, &page->flags.f);
 			if (ret > 0)
 				ret = -EBUSY;
 		}
 	} else {
 		pr_info("%#lx: %s isolation failed, page count %d, type %pGp\n",
-			pfn, msg_page[huge], page_count(page), &page->flags);
+			pfn, msg_page[huge], page_count(page), &page->flags.f);
 		ret = -EBUSY;
 	}
 	return ret;

@@ -7209,7 +7209,7 @@ static ssize_t write_marker_to_buffer(struct trace_array *tr, const char __user 
 	entry = ring_buffer_event_data(event);
 	entry->ip = ip;
 
-	len = __copy_from_user_inatomic(&entry->buf, ubuf, cnt);
+	len = copy_from_user_nofault(&entry->buf, ubuf, cnt);
 	if (len) {
 		memcpy(&entry->buf, FAULTED_STR, FAULTED_SIZE);
 		cnt = FAULTED_SIZE;
@@ -7306,7 +7306,7 @@ static ssize_t write_raw_marker_to_buffer(struct trace_array *tr,
 
 	entry = ring_buffer_event_data(event);
 
-	len = __copy_from_user_inatomic(&entry->id, ubuf, cnt);
+	len = copy_from_user_nofault(&entry->id, ubuf, cnt);
 	if (len) {
 		entry->id = -1;
 		memcpy(&entry->buf, FAULTED_STR, FAULTED_SIZE);
@@ -10207,8 +10207,7 @@ static struct vfsmount *trace_automount(struct dentry *mntpt, void *ingore)
 
 	pr_warn("NOTICE: Automounting of tracing to debugfs is deprecated and will be removed in 2030\n");
 
-	ret = vfs_parse_fs_string(fc, "source",
-				  "tracefs", strlen("tracefs"));
+	ret = vfs_parse_fs_string(fc, "source", "tracefs");
 	if (!ret)
 		mnt = fc_mount(fc);
 	else
