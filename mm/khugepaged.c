@@ -93,6 +93,11 @@ static DEFINE_READ_MOSTLY_HASHTABLE(mm_slots_hash, MM_SLOTS_HASH_BITS);
 
 static struct kmem_cache *mm_slot_cache __ro_after_init;
 
+struct scan_bit_state {
+	u8 order;
+	u16 offset;
+};
+
 struct collapse_control {
 	bool is_khugepaged;
 
@@ -101,6 +106,11 @@ struct collapse_control {
 
 	/* nodemask for allocation fallback */
 	nodemask_t alloc_nmask;
+
+	/* bitmap used for mTHP collapse */
+	DECLARE_BITMAP(mthp_bitmap, MAX_PTRS_PER_PTE);
+	DECLARE_BITMAP(mthp_bitmap_mask, MAX_PTRS_PER_PTE);
+	struct scan_bit_state mthp_bitmap_stack[MAX_MTHP_BITMAP_STACK];
 };
 
 /**
@@ -1376,6 +1386,93 @@ out_nolock:
 	return result;
 }
 
+static void push_mthp_bitmap_stack(struct collapse_control *cc, int *top,
+				   u8 order, u16 offset)
+{
+	cc->mthp_bitmap_stack[++*top] = (struct scan_bit_state)
+		{ order, offset };
+}
+
+static struct scan_bit_state pop_mthp_bitmap_stack(struct collapse_control *cc, int *top)
+{
+	return cc->mthp_bitmap_stack[*top--];
+}
+
+/*
+ * collapse_scan_bitmap() consumes the bitmap that is generated during
+ * collapse_scan_pmd() to determine what regions and mTHP orders fit best.
+ *
+ * Each bit in the bitmap represents a single occupied (!none/zero) page.
+ * A stack structure cc->mthp_bitmap_stack is used to check different regions
+ * of the bitmap for collapse eligibility. We start at the PMD order and
+ * check if it is eligible for collapse; if not, we add two entries to the
+ * stack at a lower order to represent the left and right halves of the region.
+ *
+ * For each region, we calculate the number of set bits and compare it
+ * against a threshold derived from collapse_max_ptes_none(). A region is
+ * eligible if the number of set bits exceeds this threshold.
+ */
+static int collapse_scan_bitmap(struct mm_struct *mm, unsigned long address,
+		int referenced, int unmapped, struct collapse_control *cc,
+		bool *mmap_locked, unsigned long enabled_orders)
+{
+	unsigned int max_none_ptes, bits_set, threshold_bits;
+	struct scan_bit_state state;
+	unsigned long collapse_address;
+	int collapsed = 0, top = -1;
+	unsigned long num_chunks;
+	u16 offset, mid_offset;
+	u8 order, next_order;
+	int ret;
+
+	push_mthp_bitmap_stack(cc, &top, HPAGE_PMD_ORDER, 0);
+
+	while (top >= 0) {
+		state = pop_mthp_bitmap_stack(cc, &top);
+		order = state.order;
+		offset = state.offset;
+		num_chunks = 1UL << order;
+
+		/* Skip mTHP orders that are not enabled */
+		if (!test_bit(order, &enabled_orders))
+			goto next_order;
+
+		max_none_ptes = collapse_max_ptes_none(order, !cc->is_khugepaged);
+
+		if (max_none_ptes == -EINVAL)
+			return collapsed;
+
+		/* Calculate weight of the range */
+		bitmap_zero(cc->mthp_bitmap_mask, HPAGE_PMD_NR);
+		bitmap_set(cc->mthp_bitmap_mask, offset, num_chunks);
+		bits_set = bitmap_weight_and(cc->mthp_bitmap,
+					     cc->mthp_bitmap_mask, HPAGE_PMD_NR);
+
+		threshold_bits = (1UL << order) - max_none_ptes - 1;
+
+		/* Check if the region is eligible based on the threshold */
+		if (bits_set > threshold_bits) {
+			collapse_address = address + offset * PAGE_SIZE;
+			ret = collapse_huge_page(mm, collapse_address, referenced,
+						 unmapped, cc, mmap_locked,
+						 order);
+			if (ret == SCAN_SUCCEED) {
+				collapsed += 1UL << order;
+				continue;
+			}
+		}
+
+next_order:
+		if (order > KHUGEPAGED_MIN_MTHP_ORDER) {
+			next_order = order - 1;
+			mid_offset = offset + (num_chunks / 2);
+			push_mthp_bitmap_stack(cc, &top, next_order, mid_offset);
+			push_mthp_bitmap_stack(cc, &top, next_order, offset);
+		}
+	}
+	return collapsed;
+}
+
 static int collapse_scan_pmd(struct mm_struct *mm,
 			     struct vm_area_struct *vma,
 			     unsigned long start_addr, bool *mmap_locked,
@@ -1383,11 +1480,15 @@ static int collapse_scan_pmd(struct mm_struct *mm,
 {
 	pmd_t *pmd;
 	pte_t *pte, *_pte;
+	int i;
 	int result = SCAN_FAIL, referenced = 0;
-	int none_or_zero = 0, shared = 0;
+	int none_or_zero = 0, shared = 0, nr_collapsed = 0;
 	struct page *page = NULL;
+	unsigned int max_ptes_none;
 	struct folio *folio = NULL;
 	unsigned long addr;
+	unsigned long enabled_orders;
+	bool full_scan = true;
 	spinlock_t *ptl;
 	int node = NUMA_NO_NODE, unmapped = 0;
 
@@ -1397,22 +1498,34 @@ static int collapse_scan_pmd(struct mm_struct *mm,
 	if (result != SCAN_SUCCEED)
 		goto out;
 
+	bitmap_zero(cc->mthp_bitmap, HPAGE_PMD_NR);
 	memset(cc->node_load, 0, sizeof(cc->node_load));
 	nodes_clear(cc->alloc_nmask);
+
+	enabled_orders = collapse_allowable_orders(vma, vma->vm_flags, cc->is_khugepaged);
+
+	/*
+	 * If PMD is the only enabled order, enforce max_ptes_none, otherwise
+	 * scan all pages to populate the bitmap for mTHP collapse.
+	 */
+	if (cc->is_khugepaged && enabled_orders == BIT(HPAGE_PMD_ORDER))
+		full_scan = false;
+	max_ptes_none = collapse_max_ptes_none(HPAGE_PMD_ORDER, full_scan);
+
 	pte = pte_offset_map_lock(mm, pmd, start_addr, &ptl);
 	if (!pte) {
 		result = SCAN_PMD_NULL;
 		goto out;
 	}
 
-	for (addr = start_addr, _pte = pte; _pte < pte + HPAGE_PMD_NR;
-	     _pte++, addr += PAGE_SIZE) {
+	for (i = 0; i < HPAGE_PMD_NR; i++) {
+		_pte = pte + i;
+		addr = start_addr + i * PAGE_SIZE;
 		pte_t pteval = ptep_get(_pte);
 		if (pte_none_or_zero(pteval)) {
 			++none_or_zero;
 			if (!userfaultfd_armed(vma) &&
-			    (!cc->is_khugepaged ||
-			     none_or_zero <= khugepaged_max_ptes_none)) {
+			    none_or_zero <= max_ptes_none) {
 				continue;
 			} else {
 				result = SCAN_EXCEED_NONE_PTE;
@@ -1480,6 +1593,8 @@ static int collapse_scan_pmd(struct mm_struct *mm,
 			}
 		}
 
+		/* Set bit for occupied pages */
+		bitmap_set(cc->mthp_bitmap, i, 1);
 		/*
 		 * Record which node the original page is from and save this
 		 * information to cc->node_load[].
@@ -1536,9 +1651,12 @@ static int collapse_scan_pmd(struct mm_struct *mm,
 out_unmap:
 	pte_unmap_unlock(pte, ptl);
 	if (result == SCAN_SUCCEED) {
-		result = collapse_huge_page(mm, start_addr, referenced,
-					    unmapped, cc, mmap_locked,
-					    HPAGE_PMD_ORDER);
+		nr_collapsed = collapse_scan_bitmap(mm, start_addr, referenced, unmapped,
+					      cc, mmap_locked, enabled_orders);
+		if (nr_collapsed > 0)
+			result = SCAN_SUCCEED;
+		else
+			result = SCAN_FAIL;
 	}
 out:
 	trace_mm_khugepaged_scan_pmd(mm, folio, referenced,
