@@ -468,6 +468,26 @@ void __khugepaged_enter(struct mm_struct *mm)
 		wake_up_interruptible(&khugepaged_wait);
 }
 
+/* Returns the scaled max_ptes_none for a given order.
+ * Caps the value to HPAGE_PMD_NR/2 - 1 in the case of mTHP collapse to prevent
+ * a feedback loop. If max_ptes_none is greater than HPAGE_PMD_NR/2, the value
+ * would lead to collapses that introduces 2x more pages than the original
+ * number of pages. On subsequent scans, the max_ptes_none check would be
+ * satisfied and the collapses would continue until the largest order is reached
+ */
+static int collapse_max_ptes_none(unsigned int order)
+{
+	int max_ptes_none;
+
+	if (order != HPAGE_PMD_ORDER &&
+	    khugepaged_max_ptes_none >= HPAGE_PMD_NR/2)
+		max_ptes_none = HPAGE_PMD_NR/2 - 1;
+	else
+		max_ptes_none = khugepaged_max_ptes_none;
+	return max_ptes_none >> (HPAGE_PMD_ORDER - order);
+
+}
+
 void khugepaged_enter_vma(struct vm_area_struct *vma,
 			  vm_flags_t vm_flags)
 {
@@ -554,7 +574,7 @@ static int __collapse_huge_page_isolate(struct vm_area_struct *vma,
 	struct folio *folio = NULL;
 	pte_t *_pte;
 	int none_or_zero = 0, shared = 0, result = SCAN_FAIL, referenced = 0;
-	int scaled_max_ptes_none = khugepaged_max_ptes_none >> (HPAGE_PMD_ORDER - order);
+	int scaled_max_ptes_none = collapse_max_ptes_none(order);
 	const unsigned long nr_pages = 1UL << order;
 
 	for (_pte = pte; _pte < pte + nr_pages;
