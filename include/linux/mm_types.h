@@ -97,10 +97,7 @@ struct page {
 				/* Or, free page */
 				struct list_head buddy_list;
 				struct list_head pcp_list;
-				struct {
-					struct llist_node pcp_llist;
-					unsigned int order;
-				};
+				struct llist_node pcp_llist;
 			};
 			struct address_space *mapping;
 			union {
@@ -111,7 +108,8 @@ struct page {
 			 * @private: Mapping-private opaque data.
 			 * Usually used for buffer_heads if PagePrivate.
 			 * Used for swp_entry_t if swapcache flag set.
-			 * Indicates order in the buddy system if PageBuddy.
+			 * Indicates order in the buddy system if PageBuddy
+			 * or on pcp_llist.
 			 */
 			unsigned long private;
 		};
@@ -770,6 +768,64 @@ struct pfnmap_track_ctx {
 };
 #endif
 
+/* What action should be taken after an .mmap_prepare call is complete? */
+enum mmap_action_type {
+	MMAP_NOTHING,		 /* Mapping is complete, no further action. */
+	MMAP_REMAP_PFN,		 /* Remap PFN range based on desc->remap. */
+	MMAP_INSERT_MIXED,	 /* Mixed map based on desc->mixedmap. */
+	MMAP_INSERT_MIXED_PAGES, /* Mixed map based on desc->mixedmap_pages. */
+	MMAP_CUSTOM_ACTION,	 /* User-provided hook. */
+};
+
+struct mmap_action {
+	union {
+		/* Remap range. */
+		struct {
+			unsigned long addr;
+			unsigned long pfn;
+			unsigned long size;
+			pgprot_t pgprot;
+		} remap;
+		/* Insert mixed map. */
+		struct {
+			unsigned long addr;
+			unsigned long pfn;
+			unsigned long num_pages;
+		} mixedmap;
+		/* Insert specific mixed map pages. */
+		struct {
+			unsigned long addr;
+			struct page **pages;
+			unsigned long num_pages;
+			/* kfree pages on completion? */
+			bool kfree_pages :1;
+		} mixedmap_pages;
+		struct {
+			int (*action_hook)(struct vm_area_struct *vma);
+		} custom;
+	};
+	enum mmap_action_type type;
+
+	/*
+	 * If specified, this hook is invoked after the selected action has been
+	 * successfully completed. Not that the VMA write lock still held.
+	 *
+	 * The absolute minimum ought to be done here.
+	 *
+	 * Returns 0 on success, or an error code.
+	 */
+	int (*success_hook)(struct vm_area_struct *vma);
+
+	/*
+	 * If specified, this hook is invoked when an error occurred when
+	 * attempting the selection action.
+	 *
+	 * The hook can return an error code in order to filter the error, but
+	 * it is not valid to clear the error here.
+	 */
+	int (*error_hook)(int err);
+};
+
 /*
  * Describes a VMA that is about to be mmap()'ed. Drivers may choose to
  * manipulate mutable fields which will cause those fields to be updated in the
@@ -793,6 +849,9 @@ struct vm_area_desc {
 	/* Write-only fields. */
 	const struct vm_operations_struct *vm_ops;
 	void *private_data;
+
+	/* Take further action? */
+	struct mmap_action action;
 };
 
 /*
@@ -1488,6 +1547,9 @@ struct mmu_gather;
 extern void tlb_gather_mmu(struct mmu_gather *tlb, struct mm_struct *mm);
 extern void tlb_gather_mmu_fullmm(struct mmu_gather *tlb, struct mm_struct *mm);
 extern void tlb_finish_mmu(struct mmu_gather *tlb);
+
+#define LAZY_MMU_DEFAULT	0
+#define LAZY_MMU_NESTED		1
 
 struct vm_fault;
 

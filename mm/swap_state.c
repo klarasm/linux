@@ -87,7 +87,6 @@ void show_swap_cache_info(void)
  */
 struct folio *swap_cache_get_folio(swp_entry_t entry)
 {
-
 	unsigned long swp_tb;
 	struct folio *folio;
 
@@ -132,14 +131,13 @@ void *swap_cache_get_shadow(swp_entry_t entry)
  *
  * Context: Caller must ensure @entry is valid and protect the swap device
  * with reference count or locks.
- * The caller also needs to mark the corresponding swap_map slots with
- * SWAP_HAS_CACHE to avoid race or conflict.
- * Return: Returns 0 on success, error code otherwise.
+ * The caller also needs to update the corresponding swap_map slots with
+ * SWAP_HAS_CACHE bit to avoid race or conflict.
  */
 void swap_cache_add_folio(struct folio *folio, swp_entry_t entry, void **shadowp)
 {
 	void *shadow = NULL;
-	unsigned long swp_tb, exist;
+	unsigned long old_tb, new_tb;
 	struct swap_cluster_info *ci;
 	unsigned int ci_start, ci_off, ci_end;
 	unsigned long nr_pages = folio_nr_pages(folio);
@@ -148,16 +146,16 @@ void swap_cache_add_folio(struct folio *folio, swp_entry_t entry, void **shadowp
 	VM_WARN_ON_ONCE_FOLIO(folio_test_swapcache(folio), folio);
 	VM_WARN_ON_ONCE_FOLIO(!folio_test_swapbacked(folio), folio);
 
-	swp_tb = folio_to_swp_tb(folio);
+	new_tb = folio_to_swp_tb(folio);
 	ci_start = swp_cluster_offset(entry);
 	ci_end = ci_start + nr_pages;
 	ci_off = ci_start;
 	ci = swap_cluster_lock(__swap_entry_to_info(entry), swp_offset(entry));
 	do {
-		exist = __swap_table_xchg(ci, ci_off, swp_tb);
-		WARN_ON_ONCE(swp_tb_is_folio(exist));
-		if (swp_tb_is_shadow(exist))
-			shadow = swp_tb_to_shadow(exist);
+		old_tb = __swap_table_xchg(ci, ci_off, new_tb);
+		WARN_ON_ONCE(swp_tb_is_folio(old_tb));
+		if (swp_tb_is_shadow(old_tb))
+			shadow = swp_tb_to_shadow(old_tb);
 	} while (++ci_off < ci_end);
 
 	folio_ref_add(folio, nr_pages);
@@ -188,7 +186,7 @@ void swap_cache_add_folio(struct folio *folio, swp_entry_t entry, void **shadowp
 void __swap_cache_del_folio(struct swap_cluster_info *ci, struct folio *folio,
 			    swp_entry_t entry, void *shadow)
 {
-	unsigned long exist, swp_tb;
+	unsigned long old_tb, new_tb;
 	unsigned int ci_start, ci_off, ci_end;
 	unsigned long nr_pages = folio_nr_pages(folio);
 
@@ -197,15 +195,15 @@ void __swap_cache_del_folio(struct swap_cluster_info *ci, struct folio *folio,
 	VM_WARN_ON_ONCE_FOLIO(!folio_test_swapcache(folio), folio);
 	VM_WARN_ON_ONCE_FOLIO(folio_test_writeback(folio), folio);
 
-	swp_tb = shadow_swp_to_tb(shadow);
+	new_tb = shadow_swp_to_tb(shadow);
 	ci_start = swp_cluster_offset(entry);
 	ci_end = ci_start + nr_pages;
 	ci_off = ci_start;
 	do {
 		/* If shadow is NULL, we sets an empty shadow */
-		exist = __swap_table_xchg(ci, ci_off, swp_tb);
-		WARN_ON_ONCE(!swp_tb_is_folio(exist) ||
-			     swp_tb_to_folio(exist) != folio);
+		old_tb = __swap_table_xchg(ci, ci_off, new_tb);
+		WARN_ON_ONCE(!swp_tb_is_folio(old_tb) ||
+			     swp_tb_to_folio(old_tb) != folio);
 	} while (++ci_off < ci_end);
 
 	folio->swap.val = 0;
@@ -240,30 +238,35 @@ void swap_cache_del_folio(struct folio *folio)
 /**
  * __swap_cache_replace_folio - Replace a folio in the swap cache.
  * @ci: The locked swap cluster.
- * @entry: The first swap entry that the new folio corresponds to.
  * @old: The old folio to be replaced.
  * @new: The new folio.
  *
- * Replace a existing folio in the swap cache with a new folio.
+ * Replace an existing folio in the swap cache with a new folio. The
+ * caller is responsible for setting up the new folio's flag and swap
+ * entries. Replacement will take the new folio's swap entry value as
+ * the starting offset to override all slots covered by the new folio.
  *
  * Context: Caller must ensure both folios are locked, and lock the
- * cluster that holds the entries to be replaced.
+ * cluster that holds the old folio to be replaced.
  */
-void __swap_cache_replace_folio(struct swap_cluster_info *ci, swp_entry_t entry,
+void __swap_cache_replace_folio(struct swap_cluster_info *ci,
 				struct folio *old, struct folio *new)
 {
-	unsigned int ci_off = swp_cluster_offset(entry);
+	swp_entry_t entry = new->swap;
 	unsigned long nr_pages = folio_nr_pages(new);
+	unsigned int ci_off = swp_cluster_offset(entry);
 	unsigned int ci_end = ci_off + nr_pages;
-	unsigned long exist, swp_tb;
+	unsigned long old_tb, new_tb;
 
-	VM_WARN_ON_ONCE(entry.val != new->swap.val);
-	VM_WARN_ON_ONCE(!folio_test_locked(old) || !folio_test_locked(new));
 	VM_WARN_ON_ONCE(!folio_test_swapcache(old) || !folio_test_swapcache(new));
-	swp_tb = folio_to_swp_tb(new);
+	VM_WARN_ON_ONCE(!folio_test_locked(old) || !folio_test_locked(new));
+	VM_WARN_ON_ONCE(!entry.val);
+
+	/* Swap cache still stores N entries instead of a high-order entry */
+	new_tb = folio_to_swp_tb(new);
 	do {
-		exist = __swap_table_xchg(ci, ci_off, swp_tb);
-		WARN_ON_ONCE(!swp_tb_is_folio(exist) || swp_tb_to_folio(exist) != old);
+		old_tb = __swap_table_xchg(ci, ci_off, new_tb);
+		WARN_ON_ONCE(!swp_tb_is_folio(old_tb) || swp_tb_to_folio(old_tb) != old);
 	} while (++ci_off < ci_end);
 
 	/*

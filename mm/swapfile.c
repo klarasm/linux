@@ -218,7 +218,7 @@ static bool swap_is_last_map(struct swap_info_struct *si,
 static int __try_to_reclaim_swap(struct swap_info_struct *si,
 				 unsigned long offset, unsigned long flags)
 {
-	swp_entry_t entry = swp_entry(si->type, offset);
+	const swp_entry_t entry = swp_entry(si->type, offset);
 	struct swap_cluster_info *ci;
 	struct folio *folio;
 	int ret, nr_pages;
@@ -854,7 +854,7 @@ static bool cluster_scan_range(struct swap_info_struct *si,
  * do a sanity check here to ensure nothing leaked, so the swap
  * table should be empty upon freeing.
  */
-static void cluster_table_check(struct swap_cluster_info *ci,
+static void swap_cluster_assert_table_empty(struct swap_cluster_info *ci,
 				unsigned int start, unsigned int nr)
 {
 	unsigned int ci_off = start % SWAPFILE_CLUSTER;
@@ -888,7 +888,7 @@ static bool cluster_alloc_range(struct swap_info_struct *si, struct swap_cluster
 		ci->order = order;
 
 	memset(si->swap_map + start, usage, nr_pages);
-	cluster_table_check(ci, start, nr_pages);
+	swap_cluster_assert_table_empty(ci, start, nr_pages);
 	swap_range_alloc(si, nr_pages);
 	ci->count += nr_pages;
 
@@ -1715,7 +1715,7 @@ static void swap_entries_free(struct swap_info_struct *si,
 
 	mem_cgroup_uncharge_swap(entry, nr_pages);
 	swap_range_free(si, offset, nr_pages);
-	cluster_table_check(ci, offset, nr_pages);
+	swap_cluster_assert_table_empty(ci, offset, nr_pages);
 
 	if (!ci->count)
 		free_cluster(si, ci);
@@ -2135,6 +2135,13 @@ static int unuse_pte(struct vm_area_struct *vma, pmd_t *pmd,
 	pte_t *pte, new_pte, old_pte;
 	bool hwpoisoned = false;
 	int ret = 1;
+
+	/*
+	 * If the folio is removed from swap cache by others, continue to
+	 * unuse other PTEs. try_to_unuse may try again if we missed this one.
+	 */
+	if (!folio_matches_swap_entry(folio, entry))
+		return 0;
 
 	swapcache = folio;
 	folio = ksm_might_need_to_copy(folio, vma, addr);

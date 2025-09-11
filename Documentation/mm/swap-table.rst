@@ -35,10 +35,10 @@ was in.
 3. shadow: The shadow contains the working set information of the swapped
    out folio. This is the normal state for a swapped out page.
 
-Swap Table
-----------
+Swap Table Internals
+--------------------
 
-The previous swap cache is implemented by XAray. The XArray is a tree
+The previous swap cache is implemented by XArray. The XArray is a tree
 structure. Each lookup will go through multiple nodes. Can we do better?
 
 Notice that most of the time when we look up the swap cache, we are either

@@ -593,7 +593,7 @@ static int __folio_migrate_mapping(struct address_space *mapping,
 	newzone = folio_zone(newfolio);
 
 	if (folio_test_swapcache(folio))
-		ci = swap_cluster_lock_by_folio_irq(folio);
+		ci = swap_cluster_get_and_lock_irq(folio);
 	else
 		xas_lock_irq(&xas);
 
@@ -632,7 +632,7 @@ static int __folio_migrate_mapping(struct address_space *mapping,
 	}
 
 	if (folio_test_swapcache(folio))
-		__swap_cache_replace_folio(ci, folio->swap, folio, newfolio);
+		__swap_cache_replace_folio(ci, folio, newfolio);
 	else
 		xas_store(&xas, newfolio);
 
