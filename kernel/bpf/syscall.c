@@ -581,7 +581,7 @@ static bool can_alloc_pages(void)
 static struct page *__bpf_alloc_page(int nid)
 {
 	if (!can_alloc_pages())
-		return alloc_pages_nolock(nid, 0);
+		return alloc_pages_nolock(__GFP_ACCOUNT, nid, 0);
 
 	return alloc_pages_node(nid,
 				GFP_KERNEL | __GFP_ZERO | __GFP_ACCOUNT
@@ -905,7 +905,7 @@ static void bpf_map_free_in_work(struct bpf_map *map)
 	/* Avoid spawning kworkers, since they all might contend
 	 * for the same mutex like slab_mutex.
 	 */
-	queue_work(system_unbound_wq, &map->work);
+	queue_work(system_dfl_wq, &map->work);
 }
 
 static void bpf_map_free_rcu_gp(struct rcu_head *rcu)
