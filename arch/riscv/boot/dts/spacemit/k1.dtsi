@@ -638,6 +638,16 @@
 			#reset-cells = <1>;
 		};
 
+		watchdog: watchdog@d4080000 {
+			compatible = "spacemit,k1-wdt";
+			reg = <0x0 0xd4080000 0x0 0xff>;
+			clocks = <&syscon_mpmu CLK_WDT>,
+				<&syscon_mpmu CLK_WDT_BUS>;
+			clock-names = "core", "bus";
+			resets = <&syscon_mpmu RESET_WDT>;
+			status = "disabled";
+		};
+
 		pll: clock-controller@d4090000 {
 			compatible = "spacemit,k1-pll";
 			reg = <0x0 0xd4090000 0x0 0x1000>;
