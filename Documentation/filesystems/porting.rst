@@ -1286,14 +1286,7 @@ The vm_area_desc provides the minimum required information for a filesystem
 to initialise state upon memory mapping of a file-backed region, and output
 parameters for the file system to set this state.
 
----
-
-**mandatory**
-
-Calling conventions for vfs_parse_fs_string() have changed; it does *not*
-take length anymore (value ? strlen(value) : 0 is used).  If you want
-a different length, use
-
-	vfs_parse_fs_qstr(fc, key, &QSTR_LEN(value, len))
-
-instead.
+In nearly all cases, this is all that is required for a filesystem. However, if
+a filesystem needs to perform an operation such a pre-population of page tables,
+then that action can be specified in the vm_area_desc->action field, which can
+be configured using the mmap_action_*() helpers.
