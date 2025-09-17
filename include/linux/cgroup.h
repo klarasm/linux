@@ -354,6 +354,11 @@ static inline bool css_is_dying(struct cgroup_subsys_state *css)
 	return css->flags & CSS_DYING;
 }
 
+static inline bool css_is_online(struct cgroup_subsys_state *css)
+{
+	return css->flags & CSS_ONLINE;
+}
+
 static inline bool css_is_self(struct cgroup_subsys_state *css)
 {
 	if (css == &css->cgroup->self) {
@@ -793,6 +798,11 @@ struct cgroup_namespace {
 extern struct cgroup_namespace init_cgroup_ns;
 
 #ifdef CONFIG_CGROUPS
+
+static inline struct cgroup_namespace *to_cg_ns(struct ns_common *ns)
+{
+	return container_of(ns, struct cgroup_namespace, ns);
+}
 
 void free_cgroup_ns(struct cgroup_namespace *ns);
 

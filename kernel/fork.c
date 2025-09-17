@@ -290,6 +290,11 @@ static int alloc_thread_stack_node(struct task_struct *tsk, int node)
 		if (!vm_area)
 			continue;
 
+		if (memcg_charge_kernel_stack(vm_area)) {
+			vfree(vm_area->addr);
+			return -ENOMEM;
+		}
+
 		/* Reset stack metadata. */
 		kasan_unpoison_range(vm_area->addr, THREAD_SIZE);
 
@@ -297,11 +302,6 @@ static int alloc_thread_stack_node(struct task_struct *tsk, int node)
 
 		/* Clear stale pointers from reused stack. */
 		memset(stack, 0, THREAD_SIZE);
-
-		if (memcg_charge_kernel_stack(vm_area)) {
-			vfree(vm_area->addr);
-			return -ENOMEM;
-		}
 
 		tsk->stack_vm_area = vm_area;
 		tsk->stack = stack;
@@ -440,15 +440,22 @@ static void account_kernel_stack(struct task_struct *tsk, int account)
 		struct vm_struct *vm_area = task_stack_vm_area(tsk);
 		int i;
 
-		for (i = 0; i < THREAD_SIZE / PAGE_SIZE; i++)
+		for (i = 0; i < THREAD_SIZE / PAGE_SIZE; i++) {
 			mod_lruvec_page_state(vm_area->pages[i], NR_KERNEL_STACK_KB,
 					      account * (PAGE_SIZE / 1024));
+			__SetPageStack(vm_area->pages[i]);
+		}
 	} else {
 		void *stack = task_stack_page(tsk);
+		struct page *page = virt_to_head_page(stack);
+		int i;
 
 		/* All stack pages are in the same node. */
 		mod_lruvec_kmem_state(stack, NR_KERNEL_STACK_KB,
 				      account * (THREAD_SIZE / 1024));
+
+		for (i = 0; i < THREAD_SIZE / PAGE_SIZE; i++, page++)
+			__SetPageStack(page);
 	}
 }
 
@@ -461,8 +468,16 @@ void exit_task_stack_account(struct task_struct *tsk)
 		int i;
 
 		vm_area = task_stack_vm_area(tsk);
-		for (i = 0; i < THREAD_SIZE / PAGE_SIZE; i++)
+		for (i = 0; i < THREAD_SIZE / PAGE_SIZE; i++) {
 			memcg_kmem_uncharge_page(vm_area->pages[i], 0);
+			__ClearPageStack(vm_area->pages[i]);
+		}
+	} else {
+		struct page *page = virt_to_head_page(task_stack_page(tsk));
+		int i;
+
+		for (i = 0; i < THREAD_SIZE / PAGE_SIZE; i++, page++)
+			__ClearPageStack(page);
 	}
 }
 
@@ -1014,6 +1029,7 @@ static void mm_init_uprobes_state(struct mm_struct *mm)
 {
 #ifdef CONFIG_UPROBES
 	mm->uprobes_state.xol_area = NULL;
+	arch_uprobe_init_state(mm);
 #endif
 }
 
@@ -1056,11 +1072,14 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	mm_init_uprobes_state(mm);
 	hugetlb_count_init(mm);
 
+	mm_flags_clear_all(mm);
 	if (current->mm) {
-		mm->flags = mmf_init_flags(current->mm->flags);
+		unsigned long flags = __mm_flags_get_word(current->mm);
+
+		__mm_flags_set_word(mm, mmf_init_legacy_flags(flags));
 		mm->def_flags = current->mm->def_flags & VM_INIT_DEF_MASK;
 	} else {
-		mm->flags = default_dump_filter;
+		__mm_flags_set_word(mm, default_dump_filter);
 		mm->def_flags = 0;
 	}
 
@@ -1596,7 +1615,7 @@ static int copy_files(unsigned long clone_flags, struct task_struct *tsk,
 	return 0;
 }
 
-static int copy_sighand(unsigned long clone_flags, struct task_struct *tsk)
+static int copy_sighand(u64 clone_flags, struct task_struct *tsk)
 {
 	struct sighand_struct *sig;
 
@@ -1687,6 +1706,10 @@ static int copy_signal(unsigned long clone_flags, struct task_struct *tsk)
 
 	tty_audit_fork(sig);
 	sched_autogroup_fork(sig);
+
+#ifdef CONFIG_CGROUPS
+	init_rwsem(&sig->cgroup_threadgroup_rwsem);
+#endif
 
 	sig->oom_score_adj = current->signal->oom_score_adj;
 	sig->oom_score_adj_min = current->signal->oom_score_adj_min;
@@ -1884,7 +1907,7 @@ static void copy_oom_score_adj(u64 clone_flags, struct task_struct *tsk)
 
 	/* We need to synchronize with __set_oom_adj */
 	mutex_lock(&oom_adj_mutex);
-	set_bit(MMF_MULTIPROCESS, &tsk->mm->flags);
+	mm_flags_set(MMF_MULTIPROCESS, tsk->mm);
 	/* Update the values in case they were changed after copy_signal */
 	tsk->signal->oom_score_adj = current->signal->oom_score_adj;
 	tsk->signal->oom_score_adj_min = current->signal->oom_score_adj_min;
@@ -2124,9 +2147,7 @@ __latent_entropy struct task_struct *copy_process(
 
 	p->pagefault_disabled = 0;
 
-#ifdef CONFIG_LOCKDEP
 	lockdep_init_task(p);
-#endif
 
 	p->blocked_on = NULL; /* not blocked yet */
 
@@ -2539,11 +2560,9 @@ struct task_struct * __init fork_idle(int cpu)
 struct task_struct *create_io_thread(int (*fn)(void *), void *arg, int node)
 {
 	unsigned long flags = CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|
-				CLONE_IO;
+			      CLONE_IO|CLONE_VM|CLONE_UNTRACED;
 	struct kernel_clone_args args = {
-		.flags		= ((lower_32_bits(flags) | CLONE_VM |
-				    CLONE_UNTRACED) & ~CSIGNAL),
-		.exit_signal	= (lower_32_bits(flags) & CSIGNAL),
+		.flags		= flags,
 		.fn		= fn,
 		.fn_arg		= arg,
 		.io_thread	= 1,
@@ -2655,9 +2674,8 @@ pid_t kernel_thread(int (*fn)(void *), void *arg, const char *name,
 		    unsigned long flags)
 {
 	struct kernel_clone_args args = {
-		.flags		= ((lower_32_bits(flags) | CLONE_VM |
-				    CLONE_UNTRACED) & ~CSIGNAL),
-		.exit_signal	= (lower_32_bits(flags) & CSIGNAL),
+		.flags		= ((flags | CLONE_VM | CLONE_UNTRACED) & ~CSIGNAL),
+		.exit_signal	= (flags & CSIGNAL),
 		.fn		= fn,
 		.fn_arg		= arg,
 		.name		= name,
@@ -2673,9 +2691,8 @@ pid_t kernel_thread(int (*fn)(void *), void *arg, const char *name,
 pid_t user_mode_thread(int (*fn)(void *), void *arg, unsigned long flags)
 {
 	struct kernel_clone_args args = {
-		.flags		= ((lower_32_bits(flags) | CLONE_VM |
-				    CLONE_UNTRACED) & ~CSIGNAL),
-		.exit_signal	= (lower_32_bits(flags) & CSIGNAL),
+		.flags		= ((flags | CLONE_VM | CLONE_UNTRACED) & ~CSIGNAL),
+		.exit_signal	= (flags & CSIGNAL),
 		.fn		= fn,
 		.fn_arg		= arg,
 	};

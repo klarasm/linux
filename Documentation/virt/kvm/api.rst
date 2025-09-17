@@ -3075,6 +3075,12 @@ This IOCTL replaces the obsolete KVM_GET_PIT.
 Sets the state of the in-kernel PIT model. Only valid after KVM_CREATE_PIT2.
 See KVM_GET_PIT2 for details on struct kvm_pit_state2.
 
+.. Tip::
+  ``KVM_SET_PIT2`` strictly adheres to the spec of Intel 8254 PIT.  For example,
+  a ``count`` value of 0 in ``struct kvm_pit_channel_state`` is interpreted as
+  65536, which is the maximum count value. Refer to `Intel 8254 programmable
+  interval timer <https://www.scs.stanford.edu/10wi-cs140/pintos/specs/8254.pdf>`_.
+
 This IOCTL replaces the obsolete KVM_SET_PIT.
 
 
@@ -6413,6 +6419,15 @@ into the guest_memfd instance.  For a given guest_memfd file, there can be at
 most one mapping per page, i.e. binding multiple memory regions to a single
 guest_memfd range is not allowed (any number of memory regions can be bound to
 a single guest_memfd file, but the bound ranges must not overlap).
+
+When the capability KVM_CAP_GUEST_MEMFD_MMAP is supported, the 'flags' field
+supports GUEST_MEMFD_FLAG_MMAP.  Setting this flag on guest_memfd creation
+enables mmap() and faulting of guest_memfd memory to host userspace.
+
+When the KVM MMU performs a PFN lookup to service a guest fault and the backing
+guest_memfd has the GUEST_MEMFD_FLAG_MMAP set, then the fault will always be
+consumed from guest_memfd, regardless of whether it is a shared or a private
+fault.
 
 See KVM_SET_USER_MEMORY_REGION2 for additional details.
 
