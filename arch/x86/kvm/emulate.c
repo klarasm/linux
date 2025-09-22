@@ -4088,8 +4088,8 @@ static const struct opcode group4[] = {
 };
 
 static const struct opcode group5[] = {
-	F(DstMem | SrcNone | Lock,		em_inc),
-	F(DstMem | SrcNone | Lock,		em_dec),
+	I(DstMem | SrcNone | Lock,		em_inc),
+	I(DstMem | SrcNone | Lock,		em_dec),
 	I(SrcMem | NearBranch | IsBranch | ShadowStack, em_call_near_abs),
 	I(SrcMemFAddr | ImplicitOps | IsBranch | ShadowStack, em_call_far),
 	I(SrcMem | NearBranch | IsBranch,       em_jmp_abs),
