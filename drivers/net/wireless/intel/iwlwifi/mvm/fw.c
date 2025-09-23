@@ -115,7 +115,7 @@ static bool iwl_alive_fn(struct iwl_notif_wait_data *notif_wait,
 
 
 	if (version >= 6) {
-		struct iwl_alive_ntf_v6 *palive;
+		struct iwl_alive_ntf_v7 *palive;
 
 		if (pkt_len < sizeof(*palive))
 			return false;
@@ -837,7 +837,7 @@ static int iwl_mvm_config_ltr(struct iwl_mvm *mvm)
 		.flags = cpu_to_le32(LTR_CFG_FLAG_FEATURE_ENABLE),
 	};
 
-	if (!mvm->trans->ltr_enabled)
+	if (!iwl_trans_is_ltr_enabled(mvm->trans))
 		return 0;
 
 	return iwl_mvm_send_cmd_pdu(mvm, LTR_CONFIG, 0,
