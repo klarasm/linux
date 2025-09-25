@@ -7,6 +7,7 @@
 
 #include <linux/cleanup.h>
 #include <linux/delay.h>
+#include <linux/iopoll.h>
 #include <linux/jiffies.h>
 #include <linux/ktime.h>
 #include <linux/wait_bit.h>
@@ -79,6 +80,11 @@
  * Xe driver enables SLPC with all of its defaults features and frequency
  * selection, which varies per platform.
  *
+ * Power profiles add another level of control to SLPC. When power saving
+ * profile is chosen, SLPC will use conservative thresholds to ramp frequency,
+ * thus saving power. Base profile is default and ensures balanced performance
+ * for any workload.
+ *
  * Render-C States:
  * ================
  *
@@ -125,26 +131,16 @@ static struct iosys_map *pc_to_maps(struct xe_guc_pc *pc)
 	 FIELD_PREP(HOST2GUC_PC_SLPC_REQUEST_MSG_1_EVENT_ARGC, count))
 
 static int wait_for_pc_state(struct xe_guc_pc *pc,
-			     enum slpc_global_state state,
+			     enum slpc_global_state target_state,
 			     int timeout_ms)
 {
-	int timeout_us = 1000 * timeout_ms;
-	int slept, wait = 10;
+	enum slpc_global_state state;
 
 	xe_device_assert_mem_access(pc_to_xe(pc));
 
-	for (slept = 0; slept < timeout_us;) {
-		if (slpc_shared_data_read(pc, header.global_state) == state)
-			return 0;
-
-		usleep_range(wait, wait << 1);
-		slept += wait;
-		wait <<= 1;
-		if (slept + wait > timeout_us)
-			wait = timeout_us - slept;
-	}
-
-	return -ETIMEDOUT;
+	return poll_timeout_us(state = slpc_shared_data_read(pc, header.global_state),
+			       state == target_state,
+			       20, timeout_ms * USEC_PER_MSEC, false);
 }
 
 static int wait_for_flush_complete(struct xe_guc_pc *pc)
@@ -159,24 +155,15 @@ static int wait_for_flush_complete(struct xe_guc_pc *pc)
 	return 0;
 }
 
-static int wait_for_act_freq_limit(struct xe_guc_pc *pc, u32 freq)
+static int wait_for_act_freq_max_limit(struct xe_guc_pc *pc, u32 max_limit)
 {
-	int timeout_us = SLPC_ACT_FREQ_TIMEOUT_MS * USEC_PER_MSEC;
-	int slept, wait = 10;
+	u32 freq;
 
-	for (slept = 0; slept < timeout_us;) {
-		if (xe_guc_pc_get_act_freq(pc) <= freq)
-			return 0;
-
-		usleep_range(wait, wait << 1);
-		slept += wait;
-		wait <<= 1;
-		if (slept + wait > timeout_us)
-			wait = timeout_us - slept;
-	}
-
-	return -ETIMEDOUT;
+	return poll_timeout_us(freq = xe_guc_pc_get_act_freq(pc),
+			       freq <= max_limit,
+			       20, SLPC_ACT_FREQ_TIMEOUT_MS * USEC_PER_MSEC, false);
 }
+
 static int pc_action_reset(struct xe_guc_pc *pc)
 {
 	struct xe_guc_ct *ct = pc_to_ct(pc);
@@ -722,7 +709,7 @@ static int xe_guc_pc_set_max_freq_locked(struct xe_guc_pc *pc, u32 freq)
  */
 int xe_guc_pc_set_max_freq(struct xe_guc_pc *pc, u32 freq)
 {
-	if (XE_WA(pc_to_gt(pc), 22019338487)) {
+	if (XE_GT_WA(pc_to_gt(pc), 22019338487)) {
 		if (wait_for_flush_complete(pc) != 0)
 			return -EAGAIN;
 	}
@@ -835,7 +822,7 @@ static u32 pc_max_freq_cap(struct xe_guc_pc *pc)
 {
 	struct xe_gt *gt = pc_to_gt(pc);
 
-	if (XE_WA(gt, 22019338487)) {
+	if (XE_GT_WA(gt, 22019338487)) {
 		if (xe_gt_is_media_type(gt))
 			return min(LNL_MERT_FREQ_CAP, pc->rp0_freq);
 		else
@@ -899,7 +886,7 @@ static int pc_adjust_freq_bounds(struct xe_guc_pc *pc)
 	if (pc_get_min_freq(pc) > pc->rp0_freq)
 		ret = pc_set_min_freq(pc, pc->rp0_freq);
 
-	if (XE_WA(tile->primary_gt, 14022085890))
+	if (XE_GT_WA(tile->primary_gt, 14022085890))
 		ret = pc_set_min_freq(pc, max(BMG_MIN_FREQ, pc_get_min_freq(pc)));
 
 out:
@@ -931,7 +918,7 @@ static bool needs_flush_freq_limit(struct xe_guc_pc *pc)
 {
 	struct xe_gt *gt = pc_to_gt(pc);
 
-	return  XE_WA(gt, 22019338487) &&
+	return  XE_GT_WA(gt, 22019338487) &&
 		pc->rp0_freq > BMG_MERT_FLUSH_FREQ_CAP;
 }
 
@@ -978,7 +965,7 @@ void xe_guc_pc_apply_flush_freq_limit(struct xe_guc_pc *pc)
 	 * Wait for actual freq to go below the flush cap: even if the previous
 	 * max was below cap, the current one might still be above it
 	 */
-	ret = wait_for_act_freq_limit(pc, BMG_MERT_FLUSH_FREQ_CAP);
+	ret = wait_for_act_freq_max_limit(pc, BMG_MERT_FLUSH_FREQ_CAP);
 	if (ret)
 		xe_gt_err_once(gt, "Actual freq did not reduce to %u, %pe\n",
 			       BMG_MERT_FLUSH_FREQ_CAP, ERR_PTR(ret));
@@ -1017,7 +1004,7 @@ static int pc_set_mert_freq_cap(struct xe_guc_pc *pc)
 {
 	int ret;
 
-	if (!XE_WA(pc_to_gt(pc), 22019338487))
+	if (!XE_GT_WA(pc_to_gt(pc), 22019338487))
 		return 0;
 
 	guard(mutex)(&pc->freq_lock);
@@ -1076,7 +1063,6 @@ int xe_guc_pc_gucrc_disable(struct xe_guc_pc *pc)
 {
 	struct xe_device *xe = pc_to_xe(pc);
 	struct xe_gt *gt = pc_to_gt(pc);
-	unsigned int fw_ref;
 	int ret = 0;
 
 	if (xe->info.skip_guc_pc)
@@ -1086,17 +1072,7 @@ int xe_guc_pc_gucrc_disable(struct xe_guc_pc *pc)
 	if (ret)
 		return ret;
 
-	fw_ref = xe_force_wake_get(gt_to_fw(gt), XE_FORCEWAKE_ALL);
-	if (!xe_force_wake_ref_has_domain(fw_ref, XE_FORCEWAKE_ALL)) {
-		xe_force_wake_put(gt_to_fw(gt), fw_ref);
-		return -ETIMEDOUT;
-	}
-
-	xe_gt_idle_disable_c6(gt);
-
-	xe_force_wake_put(gt_to_fw(gt), fw_ref);
-
-	return 0;
+	return xe_gt_idle_disable_c6(gt);
 }
 
 /**
@@ -1182,6 +1158,61 @@ static int pc_action_set_strategy(struct xe_guc_pc *pc, u32 val)
 	return ret;
 }
 
+static const char *power_profile_to_string(struct xe_guc_pc *pc)
+{
+	switch (pc->power_profile) {
+	case SLPC_POWER_PROFILE_BASE:
+		return "base";
+	case SLPC_POWER_PROFILE_POWER_SAVING:
+		return "power_saving";
+	default:
+		return "invalid";
+	}
+}
+
+void xe_guc_pc_get_power_profile(struct xe_guc_pc *pc, char *profile)
+{
+	switch (pc->power_profile) {
+	case SLPC_POWER_PROFILE_BASE:
+		sprintf(profile, "[%s]    %s\n", "base", "power_saving");
+		break;
+	case SLPC_POWER_PROFILE_POWER_SAVING:
+		sprintf(profile, "%s    [%s]\n", "base", "power_saving");
+		break;
+	default:
+		sprintf(profile, "invalid");
+	}
+}
+
+int xe_guc_pc_set_power_profile(struct xe_guc_pc *pc, const char *buf)
+{
+	int ret = 0;
+	u32 val;
+
+	if (strncmp("base", buf, strlen("base")) == 0)
+		val = SLPC_POWER_PROFILE_BASE;
+	else if (strncmp("power_saving", buf, strlen("power_saving")) == 0)
+		val = SLPC_POWER_PROFILE_POWER_SAVING;
+	else
+		return -EINVAL;
+
+	guard(mutex)(&pc->freq_lock);
+	xe_pm_runtime_get_noresume(pc_to_xe(pc));
+
+	ret = pc_action_set_param(pc,
+				  SLPC_PARAM_POWER_PROFILE,
+				  val);
+	if (ret)
+		xe_gt_err_once(pc_to_gt(pc), "Failed to set power profile to %d: %pe\n",
+			       val, ERR_PTR(ret));
+	else
+		pc->power_profile = val;
+
+	xe_pm_runtime_put(pc_to_xe(pc));
+
+	return ret;
+}
+
 /**
  * xe_guc_pc_start - Start GuC's Power Conservation component
  * @pc: Xe_GuC_PC instance
@@ -1260,6 +1291,11 @@ int xe_guc_pc_start(struct xe_guc_pc *pc)
 	/* Enable SLPC Optimized Strategy for compute */
 	ret = pc_action_set_strategy(pc, SLPC_OPTIMIZED_STRATEGY_COMPUTE);
 
+	/* Set cached value of power_profile */
+	ret = xe_guc_pc_set_power_profile(pc, power_profile_to_string(pc));
+	if (unlikely(ret))
+		xe_gt_err(gt, "Failed to set SLPC power profile: %pe\n", ERR_PTR(ret));
+
 out:
 	xe_force_wake_put(gt_to_fw(gt), fw_ref);
 	return ret;
@@ -1337,6 +1373,8 @@ int xe_guc_pc_init(struct xe_guc_pc *pc)
 		return PTR_ERR(bo);
 
 	pc->bo = bo;
+
+	pc->power_profile = SLPC_POWER_PROFILE_BASE;
 
 	return devm_add_action_or_reset(xe->drm.dev, xe_guc_pc_fini_hw, pc);
 }
