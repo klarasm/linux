@@ -420,6 +420,9 @@ u32 i9xx_hpd_irq_ack(struct intel_display *display)
 	u32 hotplug_status = 0, hotplug_status_mask;
 	int i;
 
+	if (!HAS_HOTPLUG(display))
+		return 0;
+
 	if (display->platform.g4x ||
 	    display->platform.valleyview || display->platform.cherryview)
 		hotplug_status_mask = HOTPLUG_INT_STATUS_G4X |
@@ -1025,7 +1028,7 @@ static void mtp_tc_hpd_enable_detection(struct intel_encoder *encoder)
 {
 	struct intel_display *display = to_intel_display(encoder);
 
-	intel_de_rmw(display, SHOTPLUG_CTL_DDI,
+	intel_de_rmw(display, SHOTPLUG_CTL_TC,
 		     mtp_tc_hotplug_mask(encoder->hpd_pin),
 		     mtp_tc_hotplug_enables(encoder));
 }
