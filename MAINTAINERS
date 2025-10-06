@@ -2906,7 +2906,9 @@ ARM/Marvell PXA1908 SOC support
 M:	Duje Mihanović <duje@dujemihanovic.xyz>
 L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
 S:	Maintained
+F:	Documentation/devicetree/bindings/clock/marvell,pxa1908.yaml
 F:	arch/arm64/boot/dts/marvell/mmp/
+F:	drivers/clk/mmp/Kconfig
 F:	drivers/clk/mmp/clk-pxa1908*.c
 F:	drivers/pmdomain/marvell/
 F:	include/dt-bindings/clock/marvell,pxa1908.h
@@ -7407,7 +7409,6 @@ S:	Maintained
 P:	Documentation/doc-guide/maintainer-profile.rst
 T:	git git://git.lwn.net/linux.git docs-next
 F:	Documentation/
-F:	scripts/check-variable-fonts.sh
 F:	scripts/checktransupdate.py
 F:	scripts/documentation-file-ref-check
 F:	scripts/get_abi.py
@@ -7416,7 +7417,6 @@ F:	scripts/lib/abi/*
 F:	scripts/lib/kdoc/*
 F:	tools/docs/*
 F:	tools/net/ynl/pyynl/lib/doc_generator.py
-F:	scripts/sphinx-pre-install
 X:	Documentation/ABI/
 X:	Documentation/admin-guide/media/
 X:	Documentation/devicetree/
@@ -7451,7 +7451,7 @@ L:	linux-doc@vger.kernel.org
 S:	Maintained
 F:	Documentation/sphinx/parse-headers.pl
 F:	scripts/documentation-file-ref-check
-F:	scripts/sphinx-pre-install
+F:	tools/docs/sphinx-pre-install
 
 DOCUMENTATION/ITALIAN
 M:	Federico Vaga <federico.vaga@vaga.pv.it>
@@ -10390,7 +10390,7 @@ L:	linux-kernel@vger.kernel.org
 S:	Maintained
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/tip/tip.git core/entry
 F:	include/linux/entry-common.h
-F:	include/linux/entry-kvm.h
+F:	include/linux/entry-virt.h
 F:	include/linux/irq-entry-common.h
 F:	kernel/entry/
 
@@ -10523,7 +10523,7 @@ L:	gfs2@lists.linux.dev
 S:	Supported
 B:	https://bugzilla.kernel.org/enter_bug.cgi?product=File%20System&component=gfs2
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/gfs2/linux-gfs2.git
-F:	Documentation/filesystems/gfs2*
+F:	Documentation/filesystems/gfs2/
 F:	fs/gfs2/
 F:	include/uapi/linux/gfs2_ondisk.h
 
@@ -10961,7 +10961,7 @@ S:	Supported
 F:	drivers/misc/hpilo.[ch]
 
 HEWLETT PACKARD ENTERPRISE ILO NMI WATCHDOG DRIVER
-M:	Jerry Hoemann <jerry.hoemann@hpe.com>
+M:	Craig Lamparter <craig.lamparter@hpe.com>
 S:	Supported
 F:	Documentation/watchdog/hpwdt.rst
 F:	drivers/watchdog/hpwdt.c
@@ -11165,6 +11165,13 @@ L:	linux-input@vger.kernel.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/input/touchscreen/himax,hx83112b.yaml
 F:	drivers/input/touchscreen/himax_hx83112b.c
+
+HIMAX HX852X TOUCHSCREEN DRIVER
+M:	Stephan Gerhold <stephan@gerhold.net>
+L:	linux-input@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/input/touchscreen/himax,hx852es.yaml
+F:	drivers/input/touchscreen/himax_hx852x.c
 
 HIPPI
 M:	Jes Sorensen <jes@trained-monkey.org>
@@ -11604,7 +11611,6 @@ F:	drivers/pci/controller/pci-hyperv-intf.c
 F:	drivers/pci/controller/pci-hyperv.c
 F:	drivers/scsi/storvsc_drv.c
 F:	drivers/uio/uio_hv_generic.c
-F:	drivers/video/fbdev/hyperv_fb.c
 F:	include/asm-generic/mshyperv.h
 F:	include/clocksource/hyperv_timer.h
 F:	include/hyperv/hvgdk.h
@@ -11617,6 +11623,16 @@ F:	include/net/mana
 F:	include/uapi/linux/hyperv.h
 F:	net/vmw_vsock/hyperv_transport.c
 F:	tools/hv/
+
+HYPER-V FRAMEBUFFER DRIVER
+M:	"K. Y. Srinivasan" <kys@microsoft.com>
+M:	Haiyang Zhang <haiyangz@microsoft.com>
+M:	Wei Liu <wei.liu@kernel.org>
+M:	Dexuan Cui <decui@microsoft.com>
+L:	linux-hyperv@vger.kernel.org
+S:	Obsolete
+T:	git git://git.kernel.org/pub/scm/linux/kernel/git/hyperv/linux.git
+F:	drivers/video/fbdev/hyperv_fb.c
 
 HYPERBUS SUPPORT
 M:	Vignesh Raghavendra <vigneshr@ti.com>
@@ -12714,7 +12730,7 @@ F:	drivers/mfd/intel-m10-bmc*
 F:	include/linux/mfd/intel-m10-bmc.h
 
 INTEL MAX10 BMC SECURE UPDATES
-M:	Matthew Gerlach <matthew.gerlach@altera.com>
+M:	Xu Yilun <yilun.xu@intel.com>
 L:	linux-fpga@vger.kernel.org
 S:	Maintained
 F:	Documentation/ABI/testing/sysfs-driver-intel-m10-bmc-sec-update
@@ -18320,6 +18336,7 @@ F:	Documentation/core-api/symbol-namespaces.rst
 F:	scripts/nsdeps
 
 NTB AMD DRIVER
+M:	Basavaraj Natikar <Basavaraj.Natikar@amd.com>
 M:	Shyam Sundar S K <Shyam-sundar.S-k@amd.com>
 L:	ntb@lists.linux.dev
 S:	Supported
@@ -19723,6 +19740,13 @@ L:	linux-samsung-soc@vger.kernel.org
 S:	Maintained
 F:	drivers/pci/controller/dwc/pci-exynos.c
 
+PCI DRIVER FOR STM32MP25
+M:	Christian Bruel <christian.bruel@foss.st.com>
+L:	linux-pci@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/pci/st,stm32-pcie-*.yaml
+F:	drivers/pci/controller/dwc/*stm32*
+
 PCI DRIVER FOR SYNOPSYS DESIGNWARE
 M:	Jingoo Han <jingoohan1@gmail.com>
 M:	Manivannan Sadhasivam <mani@kernel.org>
@@ -20106,7 +20130,6 @@ R:	Alexander Shishkin <alexander.shishkin@linux.intel.com>
 R:	Jiri Olsa <jolsa@kernel.org>
 R:	Ian Rogers <irogers@google.com>
 R:	Adrian Hunter <adrian.hunter@intel.com>
-R:	"Liang, Kan" <kan.liang@linux.intel.com>
 L:	linux-perf-users@vger.kernel.org
 L:	linux-kernel@vger.kernel.org
 S:	Supported
@@ -21929,19 +21952,19 @@ S:	Maintained
 F:	Documentation/devicetree/bindings/iio/potentiometer/renesas,x9250.yaml
 F:	drivers/iio/potentiometer/x9250.c
 
-RENESAS RZ/G3S THERMAL SENSOR UNIT DRIVER
-M:	Claudiu Beznea <claudiu.beznea.uj@bp.renesas.com>
-L:	linux-pm@vger.kernel.org
-S:	Maintained
-F:	Documentation/devicetree/bindings/thermal/renesas,r9a08g045-tsu.yaml
-F:	drivers/thermal/renesas/rzg3s_thermal.c
-
 RENESAS RZ/G3E THERMAL SENSOR UNIT DRIVER
 M:	John Madieu <john.madieu.xa@bp.renesas.com>
 L:	linux-pm@vger.kernel.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/thermal/renesas,r9a09g047-tsu.yaml
 F:	drivers/thermal/renesas/rzg3e_thermal.c
+
+RENESAS RZ/G3S THERMAL SENSOR UNIT DRIVER
+M:	Claudiu Beznea <claudiu.beznea.uj@bp.renesas.com>
+L:	linux-pm@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/thermal/renesas,r9a08g045-tsu.yaml
+F:	drivers/thermal/renesas/rzg3s_thermal.c
 
 RESET CONTROLLER FRAMEWORK
 M:	Philipp Zabel <p.zabel@pengutronix.de>
@@ -23882,7 +23905,7 @@ F:	drivers/media/i2c/imx274.c
 
 SONY IMX283 SENSOR DRIVER
 M:	Kieran Bingham <kieran.bingham@ideasonboard.com>
-M:	Umang Jain <umang.jain@ideasonboard.com>
+R:	Umang Jain <uajain@igalia.com>
 L:	linux-media@vger.kernel.org
 S:	Maintained
 T:	git git://linuxtv.org/media.git

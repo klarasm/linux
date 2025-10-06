@@ -530,6 +530,7 @@ static int mb862xxfb_init_fbinfo(struct fb_info *fbi)
 	return 0;
 }
 
+#ifdef CONFIG_FB_DEVICE
 /*
  * show some display controller and cursor registers
  */
@@ -569,6 +570,7 @@ static ssize_t dispregs_show(struct device *dev,
 }
 
 static DEVICE_ATTR_RO(dispregs);
+#endif
 
 static irqreturn_t mb862xx_intr(int irq, void *dev_id)
 {
@@ -674,7 +676,7 @@ static int of_platform_mb862xx_probe(struct platform_device *ofdev)
 	struct fb_info *info;
 	struct resource res;
 	resource_size_t res_size;
-	unsigned long ret = -ENODEV;
+	int ret = -ENODEV;
 
 	if (of_address_to_resource(np, 0, &res)) {
 		dev_err(dev, "Invalid address\n");
@@ -759,9 +761,11 @@ static int of_platform_mb862xx_probe(struct platform_device *ofdev)
 
 	dev_set_drvdata(dev, info);
 
+#ifdef CONFIG_FB_DEVICE
 	if (device_create_file(dev, &dev_attr_dispregs))
 		dev_err(dev, "Can't create sysfs regdump file\n");
 	return 0;
+#endif
 
 rel_cmap:
 	fb_dealloc_cmap(&info->cmap);
@@ -801,7 +805,9 @@ static void of_platform_mb862xx_remove(struct platform_device *ofdev)
 	free_irq(par->irq, (void *)par);
 	irq_dispose_mapping(par->irq);
 
+#ifdef CONFIG_FB_DEVICE
 	device_remove_file(&ofdev->dev, &dev_attr_dispregs);
+#endif
 
 	unregister_framebuffer(fbi);
 	fb_dealloc_cmap(&fbi->cmap);
@@ -1101,8 +1107,10 @@ static int mb862xx_pci_probe(struct pci_dev *pdev,
 
 	pci_set_drvdata(pdev, info);
 
+#ifdef CONFIG_FB_DEVICE
 	if (device_create_file(dev, &dev_attr_dispregs))
 		dev_err(dev, "Can't create sysfs regdump file\n");
+#endif
 
 	if (par->type == BT_CARMINE)
 		outreg(ctrl, GC_CTRL_INT_MASK, GC_CARMINE_INT_EN);
@@ -1151,7 +1159,9 @@ static void mb862xx_pci_remove(struct pci_dev *pdev)
 
 	mb862xx_i2c_exit(par);
 
+#ifdef CONFIG_FB_DEVICE
 	device_remove_file(&pdev->dev, &dev_attr_dispregs);
+#endif
 
 	unregister_framebuffer(fbi);
 	fb_dealloc_cmap(&fbi->cmap);

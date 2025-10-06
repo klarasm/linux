@@ -17,9 +17,7 @@
 #include "util/debug.h"
 #include "util/callchain.h"
 #include "util/symbol_conf.h"
-#ifdef HAVE_LIBLLVM_SUPPORT
-#include "util/llvm-c-helpers.h"
-#endif
+#include "llvm.h"
 #include "srcline.h"
 #include "string2.h"
 #include "symbol.h"
@@ -49,8 +47,7 @@ static const char *srcline_dso_name(struct dso *dso)
 	return dso_name;
 }
 
-static int inline_list__append(struct symbol *symbol, char *srcline,
-			       struct inline_node *node)
+int inline_list__append(struct symbol *symbol, char *srcline, struct inline_node *node)
 {
 	struct inline_list *ilist;
 
@@ -77,7 +74,7 @@ static const char *gnu_basename(const char *path)
 	return base ? base + 1 : path;
 }
 
-static char *srcline_from_fileline(const char *file, unsigned int line)
+char *srcline_from_fileline(const char *file, unsigned int line)
 {
 	char *srcline;
 
@@ -93,9 +90,9 @@ static char *srcline_from_fileline(const char *file, unsigned int line)
 	return srcline;
 }
 
-static struct symbol *new_inline_sym(struct dso *dso,
-				     struct symbol *base_sym,
-				     const char *funcname)
+struct symbol *new_inline_sym(struct dso *dso,
+			      struct symbol *base_sym,
+			      const char *funcname)
 {
 	struct symbol *inline_sym;
 	char *demangled = NULL;
@@ -132,299 +129,35 @@ static struct symbol *new_inline_sym(struct dso *dso,
 	return inline_sym;
 }
 
-#define MAX_INLINE_NEST 1024
-
 #ifdef HAVE_LIBLLVM_SUPPORT
-
-static void free_llvm_inline_frames(struct llvm_a2l_frame *inline_frames,
-				    int num_frames)
-{
-	if (inline_frames != NULL) {
-		for (int i = 0; i < num_frames; ++i) {
-			zfree(&inline_frames[i].filename);
-			zfree(&inline_frames[i].funcname);
-		}
-		zfree(&inline_frames);
-	}
-}
+#include "llvm.h"
 
 static int addr2line(const char *dso_name, u64 addr,
 		     char **file, unsigned int *line, struct dso *dso,
-		     bool unwind_inlines, struct inline_node *node,
-		     struct symbol *sym)
+		      bool unwind_inlines, struct inline_node *node,
+		      struct symbol *sym)
 {
-	struct llvm_a2l_frame *inline_frames = NULL;
-	int num_frames = llvm_addr2line(dso_name, addr, file, line,
-					node && unwind_inlines, &inline_frames);
-
-	if (num_frames == 0 || !inline_frames) {
-		/* Error, or we didn't want inlines. */
-		return num_frames;
-	}
-
-	for (int i = 0; i < num_frames; ++i) {
-		struct symbol *inline_sym =
-			new_inline_sym(dso, sym, inline_frames[i].funcname);
-		char *srcline = NULL;
-
-		if (inline_frames[i].filename) {
-			srcline =
-				srcline_from_fileline(inline_frames[i].filename,
-						      inline_frames[i].line);
-		}
-		if (inline_list__append(inline_sym, srcline, node) != 0) {
-			free_llvm_inline_frames(inline_frames, num_frames);
-			return 0;
-		}
-	}
-	free_llvm_inline_frames(inline_frames, num_frames);
-
-	return num_frames;
-}
-
-void dso__free_a2l(struct dso *dso __maybe_unused)
-{
-	/* Nothing to free. */
-}
-
-#elif defined(HAVE_LIBBFD_SUPPORT)
-
-/*
- * Implement addr2line using libbfd.
- */
-#define PACKAGE "perf"
-#include <bfd.h>
-
-struct a2l_data {
-	const char 	*input;
-	u64	 	addr;
-
-	bool 		found;
-	const char 	*filename;
-	const char 	*funcname;
-	unsigned 	line;
-
-	bfd 		*abfd;
-	asymbol 	**syms;
-};
-
-static int bfd_error(const char *string)
-{
-	const char *errmsg;
-
-	errmsg = bfd_errmsg(bfd_get_error());
-	fflush(stdout);
-
-	if (string)
-		pr_debug("%s: %s\n", string, errmsg);
-	else
-		pr_debug("%s\n", errmsg);
-
-	return -1;
-}
-
-static int slurp_symtab(bfd *abfd, struct a2l_data *a2l)
-{
-	long storage;
-	long symcount;
-	asymbol **syms;
-	bfd_boolean dynamic = FALSE;
-
-	if ((bfd_get_file_flags(abfd) & HAS_SYMS) == 0)
-		return bfd_error(bfd_get_filename(abfd));
-
-	storage = bfd_get_symtab_upper_bound(abfd);
-	if (storage == 0L) {
-		storage = bfd_get_dynamic_symtab_upper_bound(abfd);
-		dynamic = TRUE;
-	}
-	if (storage < 0L)
-		return bfd_error(bfd_get_filename(abfd));
-
-	syms = malloc(storage);
-	if (dynamic)
-		symcount = bfd_canonicalize_dynamic_symtab(abfd, syms);
-	else
-		symcount = bfd_canonicalize_symtab(abfd, syms);
-
-	if (symcount < 0) {
-		free(syms);
-		return bfd_error(bfd_get_filename(abfd));
-	}
-
-	a2l->syms = syms;
-	return 0;
-}
-
-static void find_address_in_section(bfd *abfd, asection *section, void *data)
-{
-	bfd_vma pc, vma;
-	bfd_size_type size;
-	struct a2l_data *a2l = data;
-	flagword flags;
-
-	if (a2l->found)
-		return;
-
-#ifdef bfd_get_section_flags
-	flags = bfd_get_section_flags(abfd, section);
-#else
-	flags = bfd_section_flags(section);
-#endif
-	if ((flags & SEC_ALLOC) == 0)
-		return;
-
-	pc = a2l->addr;
-#ifdef bfd_get_section_vma
-	vma = bfd_get_section_vma(abfd, section);
-#else
-	vma = bfd_section_vma(section);
-#endif
-#ifdef bfd_get_section_size
-	size = bfd_get_section_size(section);
-#else
-	size = bfd_section_size(section);
-#endif
-
-	if (pc < vma || pc >= vma + size)
-		return;
-
-	a2l->found = bfd_find_nearest_line(abfd, section, a2l->syms, pc - vma,
-					   &a2l->filename, &a2l->funcname,
-					   &a2l->line);
-
-	if (a2l->filename && !strlen(a2l->filename))
-		a2l->filename = NULL;
-}
-
-static struct a2l_data *addr2line_init(const char *path)
-{
-	bfd *abfd;
-	struct a2l_data *a2l = NULL;
-
-	abfd = bfd_openr(path, NULL);
-	if (abfd == NULL)
-		return NULL;
-
-	if (!bfd_check_format(abfd, bfd_object))
-		goto out;
-
-	a2l = zalloc(sizeof(*a2l));
-	if (a2l == NULL)
-		goto out;
-
-	a2l->abfd = abfd;
-	a2l->input = strdup(path);
-	if (a2l->input == NULL)
-		goto out;
-
-	if (slurp_symtab(abfd, a2l))
-		goto out;
-
-	return a2l;
-
-out:
-	if (a2l) {
-		zfree((char **)&a2l->input);
-		free(a2l);
-	}
-	bfd_close(abfd);
-	return NULL;
-}
-
-static void addr2line_cleanup(struct a2l_data *a2l)
-{
-	if (a2l->abfd)
-		bfd_close(a2l->abfd);
-	zfree((char **)&a2l->input);
-	zfree(&a2l->syms);
-	free(a2l);
-}
-
-static int inline_list__append_dso_a2l(struct dso *dso,
-				       struct inline_node *node,
-				       struct symbol *sym)
-{
-	struct a2l_data *a2l = dso__a2l(dso);
-	struct symbol *inline_sym = new_inline_sym(dso, sym, a2l->funcname);
-	char *srcline = NULL;
-
-	if (a2l->filename)
-		srcline = srcline_from_fileline(a2l->filename, a2l->line);
-
-	return inline_list__append(inline_sym, srcline, node);
-}
-
-static int addr2line(const char *dso_name, u64 addr,
-		     char **file, unsigned int *line, struct dso *dso,
-		     bool unwind_inlines, struct inline_node *node,
-		     struct symbol *sym)
-{
-	int ret = 0;
-	struct a2l_data *a2l = dso__a2l(dso);
-
-	if (!a2l) {
-		a2l = addr2line_init(dso_name);
-		dso__set_a2l(dso, a2l);
-	}
-
-	if (a2l == NULL) {
-		if (!symbol_conf.disable_add2line_warn)
-			pr_warning("addr2line_init failed for %s\n", dso_name);
-		return 0;
-	}
-
-	a2l->addr = addr;
-	a2l->found = false;
-
-	bfd_map_over_sections(a2l->abfd, find_address_in_section, a2l);
-
-	if (!a2l->found)
-		return 0;
-
-	if (unwind_inlines) {
-		int cnt = 0;
-
-		if (node && inline_list__append_dso_a2l(dso, node, sym))
-			return 0;
-
-		while (bfd_find_inliner_info(a2l->abfd, &a2l->filename,
-					     &a2l->funcname, &a2l->line) &&
-		       cnt++ < MAX_INLINE_NEST) {
-
-			if (a2l->filename && !strlen(a2l->filename))
-				a2l->filename = NULL;
-
-			if (node != NULL) {
-				if (inline_list__append_dso_a2l(dso, node, sym))
-					return 0;
-				// found at least one inline frame
-				ret = 1;
-			}
-		}
-	}
-
-	if (file) {
-		*file = a2l->filename ? strdup(a2l->filename) : NULL;
-		ret = *file ? 1 : 0;
-	}
-
-	if (line)
-		*line = a2l->line;
-
-	return ret;
+	return llvm__addr2line(dso_name, addr, file, line, dso, unwind_inlines, node, sym);
 }
 
 void dso__free_a2l(struct dso *dso)
 {
-	struct a2l_data *a2l = dso__a2l(dso);
+	dso__free_a2l_llvm(dso);
+}
+#elif defined(HAVE_LIBBFD_SUPPORT)
+#include "libbfd.h"
 
-	if (!a2l)
-		return;
+static int addr2line(const char *dso_name, u64 addr,
+		     char **file, unsigned int *line, struct dso *dso,
+		     bool unwind_inlines, struct inline_node *node,
+		     struct symbol *sym)
+{
+	return libbfd__addr2line(dso_name, addr, file, line, dso, unwind_inlines, node, sym);
+}
 
-	addr2line_cleanup(a2l);
-
-	dso__set_a2l(dso, NULL);
+void dso__free_a2l(struct dso *dso)
+{
+	dso__free_a2l_libbfd(dso);
 }
 
 #else /* HAVE_LIBBFD_SUPPORT */
