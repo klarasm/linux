@@ -2152,7 +2152,8 @@ int alloc_slab_obj_exts(struct slab *slab, struct kmem_cache *s,
 		return 0;
 	}
 
-	kmemleak_not_leak(vec);
+	if (allow_spin)
+		kmemleak_not_leak(vec);
 	return 0;
 }
 
@@ -6431,17 +6432,24 @@ static void free_deferred_objects(struct irq_work *work)
 
 static void defer_free(struct kmem_cache *s, void *head)
 {
-	struct defer_free *df = this_cpu_ptr(&defer_free_objects);
+	struct defer_free *df;
 
+	guard(preempt)();
+
+	df = this_cpu_ptr(&defer_free_objects);
 	if (llist_add(head + s->offset, &df->objects))
 		irq_work_queue(&df->work);
 }
 
 static void defer_deactivate_slab(struct slab *slab, void *flush_freelist)
 {
-	struct defer_free *df = this_cpu_ptr(&defer_free_objects);
+	struct defer_free *df;
 
 	slab->flush_freelist = flush_freelist;
+
+	guard(preempt)();
+
+	df = this_cpu_ptr(&defer_free_objects);
 	if (llist_add(&slab->llnode, &df->slabs))
 		irq_work_queue(&df->work);
 }
@@ -7692,9 +7700,6 @@ void __kmem_cache_release(struct kmem_cache *s)
 	if (s->cpu_sheaves)
 		pcs_destroy(s);
 #ifndef CONFIG_SLUB_TINY
-#ifdef CONFIG_PREEMPT_RT
-	lockdep_unregister_key(&s->lock_key);
-#endif
 	free_percpu(s->cpu_slab);
 #endif
 	free_kmem_cache_nodes(s);
@@ -8551,7 +8556,7 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 	if (s->cpu_sheaves) {
 		err = init_percpu_sheaves(s);
 		if (err)
-			goto out;
+			goto out_unreg_lockdep;
 	}
 
 	err = 0;
@@ -8574,6 +8579,12 @@ out:
 	if (err)
 		__kmem_cache_release(s);
 	return err;
+
+out_unreg_lockdep:
+#if !IS_ENABLED(CONFIG_SLUB_TINY) && IS_ENABLED(CONFIG_PREEMPT_RT)
+	lockdep_unregister_key(&s->lock_key);
+#endif
+	goto out;
 }
 
 #ifdef SLAB_SUPPORTS_SYSFS
