@@ -28,6 +28,29 @@
 #include "xe_vm.h"
 #include "xe_pxp.h"
 
+/**
+ * DOC: Execution Queue
+ *
+ * An Execution queue is an interface for the HW context of execution.
+ * The user creates an execution queue, submits the GPU jobs through those
+ * queues and in the end destroys them.
+ *
+ * Execution queues can also be created by XeKMD itself for driver internal
+ * operations like object migration etc.
+ *
+ * An execution queue is associated with a specified HW engine or a group of
+ * engines (belonging to the same tile and engine class) and any GPU job
+ * submitted on the queue will be run on one of these engines.
+ *
+ * An execution queue is tied to an address space (VM). It holds a reference
+ * of the associated VM and the underlying Logical Ring Context/s (LRC/s)
+ * until the queue is destroyed.
+ *
+ * The execution queue sits on top of the submission backend. It opaquely
+ * handles the GuC and Execlist backends whichever the platform uses, and
+ * the ring operations the different engine classes support.
+ */
+
 enum xe_exec_queue_sched_prop {
 	XE_EXEC_QUEUE_JOB_TIMEOUT = 0,
 	XE_EXEC_QUEUE_TIMESLICE = 1,
@@ -160,7 +183,7 @@ static struct xe_exec_queue *__xe_exec_queue_alloc(struct xe_device *xe,
 	return q;
 }
 
-static int __xe_exec_queue_init(struct xe_exec_queue *q)
+static int __xe_exec_queue_init(struct xe_exec_queue *q, u32 exec_queue_flags)
 {
 	int i, err;
 	u32 flags = 0;
@@ -178,6 +201,9 @@ static int __xe_exec_queue_init(struct xe_exec_queue *q)
 		else
 			flags |= XE_LRC_CREATE_RUNALONE;
 	}
+
+	if (!(exec_queue_flags & EXEC_QUEUE_FLAG_KERNEL))
+		flags |= XE_LRC_CREATE_USER_CTX;
 
 	for (i = 0; i < q->width; ++i) {
 		q->lrc[i] = xe_lrc_create(q->hwe, q->vm, SZ_16K, q->msix_vec, flags);
@@ -225,7 +251,7 @@ struct xe_exec_queue *xe_exec_queue_create(struct xe_device *xe, struct xe_vm *v
 	if (IS_ERR(q))
 		return q;
 
-	err = __xe_exec_queue_init(q);
+	err = __xe_exec_queue_init(q, flags);
 	if (err)
 		goto err_post_alloc;
 
@@ -1122,28 +1148,4 @@ int xe_exec_queue_contexts_hwsp_rebase(struct xe_exec_queue *q, void *scratch)
 	}
 
 	return err;
-}
-
-/**
- * xe_exec_queue_jobs_ring_restore - Re-emit ring commands of requests pending on given queue.
- * @q: the &xe_exec_queue struct instance
- */
-void xe_exec_queue_jobs_ring_restore(struct xe_exec_queue *q)
-{
-	struct xe_gpu_scheduler *sched = &q->guc->sched;
-	struct xe_sched_job *job;
-
-	/*
-	 * This routine is used within VF migration recovery. This means
-	 * using the lock here introduces a restriction: we cannot wait
-	 * for any GFX HW response while the lock is taken.
-	 */
-	spin_lock(&sched->base.job_list_lock);
-	list_for_each_entry(job, &sched->base.pending_list, drm.list) {
-		if (xe_sched_job_is_error(job))
-			continue;
-
-		q->ring_ops->emit_job(job);
-	}
-	spin_unlock(&sched->base.job_list_lock);
 }
