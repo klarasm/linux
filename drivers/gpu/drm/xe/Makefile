@@ -174,7 +174,10 @@ xe-$(CONFIG_PCI_IOV) += \
 	xe_lmtt_ml.o \
 	xe_pci_sriov.o \
 	xe_sriov_pf.o \
-	xe_sriov_pf_service.o
+	xe_sriov_pf_control.o \
+	xe_sriov_pf_debugfs.o \
+	xe_sriov_pf_service.o \
+	xe_tile_sriov_pf_debugfs.o
 
 # include helpers for tests even when XE is built-in
 ifdef CONFIG_DRM_XE_KUNIT_TEST
@@ -214,6 +217,7 @@ xe-$(CONFIG_DRM_XE_DISPLAY) += \
 	display/xe_hdcp_gsc.o \
 	display/xe_panic.o \
 	display/xe_plane_initial.o \
+	display/xe_stolen.o \
 	display/xe_tdf.o
 
 # SOC code shared with i915
