@@ -206,6 +206,16 @@ config DEBUG_BUGVERBOSE
 	  of the BUG call as well as the EIP and oops trace.  This aids
 	  debugging but costs about 70-100K of memory.
 
+config DEBUG_BUGVERBOSE_DETAILED
+	bool "Verbose WARN_ON_ONCE() reporting (adds 100K)" if DEBUG_BUGVERBOSE
+	help
+	  Say Y here to make WARN_ON_ONCE() output the condition string of the
+	  warning, in addition to the file name and line number.
+	  This helps debugging, but costs about 100K of memory.
+
+	  Say N if unsure.
+
+
 endmenu # "printk and dmesg options"
 
 config DEBUG_KERNEL
@@ -332,8 +342,7 @@ config DEBUG_INFO_COMPRESSED_ZLIB
 	depends on $(cc-option,-gz=zlib)
 	depends on $(ld-option,--compress-debug-sections=zlib)
 	help
-	  Compress the debug information using zlib.  Requires GCC 5.0+ or Clang
-	  5.0+, binutils 2.26+, and zlib.
+	  Compress the debug information using zlib.
 
 	  Users of dpkg-deb via debian/rules may find an increase in
 	  size of their debug .deb packages with this config set, due to the
