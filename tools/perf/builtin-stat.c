@@ -624,8 +624,9 @@ static enum counter_recovery stat_handle_error(struct evsel *counter, int err)
 	 */
 	if (err == EINVAL || err == ENOSYS || err == ENOENT || err == ENXIO) {
 		if (verbose > 0) {
-			ui__warning("%s event is not supported by the kernel.\n",
-				    evsel__name(counter));
+			evsel__open_strerror(counter, &target, err, msg, sizeof(msg));
+			ui__warning("%s event is not supported by the kernel.\n%s\n",
+				    evsel__name(counter), msg);
 		}
 		return COUNTER_SKIP;
 	}
@@ -649,10 +650,11 @@ static enum counter_recovery stat_handle_error(struct evsel *counter, int err)
 		}
 	}
 	if (verbose > 0) {
+		evsel__open_strerror(counter, &target, err, msg, sizeof(msg));
 		ui__warning(err == EOPNOTSUPP
-			? "%s event is not supported by the kernel.\n"
-			: "skipping event %s that kernel failed to open.\n",
-			evsel__name(counter));
+			? "%s event is not supported by the kernel.\n%s\n"
+			: "skipping event %s that kernel failed to open.\n%s\n",
+			evsel__name(counter), msg);
 	}
 	return COUNTER_SKIP;
 }
@@ -2540,6 +2542,7 @@ int cmd_stat(int argc, const char **argv)
 	unsigned int interval, timeout;
 	const char * const stat_subcommands[] = { "record", "report" };
 	char errbuf[BUFSIZ];
+	struct evsel *counter;
 
 	setlocale(LC_ALL, "");
 
@@ -2796,6 +2799,18 @@ int cmd_stat(int argc, const char **argv)
 	}
 
 	evlist__warn_user_requested_cpus(evsel_list, target.cpu_list);
+
+	evlist__for_each_entry(evsel_list, counter) {
+		/*
+		 * Setup BPF counters to require CPUs as any(-1) isn't
+		 * supported. evlist__create_maps below will propagate this
+		 * information to the evsels. Note, evsel__is_bperf isn't yet
+		 * set up, and this change must happen early, so directly use
+		 * the bpf_counter variable and target information.
+		 */
+		if ((counter->bpf_counter || target.use_bpf) && !target__has_cpu(&target))
+			counter->core.requires_cpu = true;
+	}
 
 	if (evlist__create_maps(evsel_list, &target) < 0) {
 		if (target__has_task(&target)) {
