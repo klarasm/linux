@@ -2477,8 +2477,7 @@ int change_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 #endif
 
 	if (prot_numa) {
-		struct folio *folio;
-		bool toptier;
+		int target_node = NUMA_NO_NODE;
 		/*
 		 * Avoid trapping faults against the zero page. The read-only
 		 * data is likely to be read-cached on the local CPU and
@@ -2490,19 +2489,13 @@ int change_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 		if (pmd_protnone(*pmd))
 			goto unlock;
 
-		folio = pmd_folio(*pmd);
-		toptier = node_is_toptier(folio_nid(folio));
-		/*
-		 * Skip scanning top tier node if normal numa
-		 * balancing is disabled
-		 */
-		if (!(sysctl_numa_balancing_mode & NUMA_BALANCING_NORMAL) &&
-		    toptier)
-			goto unlock;
+		/* Get target node for single threaded private VMAs */
+		if (!(vma->vm_flags & VM_SHARED) &&
+		    atomic_read(&vma->vm_mm->mm_users) == 1)
+			target_node = numa_node_id();
 
-		if (folio_use_access_time(folio))
-			folio_xchg_access_time(folio,
-					       jiffies_to_msecs(jiffies));
+		if (folio_skip_prot_numa(pmd_folio(*pmd), vma, target_node))
+			goto unlock;
 	}
 	/*
 	 * In case prot_numa, we are under mmap_read_lock(mm). It's critical
@@ -2615,7 +2608,6 @@ int move_pages_huge_pmd(struct mm_struct *mm, pmd_t *dst_pmd, pmd_t *src_pmd, pm
 	pmd_t _dst_pmd, src_pmdval;
 	struct page *src_page;
 	struct folio *src_folio;
-	struct anon_vma *src_anon_vma;
 	spinlock_t *src_ptl, *dst_ptl;
 	pgtable_t src_pgtable;
 	struct mmu_notifier_range range;
@@ -2664,22 +2656,8 @@ int move_pages_huge_pmd(struct mm_struct *mm, pmd_t *dst_pmd, pmd_t *src_pmd, pm
 				src_addr + HPAGE_PMD_SIZE);
 	mmu_notifier_invalidate_range_start(&range);
 
-	if (src_folio) {
+	if (src_folio)
 		folio_lock(src_folio);
-
-		/*
-		 * split_huge_page walks the anon_vma chain without the page
-		 * lock. Serialize against it with the anon_vma lock, the page
-		 * lock is not enough.
-		 */
-		src_anon_vma = folio_get_anon_vma(src_folio);
-		if (!src_anon_vma) {
-			err = -EAGAIN;
-			goto unlock_folio;
-		}
-		anon_vma_lock_write(src_anon_vma);
-	} else
-		src_anon_vma = NULL;
 
 	dst_ptl = pmd_lockptr(mm, dst_pmd);
 	double_pt_lock(src_ptl, dst_ptl);
@@ -2725,11 +2703,6 @@ int move_pages_huge_pmd(struct mm_struct *mm, pmd_t *dst_pmd, pmd_t *src_pmd, pm
 	pgtable_trans_huge_deposit(mm, dst_pmd, src_pgtable);
 unlock_ptls:
 	double_pt_unlock(src_ptl, dst_ptl);
-	if (src_anon_vma) {
-		anon_vma_unlock_write(src_anon_vma);
-		put_anon_vma(src_anon_vma);
-	}
-unlock_folio:
 	/* unblock rmap walks */
 	if (src_folio)
 		folio_unlock(src_folio);
@@ -3547,15 +3520,9 @@ static int __split_unmapped_folio(struct folio *folio, int new_order,
 		struct page *split_at, struct xa_state *xas,
 		struct address_space *mapping, bool uniform_split)
 {
-	int order = folio_order(folio);
-	int start_order = uniform_split ? new_order : order - 1;
-	bool stop_split = false;
-	struct folio *next;
+	bool is_anon = folio_test_anon(folio);
+	int old_order = folio_order(folio);
 	int split_order;
-	int ret = 0;
-
-	if (folio_test_anon(folio))
-		mod_mthp_stat(order, MTHP_STAT_NR_ANON, -1);
 
 	folio_clear_has_hwpoisoned(folio);
 
@@ -3563,17 +3530,13 @@ static int __split_unmapped_folio(struct folio *folio, int new_order,
 	 * split to new_order one order at a time. For uniform split,
 	 * folio is split to new_order directly.
 	 */
-	for (split_order = start_order;
-	     split_order >= new_order && !stop_split;
+	for (split_order = uniform_split ? new_order : old_order - 1;
+	     split_order >= new_order;
 	     split_order--) {
-		struct folio *end_folio = folio_next(folio);
-		int old_order = folio_order(folio);
-		struct folio *new_folio;
+		int new_folios = 1UL << (old_order - split_order);
 
 		/* order-1 anonymous folio is not supported */
-		if (folio_test_anon(folio) && split_order == 1)
-			continue;
-		if (uniform_split && split_order != new_order)
+		if (is_anon && split_order == 1)
 			continue;
 
 		if (mapping) {
@@ -3587,49 +3550,25 @@ static int __split_unmapped_folio(struct folio *folio, int new_order,
 			else {
 				xas_set_order(xas, folio->index, split_order);
 				xas_try_split(xas, folio, old_order);
-				if (xas_error(xas)) {
-					ret = xas_error(xas);
-					stop_split = true;
-				}
+				if (xas_error(xas))
+					return xas_error(xas);
 			}
 		}
 
-		if (!stop_split) {
-			folio_split_memcg_refs(folio, old_order, split_order);
-			split_page_owner(&folio->page, old_order, split_order);
-			pgalloc_tag_split(folio, old_order, split_order);
+		folio_split_memcg_refs(folio, old_order, split_order);
+		split_page_owner(&folio->page, old_order, split_order);
+		pgalloc_tag_split(folio, old_order, split_order);
+		__split_folio_to_order(folio, old_order, split_order);
 
-			__split_folio_to_order(folio, old_order, split_order);
+		if (is_anon) {
+			mod_mthp_stat(old_order, MTHP_STAT_NR_ANON, -1);
+			mod_mthp_stat(split_order, MTHP_STAT_NR_ANON, new_folios);
 		}
-
-		/*
-		 * Iterate through after-split folios and update folio stats.
-		 * But in buddy allocator like split, the folio
-		 * containing the specified page is skipped until its order
-		 * is new_order, since the folio will be worked on in next
-		 * iteration.
-		 */
-		for (new_folio = folio; new_folio != end_folio; new_folio = next) {
-			next = folio_next(new_folio);
-			/*
-			 * for buddy allocator like split, new_folio containing
-			 * @split_at page could be split again, thus do not
-			 * change stats yet. Wait until new_folio's order is
-			 * @new_order or stop_split is set to true by the above
-			 * xas_split() failure.
-			 */
-			if (new_folio == page_folio(split_at)) {
-				folio = new_folio;
-				if (split_order != new_order && !stop_split)
-					continue;
-			}
-			if (folio_test_anon(new_folio))
-				mod_mthp_stat(folio_order(new_folio),
-					      MTHP_STAT_NR_ANON, 1);
-		}
+		folio = page_folio(split_at);
+		old_order = split_order;
 	}
 
-	return ret;
+	return 0;
 }
 
 bool non_uniform_split_supported(struct folio *folio, unsigned int new_order,
@@ -3721,7 +3660,7 @@ static int __folio_split(struct folio *folio, unsigned int new_order,
 	bool is_anon = folio_test_anon(folio);
 	struct address_space *mapping = NULL;
 	struct anon_vma *anon_vma = NULL;
-	int order = folio_order(folio);
+	int old_order = folio_order(folio);
 	struct folio *new_folio, *next;
 	int nr_shmem_dropped = 0;
 	int remap_flags = 0;
@@ -3735,7 +3674,7 @@ static int __folio_split(struct folio *folio, unsigned int new_order,
 	if (folio != page_folio(split_at) || folio != page_folio(lock_at))
 		return -EINVAL;
 
-	if (new_order >= folio_order(folio))
+	if (new_order >= old_order)
 		return -EINVAL;
 
 	if (uniform_split && !uniform_split_supported(folio, new_order, true))
@@ -3807,7 +3746,7 @@ static int __folio_split(struct folio *folio, unsigned int new_order,
 
 		if (uniform_split) {
 			xas_set_order(&xas, folio->index, new_order);
-			xas_split_alloc(&xas, folio, folio_order(folio), gfp);
+			xas_split_alloc(&xas, folio, old_order, gfp);
 			if (xas_error(&xas)) {
 				ret = xas_error(&xas);
 				goto out;
@@ -3863,13 +3802,13 @@ static int __folio_split(struct folio *folio, unsigned int new_order,
 		struct lruvec *lruvec;
 		int expected_refs;
 
-		if (folio_order(folio) > 1 &&
+		if (old_order > 1 &&
 		    !list_empty(&folio->_deferred_list)) {
 			ds_queue->split_queue_len--;
 			if (folio_test_partially_mapped(folio)) {
 				folio_clear_partially_mapped(folio);
-				mod_mthp_stat(folio_order(folio),
-					      MTHP_STAT_NR_ANON_PARTIALLY_MAPPED, -1);
+				mod_mthp_stat(old_order,
+					MTHP_STAT_NR_ANON_PARTIALLY_MAPPED, -1);
 			}
 			/*
 			 * Reinitialize page_deferred_list after removing the
@@ -3997,7 +3936,7 @@ fail:
 	if (!ret && is_anon && !folio_is_device_private(folio))
 		remap_flags = RMP_USE_SHARED_ZEROPAGE;
 
-	remap_page(folio, 1 << order, remap_flags);
+	remap_page(folio, 1 << old_order, remap_flags);
 
 	/*
 	 * Unlock all after-split folios except the one containing
@@ -4028,9 +3967,9 @@ out_unlock:
 		i_mmap_unlock_read(mapping);
 out:
 	xas_destroy(&xas);
-	if (order == HPAGE_PMD_ORDER)
+	if (old_order == HPAGE_PMD_ORDER)
 		count_vm_event(!ret ? THP_SPLIT_PAGE : THP_SPLIT_PAGE_FAILED);
-	count_mthp_stat(order, !ret ? MTHP_STAT_SPLIT : MTHP_STAT_SPLIT_FAILED);
+	count_mthp_stat(old_order, !ret ? MTHP_STAT_SPLIT : MTHP_STAT_SPLIT_FAILED);
 	return ret;
 }
 
