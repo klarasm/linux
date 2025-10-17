@@ -7,15 +7,16 @@
 #include <objtool/arch.h>
 #include <objtool/warn.h>
 #include <objtool/builtin.h>
+#include <objtool/endianness.h>
 
-int arch_ftrace_match(const char *name)
+int arch_ftrace_match(char *name)
 {
 	return !strcmp(name, "_mcount");
 }
 
-s64 arch_insn_adjusted_addend(struct instruction *insn, struct reloc *reloc)
+unsigned long arch_dest_reloc_offset(int addend)
 {
-	return reloc_addend(reloc);
+	return addend;
 }
 
 bool arch_callee_saved_reg(unsigned char reg)

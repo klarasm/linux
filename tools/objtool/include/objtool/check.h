@@ -64,10 +64,8 @@ struct instruction {
 	    noendbr		: 1,
 	    unret		: 1,
 	    visited		: 4,
-	    no_reloc		: 1,
-	    hole		: 1,
-	    fake		: 1;
-		/* 9 bit hole */
+	    no_reloc		: 1;
+		/* 10 bit hole */
 
 	struct alt_group *alt_group;
 	struct instruction *jump_dest;
