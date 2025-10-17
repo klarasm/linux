@@ -1955,9 +1955,11 @@ int gfs2_permission(struct mnt_idmap *idmap, struct inode *inode,
 		return -ECHILD;
         }
 	if (gfs2_glock_is_locked_by_me(gl) == NULL) {
+		int gh_flags = LM_FLAG_ANY;
+
 		if (may_not_block)
-			return -ECHILD;
-		error = gfs2_glock_nq_init(gl, LM_ST_SHARED, LM_FLAG_ANY, &i_gh);
+			gh_flags |= GL_NOBLOCK;
+		error = gfs2_glock_nq_init(gl, LM_ST_SHARED, gh_flags, &i_gh);
 		if (error)
 			return error;
 	}
