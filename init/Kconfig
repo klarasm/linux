@@ -983,6 +983,26 @@ config NUMA_BALANCING
 
 	  This system will be inactive on UMA systems.
 
+config SCHED_CACHE
+	bool "Cache aware load balance"
+	default y
+	depends on SMP
+	help
+	  When enabled, the scheduler will attempt to aggregate tasks from
+	  the same process onto a single Last Level Cache (LLC) domain when
+	  possible. This improves cache locality by keeping tasks that share
+	  resources within the same cache domain, reducing cache misses and
+	  lowering data access latency.
+
+config NR_LLCS
+	int "Maximum number of Last Level Caches"
+	range 2 1024
+	depends on SMP && SCHED_CACHE
+	default 64
+	help
+	  This allows you to specify the maximum number of last level caches
+	  this kernel will support for cache aware scheduling.
+
 config NUMA_BALANCING_DEFAULT_ENABLED
 	bool "Automatically enable NUMA aware memory/task placement"
 	default y
