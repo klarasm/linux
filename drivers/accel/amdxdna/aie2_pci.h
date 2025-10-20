@@ -190,6 +190,8 @@ struct amdxdna_dev_hdl {
 
 	enum aie2_dev_status		dev_status;
 	u32				hwctx_num;
+
+	struct amdxdna_async_error	last_async_err;
 };
 
 #define DEFINE_BAR_OFFSET(reg_name, bar, reg_addr) \
@@ -253,8 +255,9 @@ void aie2_psp_stop(struct psp_device *psp);
 /* aie2_error.c */
 int aie2_error_async_events_alloc(struct amdxdna_dev_hdl *ndev);
 void aie2_error_async_events_free(struct amdxdna_dev_hdl *ndev);
-int aie2_error_async_events_send(struct amdxdna_dev_hdl *ndev);
 int aie2_error_async_msg_thread(void *data);
+int aie2_get_array_async_error(struct amdxdna_dev_hdl *ndev,
+			       struct amdxdna_drm_get_array *args);
 
 /* aie2_message.c */
 int aie2_suspend_fw(struct amdxdna_dev_hdl *ndev);
@@ -272,7 +275,8 @@ int aie2_map_host_buf(struct amdxdna_dev_hdl *ndev, u32 context_id, u64 addr, u6
 int aie2_query_status(struct amdxdna_dev_hdl *ndev, char __user *buf, u32 size, u32 *cols_filled);
 int aie2_register_asyn_event_msg(struct amdxdna_dev_hdl *ndev, dma_addr_t addr, u32 size,
 				 void *handle, int (*cb)(void*, void __iomem *, size_t));
-int aie2_config_cu(struct amdxdna_hwctx *hwctx);
+int aie2_config_cu(struct amdxdna_hwctx *hwctx,
+		   int (*notify_cb)(void *, void __iomem *, size_t));
 int aie2_execbuf(struct amdxdna_hwctx *hwctx, struct amdxdna_sched_job *job,
 		 int (*notify_cb)(void *, void __iomem *, size_t));
 int aie2_cmdlist_single_execbuf(struct amdxdna_hwctx *hwctx,
