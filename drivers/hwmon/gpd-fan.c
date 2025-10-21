@@ -26,9 +26,6 @@
 static char *gpd_fan_board = "";
 module_param(gpd_fan_board, charp, 0444);
 
-// EC read/write locker, protecting a sequence of EC operations
-static DEFINE_MUTEX(gpd_fan_sequence_lock);
-
 enum gpd_board {
 	win_mini,
 	win4_6800u,
@@ -507,87 +504,60 @@ static int gpd_fan_hwmon_read(__always_unused struct device *dev,
 {
 	int ret;
 
-	ret = mutex_lock_interruptible(&gpd_fan_sequence_lock);
-	if (ret)
-		return ret;
-
 	if (type == hwmon_fan) {
 		if (attr == hwmon_fan_input) {
 			ret = gpd_read_rpm();
 
 			if (ret < 0)
-				goto OUT;
+				return ret;
 
 			*val = ret;
-			ret = 0;
-			goto OUT;
+			return 0;
 		}
 	} else if (type == hwmon_pwm) {
 		switch (attr) {
 		case hwmon_pwm_enable:
 			*val = gpd_driver_priv.pwm_enable;
-			ret = 0;
-			goto OUT;
+			return 0;
 		case hwmon_pwm_input:
 			ret = gpd_read_pwm();
 
 			if (ret < 0)
-				goto OUT;
+				return ret;
 
 			*val = ret;
-			ret = 0;
-			goto OUT;
+			return 0;
 		}
 	}
 
-	ret = -EOPNOTSUPP;
-
-OUT:
-	mutex_unlock(&gpd_fan_sequence_lock);
-	return ret;
+	return -EOPNOTSUPP;
 }
 
 static int gpd_fan_hwmon_write(__always_unused struct device *dev,
 			       enum hwmon_sensor_types type, u32 attr,
 			       __always_unused int channel, long val)
 {
-	int ret;
-
-	ret = mutex_lock_interruptible(&gpd_fan_sequence_lock);
-	if (ret)
-		return ret;
-
 	if (type == hwmon_pwm) {
 		switch (attr) {
 		case hwmon_pwm_enable:
-			if (!in_range(val, 0, 3)) {
-				ret = -EINVAL;
-				goto OUT;
-			}
+			if (!in_range(val, 0, 3))
+				return -EINVAL;
 
 			gpd_driver_priv.pwm_enable = val;
 
 			gpd_set_pwm_enable(gpd_driver_priv.pwm_enable);
-			ret = 0;
-			goto OUT;
+			return 0;
 		case hwmon_pwm_input:
-			if (!in_range(val, 0, 256)) {
-				ret = -ERANGE;
-				goto OUT;
-			}
+			if (!in_range(val, 0, 256))
+				return -EINVAL;
 
 			gpd_driver_priv.pwm_value = val;
 
-			ret = gpd_write_pwm(val);
-			goto OUT;
+			return gpd_write_pwm(val);
 		}
 	}
 
-	ret = -EOPNOTSUPP;
-
-OUT:
-	mutex_unlock(&gpd_fan_sequence_lock);
-	return ret;
+	return -EOPNOTSUPP;
 }
 
 static const struct hwmon_ops gpd_fan_ops = {
@@ -615,14 +585,14 @@ static int gpd_fan_probe(struct platform_device *pdev)
 	const struct device *hwdev;
 
 	res = platform_get_resource(pdev, IORESOURCE_IO, 0);
-	if (IS_ERR(res))
-		return dev_err_probe(dev, PTR_ERR(res),
+	if (!res)
+		return dev_err_probe(dev, -EINVAL,
 				     "Failed to get platform resource\n");
 
 	region = devm_request_region(dev, res->start,
 				     resource_size(res), DRIVER_NAME);
-	if (IS_ERR(region))
-		return dev_err_probe(dev, PTR_ERR(region),
+	if (!region)
+		return dev_err_probe(dev, -EBUSY,
 				     "Failed to request region\n");
 
 	hwdev = devm_hwmon_device_register_with_info(dev,
@@ -631,7 +601,7 @@ static int gpd_fan_probe(struct platform_device *pdev)
 						     &gpd_fan_chip_info,
 						     NULL);
 	if (IS_ERR(hwdev))
-		return dev_err_probe(dev, PTR_ERR(region),
+		return dev_err_probe(dev, PTR_ERR(hwdev),
 				     "Failed to register hwmon device\n");
 
 	return 0;
