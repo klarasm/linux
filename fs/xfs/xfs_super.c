@@ -786,6 +786,12 @@ xfs_fs_evict_inode(
 
 	truncate_inode_pages_final(&inode->i_data);
 	clear_inode(inode);
+
+	if (IS_ENABLED(CONFIG_XFS_RT) &&
+	    S_ISREG(inode->i_mode) && inode->i_private) {
+		xfs_open_zone_put(inode->i_private);
+		inode->i_private = NULL;
+	}
 }
 
 static void
@@ -2221,7 +2227,7 @@ xfs_init_fs_context(
 	struct xfs_mount	*mp;
 	int			i;
 
-	mp = kzalloc(sizeof(struct xfs_mount), GFP_KERNEL | __GFP_NOFAIL);
+	mp = kzalloc(sizeof(struct xfs_mount), GFP_KERNEL);
 	if (!mp)
 		return -ENOMEM;
 
