@@ -46,6 +46,7 @@
 #include "stmmac_ptp.h"
 #include "stmmac_fpe.h"
 #include "stmmac.h"
+#include "stmmac_pcs.h"
 #include "stmmac_xdp.h"
 #include <linux/reset.h>
 #include <linux/of_mdio.h>
@@ -850,6 +851,13 @@ static struct phylink_pcs *stmmac_mac_select_pcs(struct phylink_config *config,
 			return pcs;
 	}
 
+	/* The PCS control register is only relevant for SGMII, TBI and RTBI
+	 * modes. We no longer support TBI or RTBI, so only configure this
+	 * register when operating in SGMII mode with the integrated PCS.
+	 */
+	if (priv->hw->pcs & STMMAC_PCS_SGMII && priv->integrated_pcs)
+		return &priv->integrated_pcs->pcs;
+
 	return NULL;
 }
 
@@ -857,6 +865,18 @@ static void stmmac_mac_config(struct phylink_config *config, unsigned int mode,
 			      const struct phylink_link_state *state)
 {
 	/* Nothing to do, xpcs_config() handles everything */
+}
+
+static int stmmac_mac_finish(struct phylink_config *config, unsigned int mode,
+			     phy_interface_t interface)
+{
+	struct net_device *ndev = to_net_dev(config->dev);
+	struct stmmac_priv *priv = netdev_priv(ndev);
+
+	if (priv->plat->mac_finish)
+		priv->plat->mac_finish(ndev, priv->plat->bsp_priv, mode, interface);
+
+	return 0;
 }
 
 static void stmmac_mac_link_down(struct phylink_config *config,
@@ -1053,27 +1073,15 @@ static int stmmac_mac_enable_tx_lpi(struct phylink_config *config, u32 timer,
 	return 0;
 }
 
-static int stmmac_mac_finish(struct phylink_config *config, unsigned int mode,
-			     phy_interface_t interface)
-{
-	struct net_device *ndev = to_net_dev(config->dev);
-	struct stmmac_priv *priv = netdev_priv(ndev);
-
-	if (priv->plat->mac_finish)
-		priv->plat->mac_finish(ndev, priv->plat->bsp_priv, mode, interface);
-
-	return 0;
-}
-
 static const struct phylink_mac_ops stmmac_phylink_mac_ops = {
 	.mac_get_caps = stmmac_mac_get_caps,
 	.mac_select_pcs = stmmac_mac_select_pcs,
 	.mac_config = stmmac_mac_config,
+	.mac_finish = stmmac_mac_finish,
 	.mac_link_down = stmmac_mac_link_down,
 	.mac_link_up = stmmac_mac_link_up,
 	.mac_disable_tx_lpi = stmmac_mac_disable_tx_lpi,
 	.mac_enable_tx_lpi = stmmac_mac_enable_tx_lpi,
-	.mac_finish = stmmac_mac_finish,
 };
 
 /**
@@ -1086,17 +1094,25 @@ static const struct phylink_mac_ops stmmac_phylink_mac_ops = {
 static void stmmac_check_pcs_mode(struct stmmac_priv *priv)
 {
 	int interface = priv->plat->phy_interface;
+	int speed = priv->plat->mac_port_sel_speed;
 
-	if (priv->dma_cap.pcs) {
-		if ((interface == PHY_INTERFACE_MODE_RGMII) ||
-		    (interface == PHY_INTERFACE_MODE_RGMII_ID) ||
-		    (interface == PHY_INTERFACE_MODE_RGMII_RXID) ||
-		    (interface == PHY_INTERFACE_MODE_RGMII_TXID)) {
-			netdev_dbg(priv->dev, "PCS RGMII support enabled\n");
-			priv->hw->pcs = STMMAC_PCS_RGMII;
-		} else if (interface == PHY_INTERFACE_MODE_SGMII) {
-			netdev_dbg(priv->dev, "PCS SGMII support enabled\n");
-			priv->hw->pcs = STMMAC_PCS_SGMII;
+	if (priv->dma_cap.pcs && interface == PHY_INTERFACE_MODE_SGMII) {
+		netdev_dbg(priv->dev, "PCS SGMII support enabled\n");
+		priv->hw->pcs = STMMAC_PCS_SGMII;
+
+		switch (speed) {
+		case SPEED_10:
+		case SPEED_100:
+		case SPEED_1000:
+			priv->hw->reverse_sgmii_enable = true;
+			break;
+
+		default:
+			dev_warn(priv->device, "invalid port speed\n");
+			fallthrough;
+		case 0:
+			priv->hw->reverse_sgmii_enable = false;
+			break;
 		}
 	}
 }
@@ -1185,7 +1201,7 @@ static int stmmac_init_phy(struct net_device *dev)
 	return 0;
 }
 
-static int stmmac_phy_setup(struct stmmac_priv *priv)
+static int stmmac_phylink_setup(struct stmmac_priv *priv)
 {
 	struct stmmac_mdio_bus_data *mdio_bus_data;
 	struct phylink_config *config;
@@ -3443,19 +3459,6 @@ static int stmmac_hw_setup(struct net_device *dev)
 	stmmac_set_umac_addr(priv, priv->hw, dev->dev_addr, 0);
 	phylink_rx_clk_stop_unblock(priv->phylink);
 
-	/* PS and related bits will be programmed according to the speed */
-	if (priv->hw->pcs) {
-		int speed = priv->plat->mac_port_sel_speed;
-
-		if ((speed == SPEED_10) || (speed == SPEED_100) ||
-		    (speed == SPEED_1000)) {
-			priv->hw->ps = speed;
-		} else {
-			dev_warn(priv->device, "invalid port speed\n");
-			priv->hw->ps = 0;
-		}
-	}
-
 	/* Initialize the MAC Core */
 	stmmac_core_init(priv, priv->hw, dev);
 
@@ -3491,9 +3494,6 @@ static int stmmac_hw_setup(struct net_device *dev)
 					   priv->rx_riwt[queue], queue);
 		}
 	}
-
-	if (priv->hw->pcs)
-		stmmac_pcs_ctrl_ane(priv, 1, priv->hw->ps, 0);
 
 	/* set TX and RX rings length */
 	stmmac_set_rings_length(priv);
@@ -3963,8 +3963,6 @@ static int __stmmac_open(struct net_device *dev,
 	stmmac_init_coalesce(priv);
 
 	phylink_start(priv->phylink);
-	/* We may have called phylink_speed_down before */
-	phylink_speed_up(priv->phylink);
 
 	ret = stmmac_request_irq(dev);
 	if (ret)
@@ -4015,6 +4013,9 @@ static int stmmac_open(struct net_device *dev)
 
 	kfree(dma_conf);
 
+	/* We may have called phylink_speed_down before */
+	phylink_speed_up(priv->phylink);
+
 	return ret;
 
 err_disconnect_phy:
@@ -4031,13 +4032,6 @@ static void __stmmac_release(struct net_device *dev)
 {
 	struct stmmac_priv *priv = netdev_priv(dev);
 	u32 chan;
-
-	/* If the PHY or MAC has WoL enabled, then the PHY will not be
-	 * suspended when phylink_stop() is called below. Set the PHY
-	 * to its slowest speed to save power.
-	 */
-	if (device_may_wakeup(priv->device))
-		phylink_speed_down(priv->phylink, false);
 
 	/* Stop and disconnect the PHY */
 	phylink_stop(priv->phylink);
@@ -4077,6 +4071,13 @@ static void __stmmac_release(struct net_device *dev)
 static int stmmac_release(struct net_device *dev)
 {
 	struct stmmac_priv *priv = netdev_priv(dev);
+
+	/* If the PHY or MAC has WoL enabled, then the PHY will not be
+	 * suspended when phylink_stop() is called below. Set the PHY
+	 * to its slowest speed to save power.
+	 */
+	if (device_may_wakeup(priv->device))
+		phylink_speed_down(priv->phylink, false);
 
 	__stmmac_release(dev);
 
@@ -6000,15 +6001,6 @@ static void stmmac_common_interrupt(struct stmmac_priv *priv)
 		for (queue = 0; queue < queues_count; queue++)
 			stmmac_host_mtl_irq_status(priv, priv->hw, queue);
 
-		/* PCS link status */
-		if (priv->hw->pcs &&
-		    !(priv->plat->flags & STMMAC_FLAG_HAS_INTEGRATED_PCS)) {
-			if (priv->xstats.pcs_link)
-				netif_carrier_on(priv->dev);
-			else
-				netif_carrier_off(priv->dev);
-		}
-
 		stmmac_timestamp_interrupt(priv, priv);
 	}
 }
@@ -7248,6 +7240,13 @@ static int stmmac_hw_init(struct stmmac_priv *priv)
 			 "Enable RX Mitigation via HW Watchdog Timer\n");
 	}
 
+	/* Unimplemented PCS init (as indicated by stmmac_do_callback()
+	 * perversely returning -EINVAL) is non-fatal.
+	 */
+	ret = stmmac_mac_pcs_init(priv);
+	if (ret != -EINVAL)
+		return ret;
+
 	return 0;
 }
 
@@ -7641,7 +7640,7 @@ int stmmac_dvr_probe(struct device *device,
 	if (ret)
 		goto error_pcs_setup;
 
-	ret = stmmac_phy_setup(priv);
+	ret = stmmac_phylink_setup(priv);
 	if (ret) {
 		netdev_err(ndev, "failed to setup phy (%d)\n", ret);
 		goto error_phy_setup;

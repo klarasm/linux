@@ -835,6 +835,8 @@ patternProperties:
     description: JOZ BV
   "^jty,.*":
     description: JTY
+  "^jutouch,.*":
+    description: JuTouch Technology Co., Ltd.
   "^kam,.*":
     description: Kamstrup A/S
   "^karo,.*":
@@ -907,6 +909,8 @@ patternProperties:
     description: Lincoln Technology Solutions
   "^lineartechnology,.*":
     description: Linear Technology
+  "^linkease,.*":
+    description: Shenzhen LinkEase Network Technology Co., Ltd.
   "^linksprite,.*":
     description: LinkSprite Technologies, Inc.
   "^linksys,.*":

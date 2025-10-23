@@ -1061,6 +1061,9 @@ NOSTDINC_FLAGS += -nostdinc
 # perform bounds checking.
 KBUILD_CFLAGS += $(call cc-option, -fstrict-flex-arrays=3)
 
+# Allow including a tagged struct or union anonymously in another struct/union.
+KBUILD_CFLAGS += -fms-extensions
+
 # disable invalid "can't wrap" optimizations for signed / pointers
 KBUILD_CFLAGS	+= -fno-strict-overflow
 
@@ -1797,9 +1800,10 @@ $(help-board-dirs): help-%:
 
 # Documentation targets
 # ---------------------------------------------------------------------------
-DOC_TARGETS := xmldocs latexdocs pdfdocs htmldocs htmldocs-redirects \
-	       epubdocs cleandocs linkcheckdocs dochelp refcheckdocs \
-	       texinfodocs infodocs
+DOC_TARGETS := xmldocs latexdocs pdfdocs htmldocs epubdocs cleandocs \
+	       linkcheckdocs dochelp refcheckdocs texinfodocs infodocs mandocs \
+	       htmldocs-redirects
+
 PHONY += $(DOC_TARGETS)
 $(DOC_TARGETS):
 	$(Q)$(MAKE) $(build)=Documentation $@
