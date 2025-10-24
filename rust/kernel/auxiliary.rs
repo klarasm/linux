@@ -68,9 +68,9 @@ impl<T: Driver + 'static> Adapter<T> {
         let info = T::ID_TABLE.info(id.index());
 
         from_result(|| {
-            let data = T::probe(adev, info)?;
+            let data = T::probe(adev, info);
 
-            adev.as_ref().set_drvdata(data);
+            adev.as_ref().set_drvdata(data)?;
             Ok(0)
         })
     }
@@ -184,7 +184,7 @@ pub trait Driver {
     /// Auxiliary driver probe.
     ///
     /// Called when an auxiliary device is matches a corresponding driver.
-    fn probe(dev: &Device<device::Core>, id_info: &Self::IdInfo) -> Result<Pin<KBox<Self>>>;
+    fn probe(dev: &Device<device::Core>, id_info: &Self::IdInfo) -> impl PinInit<Self, Error>;
 }
 
 /// The auxiliary device representation.
@@ -217,13 +217,7 @@ impl<Ctx: device::DeviceContext> Device<Ctx> {
 
     /// Returns a reference to the parent [`device::Device`], if any.
     pub fn parent(&self) -> Option<&device::Device> {
-        let ptr: *const Self = self;
-        // CAST: `Device<Ctx: DeviceContext>` types are transparent to each other.
-        let ptr: *const Device = ptr.cast();
-        // SAFETY: `ptr` was derived from `&self`.
-        let this = unsafe { &*ptr };
-
-        this.as_ref().parent()
+        self.as_ref().parent()
     }
 }
 

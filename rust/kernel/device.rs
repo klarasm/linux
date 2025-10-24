@@ -6,6 +6,7 @@
 
 use crate::{
     bindings, fmt,
+    prelude::*,
     sync::aref::ARef,
     types::{ForeignOwnable, Opaque},
 };
@@ -13,6 +14,7 @@ use core::{marker::PhantomData, ptr};
 
 #[cfg(CONFIG_PRINTK)]
 use crate::c_str;
+use crate::str::CStrExt as _;
 
 pub mod property;
 
@@ -198,9 +200,13 @@ impl Device {
 
 impl Device<CoreInternal> {
     /// Store a pointer to the bound driver's private data.
-    pub fn set_drvdata(&self, data: impl ForeignOwnable) {
+    pub fn set_drvdata<T: 'static>(&self, data: impl PinInit<T, Error>) -> Result {
+        let data = KBox::pin_init(data, GFP_KERNEL)?;
+
         // SAFETY: By the type invariants, `self.as_raw()` is a valid pointer to a `struct device`.
-        unsafe { bindings::dev_set_drvdata(self.as_raw(), data.into_foreign().cast()) }
+        unsafe { bindings::dev_set_drvdata(self.as_raw(), data.into_foreign().cast()) };
+
+        Ok(())
     }
 
     /// Take ownership of the private data stored in this [`Device`].
@@ -251,7 +257,7 @@ impl<Ctx: DeviceContext> Device<Ctx> {
 
     /// Returns a reference to the parent device, if any.
     #[cfg_attr(not(CONFIG_AUXILIARY_BUS), expect(dead_code))]
-    pub(crate) fn parent(&self) -> Option<&Self> {
+    pub(crate) fn parent(&self) -> Option<&Device> {
         // SAFETY:
         // - By the type invariant `self.as_raw()` is always valid.
         // - The parent device is only ever set at device creation.
@@ -264,7 +270,7 @@ impl<Ctx: DeviceContext> Device<Ctx> {
             // - Since `parent` is not NULL, it must be a valid pointer to a `struct device`.
             // - `parent` is valid for the lifetime of `self`, since a `struct device` holds a
             //   reference count of its parent.
-            Some(unsafe { Self::from_raw(parent) })
+            Some(unsafe { Device::from_raw(parent) })
         }
     }
 
