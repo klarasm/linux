@@ -604,15 +604,16 @@ static bool scsi_host_check_in_flight(struct request *rq, void *data)
 }
 
 /**
- * scsi_host_busy - Return the host busy counter
- * @shost:	Pointer to Scsi_Host to inc.
+ * scsi_host_busy - Return the count of in-flight commands
+ * @shost:	Pointer to Scsi_Host
  **/
 int scsi_host_busy(struct Scsi_Host *shost)
 {
 	int cnt = 0;
 
-	blk_mq_tagset_busy_iter(&shost->tag_set,
-				scsi_host_check_in_flight, &cnt);
+	if (shost->tag_set.ops)
+		blk_mq_tagset_busy_iter(&shost->tag_set,
+					scsi_host_check_in_flight, &cnt);
 	return cnt;
 }
 EXPORT_SYMBOL(scsi_host_busy);

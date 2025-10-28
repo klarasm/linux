@@ -72,6 +72,7 @@
 #include <linux/pm_opp.h>
 #include <linux/poll.h>
 #include <linux/property.h>
+#include <linux/pwm.h>
 #include <linux/random.h>
 #include <linux/refcount.h>
 #include <linux/regulator/consumer.h>
@@ -80,6 +81,7 @@
 #include <linux/slab.h>
 #include <linux/task_work.h>
 #include <linux/tracepoint.h>
+#include <linux/usb.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
 #include <linux/xarray.h>
