@@ -3544,6 +3544,9 @@ static int _nl80211_parse_chandef(struct cfg80211_registered_device *rdev,
 		return -EINVAL;
 	}
 
+	if (cfg80211_chandef_is_s1g(chandef))
+		chandef->width = NL80211_CHAN_WIDTH_1;
+
 	if (attrs[NL80211_ATTR_WIPHY_CHANNEL_TYPE]) {
 		enum nl80211_channel_type chantype;
 
@@ -4136,8 +4139,7 @@ static int nl80211_set_wiphy(struct sk_buff *skb, struct genl_info *info)
 			rdev->wiphy.txq_quantum = old_txq_quantum;
 		}
 
-		if (old_rts_threshold)
-			kfree(old_radio_rts_threshold);
+		kfree(old_radio_rts_threshold);
 		return result;
 	}
 
