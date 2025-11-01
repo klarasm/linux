@@ -1493,24 +1493,11 @@ int ocfs2_validate_inode_block(struct super_block *sb,
 				 le32_to_cpu(di->i_clusters));
 		goto bail;
 	}
-	/* Validate cl_bpc for chain allocator inodes */
-	if (le32_to_cpu(di->i_flags) & OCFS2_CHAIN_FL) {
-		struct ocfs2_chain_list *cl = &di->id2.i_chain;
-		u16 cl_bpc = le16_to_cpu(cl->cl_bpc);
-		u16 expected_bpc = 1 << (OCFS2_SB(sb)->s_clustersize_bits -
-					 sb->s_blocksize_bits);
-
-		if (cl_bpc != expected_bpc) {
-			rc = ocfs2_error(sb,
-				"Inode %llu has corrupted cl_bpc: ondisk=%u expected=%u\n",
-				(unsigned long long)bh->b_blocknr,
-				cl_bpc, expected_bpc);
-			goto bail;
-		}
-	}
 
 	if (le32_to_cpu(di->i_flags) & OCFS2_CHAIN_FL) {
 		struct ocfs2_chain_list *cl = &di->id2.i_chain;
+		u16 bpc = 1 << (OCFS2_SB(sb)->s_clustersize_bits -
+				sb->s_blocksize_bits);
 
 		if (le16_to_cpu(cl->cl_count) != ocfs2_chain_recs_per_inode(sb)) {
 			rc = ocfs2_error(sb, "Invalid dinode %llu: chain list count %u\n",
@@ -1522,6 +1509,14 @@ int ocfs2_validate_inode_block(struct super_block *sb,
 			rc = ocfs2_error(sb, "Invalid dinode %llu: chain list index %u\n",
 					 (unsigned long long)bh->b_blocknr,
 					 le16_to_cpu(cl->cl_next_free_rec));
+			goto bail;
+		}
+		if (OCFS2_SB(sb)->bitmap_blkno &&
+		    OCFS2_SB(sb)->bitmap_blkno != le64_to_cpu(di->i_blkno) &&
+		    le16_to_cpu(cl->cl_bpc) != bpc) {
+			rc = ocfs2_error(sb, "Invalid dinode %llu: bits per cluster %u\n",
+					 (unsigned long long)bh->b_blocknr,
+					 le16_to_cpu(cl->cl_bpc));
 			goto bail;
 		}
 	}
