@@ -28,7 +28,7 @@
 #include <linux/string_choices.h>
 #include <linux/string_helpers.h>
 #include <linux/swap.h>
-#include <linux/swapops.h>
+#include <linux/leafops.h>
 #include <linux/jhash.h>
 #include <linux/numa.h>
 #include <linux/llist.h>
@@ -5552,32 +5552,6 @@ static void set_huge_ptep_maybe_writable(struct vm_area_struct *vma,
 		set_huge_ptep_writable(vma, address, ptep);
 }
 
-bool is_hugetlb_entry_migration(pte_t pte)
-{
-	swp_entry_t swp;
-
-	if (huge_pte_none(pte) || pte_present(pte))
-		return false;
-	swp = pte_to_swp_entry(pte);
-	if (is_migration_entry(swp))
-		return true;
-	else
-		return false;
-}
-
-bool is_hugetlb_entry_hwpoisoned(pte_t pte)
-{
-	swp_entry_t swp;
-
-	if (huge_pte_none(pte) || pte_present(pte))
-		return false;
-	swp = pte_to_swp_entry(pte);
-	if (is_hwpoison_entry(swp))
-		return true;
-	else
-		return false;
-}
-
 static void
 hugetlb_install_folio(struct vm_area_struct *vma, pte_t *ptep, unsigned long addr,
 		      struct folio *new_folio, pte_t old, unsigned long sz)
@@ -5606,6 +5580,7 @@ int copy_hugetlb_page_range(struct mm_struct *dst, struct mm_struct *src,
 	unsigned long npages = pages_per_huge_page(h);
 	struct mmu_notifier_range range;
 	unsigned long last_addr_mask;
+	leaf_entry_t leafent;
 	int ret = 0;
 
 	if (cow) {
@@ -5653,26 +5628,26 @@ int copy_hugetlb_page_range(struct mm_struct *dst, struct mm_struct *src,
 		entry = huge_ptep_get(src_vma->vm_mm, addr, src_pte);
 again:
 		if (huge_pte_none(entry)) {
-			/*
-			 * Skip if src entry none.
-			 */
-			;
-		} else if (unlikely(is_hugetlb_entry_hwpoisoned(entry))) {
+			/* Skip if src entry none. */
+			goto next;
+		}
+
+		leafent = leafent_from_pte(entry);
+		if (unlikely(leafent_is_hwpoison(leafent))) {
 			if (!userfaultfd_wp(dst_vma))
 				entry = huge_pte_clear_uffd_wp(entry);
 			set_huge_pte_at(dst, addr, dst_pte, entry, sz);
-		} else if (unlikely(is_hugetlb_entry_migration(entry))) {
-			swp_entry_t swp_entry = pte_to_swp_entry(entry);
+		} else if (unlikely(leafent_is_migration(leafent))) {
 			bool uffd_wp = pte_swp_uffd_wp(entry);
 
-			if (!is_readable_migration_entry(swp_entry) && cow) {
+			if (!leafent_is_migration_read(leafent) && cow) {
 				/*
 				 * COW mappings require pages in both
 				 * parent and child to be set to read.
 				 */
-				swp_entry = make_readable_migration_entry(
-							swp_offset(swp_entry));
-				entry = swp_entry_to_pte(swp_entry);
+				leafent = make_readable_migration_entry(
+							swp_offset(leafent));
+				entry = swp_entry_to_pte(leafent);
 				if (userfaultfd_wp(src_vma) && uffd_wp)
 					entry = pte_swp_mkuffd_wp(entry);
 				set_huge_pte_at(src, addr, src_pte, entry, sz);
@@ -5680,9 +5655,8 @@ again:
 			if (!userfaultfd_wp(dst_vma))
 				entry = huge_pte_clear_uffd_wp(entry);
 			set_huge_pte_at(dst, addr, dst_pte, entry, sz);
-		} else if (unlikely(is_pte_marker(entry))) {
-			pte_marker marker = copy_pte_marker(
-				pte_to_swp_entry(entry), dst_vma);
+		} else if (unlikely(pte_is_marker(entry))) {
+			const pte_marker marker = copy_pte_marker(leafent, dst_vma);
 
 			if (marker)
 				set_huge_pte_at(dst, addr, dst_pte,
@@ -5739,9 +5713,7 @@ again:
 				}
 				hugetlb_install_folio(dst_vma, dst_pte, addr,
 						      new_folio, src_pte_old, sz);
-				spin_unlock(src_ptl);
-				spin_unlock(dst_ptl);
-				continue;
+				goto next;
 			}
 
 			if (cow) {
@@ -5762,6 +5734,8 @@ again:
 			set_huge_pte_at(dst, addr, dst_pte, entry, sz);
 			hugetlb_count_add(npages, dst);
 		}
+
+next:
 		spin_unlock(src_ptl);
 		spin_unlock(dst_ptl);
 	}
@@ -5798,13 +5772,13 @@ static void move_huge_pte(struct vm_area_struct *vma, unsigned long old_addr,
 
 	pte = huge_ptep_get_and_clear(mm, old_addr, src_pte, sz);
 
-	if (need_clear_uffd_wp && pte_marker_uffd_wp(pte))
+	if (need_clear_uffd_wp && pte_is_uffd_wp_marker(pte)) {
 		huge_pte_clear(mm, new_addr, dst_pte, sz);
-	else {
+	} else {
 		if (need_clear_uffd_wp) {
 			if (pte_present(pte))
 				pte = huge_pte_clear_uffd_wp(pte);
-			else if (is_swap_pte(pte))
+			else
 				pte = pte_swp_clear_uffd_wp(pte);
 		}
 		set_huge_pte_at(mm, new_addr, dst_pte, pte, sz);
@@ -6617,7 +6591,7 @@ static vm_fault_t hugetlb_no_page(struct address_space *mapping,
 	 * If this pte was previously wr-protected, keep it wr-protected even
 	 * if populated.
 	 */
-	if (unlikely(pte_marker_uffd_wp(vmf->orig_pte)))
+	if (unlikely(pte_is_uffd_wp_marker(vmf->orig_pte)))
 		new_pte = huge_pte_mkuffd_wp(new_pte);
 	set_huge_pte_at(mm, vmf->address, vmf->pte, new_pte, huge_page_size(h));
 
@@ -6743,36 +6717,37 @@ vm_fault_t hugetlb_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	}
 
 	vmf.orig_pte = huge_ptep_get(mm, vmf.address, vmf.pte);
-	if (huge_pte_none_mostly(vmf.orig_pte)) {
-		if (is_pte_marker(vmf.orig_pte)) {
-			pte_marker marker =
-				pte_marker_get(pte_to_swp_entry(vmf.orig_pte));
-
-			if (marker & PTE_MARKER_POISONED) {
-				ret = VM_FAULT_HWPOISON_LARGE |
-				      VM_FAULT_SET_HINDEX(hstate_index(h));
-				goto out_mutex;
-			} else if (WARN_ON_ONCE(marker & PTE_MARKER_GUARD)) {
-				/* This isn't supported in hugetlb. */
-				ret = VM_FAULT_SIGSEGV;
-				goto out_mutex;
-			}
-		}
-
+	if (huge_pte_none(vmf.orig_pte))
 		/*
-		 * Other PTE markers should be handled the same way as none PTE.
-		 *
 		 * hugetlb_no_page will drop vma lock and hugetlb fault
 		 * mutex internally, which make us return immediately.
 		 */
+		return hugetlb_no_page(mapping, &vmf);
+
+	if (pte_is_marker(vmf.orig_pte)) {
+		const pte_marker marker =
+			leafent_to_marker(leafent_from_pte(vmf.orig_pte));
+
+		if (marker & PTE_MARKER_POISONED) {
+			ret = VM_FAULT_HWPOISON_LARGE |
+				VM_FAULT_SET_HINDEX(hstate_index(h));
+			goto out_mutex;
+		} else if (WARN_ON_ONCE(marker & PTE_MARKER_GUARD)) {
+			/* This isn't supported in hugetlb. */
+			ret = VM_FAULT_SIGSEGV;
+			goto out_mutex;
+		}
+
 		return hugetlb_no_page(mapping, &vmf);
 	}
 
 	ret = 0;
 
 	/* Not present, either a migration or a hwpoisoned entry */
-	if (!pte_present(vmf.orig_pte)) {
-		if (is_hugetlb_entry_migration(vmf.orig_pte)) {
+	if (!pte_present(vmf.orig_pte) && !huge_pte_none(vmf.orig_pte)) {
+		const leaf_entry_t leafent = leafent_from_pte(vmf.orig_pte);
+
+		if (leafent_is_migration(leafent)) {
 			/*
 			 * Release the hugetlb fault lock now, but retain
 			 * the vma lock, because it is needed to guard the
@@ -6783,9 +6758,12 @@ vm_fault_t hugetlb_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 			mutex_unlock(&hugetlb_fault_mutex_table[hash]);
 			migration_entry_wait_huge(vma, vmf.address, vmf.pte);
 			return 0;
-		} else if (is_hugetlb_entry_hwpoisoned(vmf.orig_pte))
+		}
+		if (leafent_is_hwpoison(leafent)) {
 			ret = VM_FAULT_HWPOISON_LARGE |
 			    VM_FAULT_SET_HINDEX(hstate_index(h));
+		}
+
 		goto out_mutex;
 	}
 
@@ -6934,6 +6912,7 @@ int hugetlb_mfill_atomic_pte(pte_t *dst_pte,
 	int ret = -ENOMEM;
 	struct folio *folio;
 	bool folio_in_pagecache = false;
+	pte_t dst_ptep;
 
 	if (uffd_flags_mode_is(flags, MFILL_ATOMIC_POISON)) {
 		ptl = huge_pte_lock(h, dst_mm, dst_pte);
@@ -7073,13 +7052,14 @@ int hugetlb_mfill_atomic_pte(pte_t *dst_pte,
 	if (folio_test_hwpoison(folio))
 		goto out_release_unlock;
 
-	/*
-	 * We allow to overwrite a pte marker: consider when both MISSING|WP
-	 * registered, we firstly wr-protect a none pte which has no page cache
-	 * page backing it, then access the page.
-	 */
 	ret = -EEXIST;
-	if (!huge_pte_none_mostly(huge_ptep_get(dst_mm, dst_addr, dst_pte)))
+
+	dst_ptep = huge_ptep_get(dst_mm, dst_addr, dst_pte);
+	/*
+	 * See comment about UFFD marker overwriting in
+	 * mfill_atomic_install_pte().
+	 */
+	if (!huge_pte_none(dst_ptep) && !pte_is_uffd_marker(dst_ptep))
 		goto out_release_unlock;
 
 	if (folio_in_pagecache)
@@ -7165,7 +7145,9 @@ long hugetlb_change_protection(struct vm_area_struct *vma,
 	i_mmap_lock_write(vma->vm_file->f_mapping);
 	last_addr_mask = hugetlb_mask_last_page(h);
 	for (; address < end; address += psize) {
+		leaf_entry_t entry;
 		spinlock_t *ptl;
+
 		ptep = hugetlb_walk(vma, address, psize);
 		if (!ptep) {
 			if (!uffd_wp) {
@@ -7197,14 +7179,23 @@ long hugetlb_change_protection(struct vm_area_struct *vma,
 			continue;
 		}
 		pte = huge_ptep_get(mm, address, ptep);
-		if (unlikely(is_hugetlb_entry_hwpoisoned(pte))) {
+		if (huge_pte_none(pte)) {
+			if (unlikely(uffd_wp))
+				/* Safe to modify directly (none->non-present). */
+				set_huge_pte_at(mm, address, ptep,
+						make_pte_marker(PTE_MARKER_UFFD_WP),
+						psize);
+			goto next;
+		}
+
+		entry = leafent_from_pte(pte);
+		if (unlikely(leafent_is_hwpoison(entry))) {
 			/* Nothing to do. */
-		} else if (unlikely(is_hugetlb_entry_migration(pte))) {
-			swp_entry_t entry = pte_to_swp_entry(pte);
-			struct folio *folio = pfn_swap_entry_folio(entry);
+		} else if (unlikely(leafent_is_migration(entry))) {
+			struct folio *folio = leafent_to_folio(entry);
 			pte_t newpte = pte;
 
-			if (is_writable_migration_entry(entry)) {
+			if (leafent_is_migration_write(entry)) {
 				if (folio_test_anon(folio))
 					entry = make_readable_exclusive_migration_entry(
 								swp_offset(entry));
@@ -7221,17 +7212,17 @@ long hugetlb_change_protection(struct vm_area_struct *vma,
 				newpte = pte_swp_clear_uffd_wp(newpte);
 			if (!pte_same(pte, newpte))
 				set_huge_pte_at(mm, address, ptep, newpte, psize);
-		} else if (unlikely(is_pte_marker(pte))) {
+		} else if (unlikely(pte_is_marker(pte))) {
 			/*
 			 * Do nothing on a poison marker; page is
 			 * corrupted, permissions do not apply. Here
 			 * pte_marker_uffd_wp()==true implies !poison
 			 * because they're mutual exclusive.
 			 */
-			if (pte_marker_uffd_wp(pte) && uffd_wp_resolve)
+			if (pte_is_uffd_wp_marker(pte) && uffd_wp_resolve)
 				/* Safe to modify directly (non-present->none). */
 				huge_pte_clear(mm, address, ptep, psize);
-		} else if (!huge_pte_none(pte)) {
+		} else {
 			pte_t old_pte;
 			unsigned int shift = huge_page_shift(hstate_vma(vma));
 
@@ -7244,16 +7235,10 @@ long hugetlb_change_protection(struct vm_area_struct *vma,
 				pte = huge_pte_clear_uffd_wp(pte);
 			huge_ptep_modify_prot_commit(vma, address, ptep, old_pte, pte);
 			pages++;
-		} else {
-			/* None pte */
-			if (unlikely(uffd_wp))
-				/* Safe to modify directly (none->non-present). */
-				set_huge_pte_at(mm, address, ptep,
-						make_pte_marker(PTE_MARKER_UFFD_WP),
-						psize);
 		}
-		spin_unlock(ptl);
 
+next:
+		spin_unlock(ptl);
 		cond_resched();
 	}
 	/*

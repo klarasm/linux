@@ -57,7 +57,7 @@
 #include <linux/sched/task.h>
 #include <linux/pagemap.h>
 #include <linux/swap.h>
-#include <linux/swapops.h>
+#include <linux/leafops.h>
 #include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/ksm.h>
@@ -1969,7 +1969,9 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 		if (likely(pte_present(pteval))) {
 			pfn = pte_pfn(pteval);
 		} else {
-			pfn = swp_offset_pfn(pte_to_swp_entry(pteval));
+			const leaf_entry_t entry = leafent_from_pte(pteval);
+
+			pfn = leafent_to_pfn(entry);
 			VM_WARN_ON_FOLIO(folio_test_hugetlb(folio), folio);
 		}
 
@@ -2341,7 +2343,7 @@ static bool try_to_migrate_one(struct folio *folio, struct vm_area_struct *vma,
 			if (likely(pmd_present(pmdval)))
 				pfn = pmd_pfn(pmdval);
 			else
-				pfn = swp_offset_pfn(pmd_to_swp_entry(pmdval));
+				pfn = leafent_to_pfn(leafent_from_pmd(pmdval));
 
 			subpage = folio_page(folio, pfn - folio_pfn(folio));
 
@@ -2368,7 +2370,9 @@ static bool try_to_migrate_one(struct folio *folio, struct vm_area_struct *vma,
 		if (likely(pte_present(pteval))) {
 			pfn = pte_pfn(pteval);
 		} else {
-			pfn = swp_offset_pfn(pte_to_swp_entry(pteval));
+			const leaf_entry_t entry = leafent_from_pte(pteval);
+
+			pfn = leafent_to_pfn(entry);
 			VM_WARN_ON_FOLIO(folio_test_hugetlb(folio), folio);
 		}
 
@@ -2453,8 +2457,11 @@ static bool try_to_migrate_one(struct folio *folio, struct vm_area_struct *vma,
 				folio_mark_dirty(folio);
 			writable = pte_write(pteval);
 		} else {
+			const leaf_entry_t entry = leafent_from_pte(pteval);
+
 			pte_clear(mm, address, pvmw.pte);
-			writable = is_writable_device_private_entry(pte_to_swp_entry(pteval));
+
+			writable = leafent_is_device_private_write(entry);
 		}
 
 		VM_WARN_ON_FOLIO(writable && folio_test_anon(folio) &&

@@ -16,7 +16,7 @@
 #include <linux/migrate.h>
 #include <linux/export.h>
 #include <linux/swap.h>
-#include <linux/swapops.h>
+#include <linux/leafops.h>
 #include <linux/pagemap.h>
 #include <linux/buffer_head.h>
 #include <linux/mm_inline.h>
@@ -353,7 +353,7 @@ static bool remove_migration_pte(struct folio *folio,
 		rmap_t rmap_flags = RMAP_NONE;
 		pte_t old_pte;
 		pte_t pte;
-		swp_entry_t entry;
+		leaf_entry_t entry;
 		struct page *new;
 		unsigned long idx = 0;
 
@@ -379,22 +379,22 @@ static bool remove_migration_pte(struct folio *folio,
 		folio_get(folio);
 		pte = mk_pte(new, READ_ONCE(vma->vm_page_prot));
 
-		entry = pte_to_swp_entry(old_pte);
-		if (!is_migration_entry_young(entry))
+		entry = leafent_from_pte(old_pte);
+		if (!leafent_is_migration_young(entry))
 			pte = pte_mkold(pte);
-		if (folio_test_dirty(folio) && is_migration_entry_dirty(entry))
+		if (folio_test_dirty(folio) && leafent_is_migration_dirty(entry))
 			pte = pte_mkdirty(pte);
 		if (pte_swp_soft_dirty(old_pte))
 			pte = pte_mksoft_dirty(pte);
 		else
 			pte = pte_clear_soft_dirty(pte);
 
-		if (is_writable_migration_entry(entry))
+		if (leafent_is_migration_write(entry))
 			pte = pte_mkwrite(pte, vma);
 		else if (pte_swp_uffd_wp(old_pte))
 			pte = pte_mkuffd_wp(pte);
 
-		if (folio_test_anon(folio) && !is_readable_migration_entry(entry))
+		if (folio_test_anon(folio) && !leafent_is_migration_read(entry))
 			rmap_flags |= RMAP_EXCLUSIVE;
 
 		if (unlikely(is_device_private_page(new))) {
@@ -404,7 +404,7 @@ static bool remove_migration_pte(struct folio *folio,
 			else
 				entry = make_readable_device_private_entry(
 							page_to_pfn(new));
-			pte = swp_entry_to_pte(entry);
+			pte = leafent_to_pte(entry);
 			if (pte_swp_soft_dirty(old_pte))
 				pte = pte_swp_mksoft_dirty(pte);
 			if (pte_swp_uffd_wp(old_pte))
@@ -483,7 +483,7 @@ void migration_entry_wait(struct mm_struct *mm, pmd_t *pmd,
 	spinlock_t *ptl;
 	pte_t *ptep;
 	pte_t pte;
-	swp_entry_t entry;
+	leaf_entry_t entry;
 
 	ptep = pte_offset_map_lock(mm, pmd, address, &ptl);
 	if (!ptep)
@@ -492,11 +492,11 @@ void migration_entry_wait(struct mm_struct *mm, pmd_t *pmd,
 	pte = ptep_get(ptep);
 	pte_unmap(ptep);
 
-	if (!is_swap_pte(pte))
+	if (pte_none(pte) || pte_present(pte))
 		goto out;
 
-	entry = pte_to_swp_entry(pte);
-	if (!is_migration_entry(entry))
+	entry = leafent_from_pte(pte);
+	if (!leafent_is_migration(entry))
 		goto out;
 
 	migration_entry_wait_on_locked(entry, ptl);
@@ -515,16 +515,18 @@ out:
 void migration_entry_wait_huge(struct vm_area_struct *vma, unsigned long addr, pte_t *ptep)
 {
 	spinlock_t *ptl = huge_pte_lockptr(hstate_vma(vma), vma->vm_mm, ptep);
+	leaf_entry_t entry;
 	pte_t pte;
 
 	hugetlb_vma_assert_locked(vma);
 	spin_lock(ptl);
 	pte = huge_ptep_get(vma->vm_mm, addr, ptep);
 
-	if (unlikely(!is_hugetlb_entry_migration(pte))) {
-		spin_unlock(ptl);
-		hugetlb_vma_unlock_read(vma);
-	} else {
+	if (huge_pte_none(pte))
+		goto fail;
+
+	entry = leafent_from_pte(pte);
+	if (leafent_is_migration(entry)) {
 		/*
 		 * If migration entry existed, safe to release vma lock
 		 * here because the pgtable page won't be freed without the
@@ -532,8 +534,13 @@ void migration_entry_wait_huge(struct vm_area_struct *vma, unsigned long addr, p
 		 * lock release in migration_entry_wait_on_locked().
 		 */
 		hugetlb_vma_unlock_read(vma);
-		migration_entry_wait_on_locked(pte_to_swp_entry(pte), ptl);
+		migration_entry_wait_on_locked(entry, ptl);
+		return;
 	}
+
+fail:
+	spin_unlock(ptl);
+	hugetlb_vma_unlock_read(vma);
 }
 #endif
 
@@ -543,9 +550,9 @@ void pmd_migration_entry_wait(struct mm_struct *mm, pmd_t *pmd)
 	spinlock_t *ptl;
 
 	ptl = pmd_lock(mm, pmd);
-	if (!is_pmd_migration_entry(*pmd))
+	if (!pmd_is_migration_entry(*pmd))
 		goto unlock;
-	migration_entry_wait_on_locked(pmd_to_swp_entry(*pmd), ptl);
+	migration_entry_wait_on_locked(leafent_from_pmd(*pmd), ptl);
 	return;
 unlock:
 	spin_unlock(ptl);
