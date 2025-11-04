@@ -2,6 +2,12 @@
 #ifndef _ASM_ARM_TOPOLOGY_H
 #define _ASM_ARM_TOPOLOGY_H
 
+/* 32-bit ARM does not support SMT */
+static inline bool topology_core_has_smt(int cpu)
+{
+	return false;
+}
+
 #ifdef CONFIG_ARM_CPU_TOPOLOGY
 
 #include <linux/cpumask.h>
