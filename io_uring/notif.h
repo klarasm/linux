@@ -32,14 +32,6 @@ static inline struct io_notif_data *io_notif_to_data(struct io_kiocb *notif)
 	return io_kiocb_to_cmd(notif, struct io_notif_data);
 }
 
-static inline void io_notif_flush(struct io_kiocb *notif)
-	__must_hold(&notif->ctx->uring_lock)
-{
-	struct io_notif_data *nd = io_notif_to_data(notif);
-
-	io_tx_ubuf_complete(NULL, &nd->uarg, true);
-}
-
 static inline int io_notif_account_mem(struct io_kiocb *notif, unsigned len)
 {
 	struct io_ring_ctx *ctx = notif->ctx;

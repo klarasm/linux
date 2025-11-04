@@ -250,12 +250,9 @@ bool cgroup_enable_per_threadgroup_rwsem __read_mostly;
 
 /* cgroup namespace for init task */
 struct cgroup_namespace init_cgroup_ns = {
-	.ns.__ns_ref	= REFCOUNT_INIT(2),
+	.ns		= NS_COMMON_INIT(init_cgroup_ns, 2),
 	.user_ns	= &init_user_ns,
-	.ns.ops		= &cgroupns_operations,
-	.ns.inum	= ns_init_inum(&init_cgroup_ns),
 	.root_cset	= &init_css_set,
-	.ns.ns_type	= ns_common_type(&init_cgroup_ns),
 };
 
 static struct file_system_type cgroup2_fs_type;
@@ -944,7 +941,8 @@ static void css_set_move_task(struct task_struct *task,
 		/*
 		 * We are synchronized through cgroup_threadgroup_rwsem
 		 * against PF_EXITING setting such that we can't race
-		 * against cgroup_exit()/cgroup_free() dropping the css_set.
+		 * against cgroup_task_dead()/cgroup_task_free() dropping
+		 * the css_set.
 		 */
 		WARN_ON_ONCE(task->flags & PF_EXITING);
 
@@ -1522,9 +1520,9 @@ static struct cgroup *current_cgns_cgroup_dfl(void)
 	} else {
 		/*
 		 * NOTE: This function may be called from bpf_cgroup_from_id()
-		 * on a task which has already passed exit_task_namespaces() and
-		 * nsproxy == NULL. Fall back to cgrp_dfl_root which will make all
-		 * cgroups visible for lookups.
+		 * on a task which has already passed exit_nsproxy_namespaces()
+		 * and nsproxy == NULL. Fall back to cgrp_dfl_root which will
+		 * make all cgroups visible for lookups.
 		 */
 		return &cgrp_dfl_root.cgrp;
 	}
@@ -4704,6 +4702,7 @@ void cgroup_file_notify(struct cgroup_file *cfile)
 	}
 	spin_unlock_irqrestore(&cgroup_file_kn_lock, flags);
 }
+EXPORT_SYMBOL_GPL(cgroup_file_notify);
 
 /**
  * cgroup_file_show - show or hide a hidden cgroup file
@@ -6972,19 +6971,29 @@ void cgroup_post_fork(struct task_struct *child,
 }
 
 /**
- * cgroup_exit - detach cgroup from exiting task
+ * cgroup_task_exit - detach cgroup from exiting task
  * @tsk: pointer to task_struct of exiting process
  *
  * Description: Detach cgroup from @tsk.
  *
  */
-void cgroup_exit(struct task_struct *tsk)
+void cgroup_task_exit(struct task_struct *tsk)
 {
 	struct cgroup_subsys *ss;
-	struct css_set *cset;
 	int i;
 
-	spin_lock_irq(&css_set_lock);
+	/* see cgroup_post_fork() for details */
+	do_each_subsys_mask(ss, i, have_exit_callback) {
+		ss->exit(tsk);
+	} while_each_subsys_mask();
+}
+
+void cgroup_task_dead(struct task_struct *tsk)
+{
+	struct css_set *cset;
+	unsigned long flags;
+
+	spin_lock_irqsave(&css_set_lock, flags);
 
 	WARN_ON_ONCE(list_empty(&tsk->cg_list));
 	cset = task_css_set(tsk);
@@ -7002,15 +7011,10 @@ void cgroup_exit(struct task_struct *tsk)
 		     test_bit(CGRP_FREEZE, &task_dfl_cgroup(tsk)->flags)))
 		cgroup_update_frozen(task_dfl_cgroup(tsk));
 
-	spin_unlock_irq(&css_set_lock);
-
-	/* see cgroup_post_fork() for details */
-	do_each_subsys_mask(ss, i, have_exit_callback) {
-		ss->exit(tsk);
-	} while_each_subsys_mask();
+	spin_unlock_irqrestore(&css_set_lock, flags);
 }
 
-void cgroup_release(struct task_struct *task)
+void cgroup_task_release(struct task_struct *task)
 {
 	struct cgroup_subsys *ss;
 	int ssid;
@@ -7018,6 +7022,11 @@ void cgroup_release(struct task_struct *task)
 	do_each_subsys_mask(ss, ssid, have_release_callback) {
 		ss->release(task);
 	} while_each_subsys_mask();
+}
+
+void cgroup_task_free(struct task_struct *task)
+{
+	struct css_set *cset = task_css_set(task);
 
 	if (!list_empty(&task->cg_list)) {
 		spin_lock_irq(&css_set_lock);
@@ -7025,11 +7034,7 @@ void cgroup_release(struct task_struct *task)
 		list_del_init(&task->cg_list);
 		spin_unlock_irq(&css_set_lock);
 	}
-}
 
-void cgroup_free(struct task_struct *task)
-{
-	struct css_set *cset = task_css_set(task);
 	put_css_set(cset);
 }
 

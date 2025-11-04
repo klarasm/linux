@@ -1303,6 +1303,14 @@ int io_recvzc(struct io_kiocb *req, unsigned int issue_flags)
 	return IOU_RETRY;
 }
 
+static void io_send_notif_flush(struct io_kiocb *notif)
+	__must_hold(&notif->ctx->uring_lock)
+{
+	struct io_notif_data *nd = io_notif_to_data(notif);
+
+	io_tx_ubuf_complete(NULL, &nd->uarg, true);
+}
+
 void io_send_zc_cleanup(struct io_kiocb *req)
 {
 	struct io_sr_msg *zc = io_kiocb_to_cmd(req, struct io_sr_msg);
@@ -1311,7 +1319,7 @@ void io_send_zc_cleanup(struct io_kiocb *req)
 	if (req_has_async_data(req))
 		io_netmsg_iovec_free(io);
 	if (zc->notif) {
-		io_notif_flush(zc->notif);
+		io_send_notif_flush(zc->notif);
 		zc->notif = NULL;
 	}
 }
@@ -1512,7 +1520,7 @@ int io_send_zc(struct io_kiocb *req, unsigned int issue_flags)
 	 * flushing notif to io_send_zc_cleanup()
 	 */
 	if (!(issue_flags & IO_URING_F_UNLOCKED)) {
-		io_notif_flush(zc->notif);
+		io_send_notif_flush(zc->notif);
 		zc->notif = NULL;
 		io_req_msg_cleanup(req, 0);
 	}
@@ -1582,7 +1590,7 @@ int io_sendmsg_zc(struct io_kiocb *req, unsigned int issue_flags)
 	 * flushing notif to io_send_zc_cleanup()
 	 */
 	if (!(issue_flags & IO_URING_F_UNLOCKED)) {
-		io_notif_flush(sr->notif);
+		io_send_notif_flush(sr->notif);
 		sr->notif = NULL;
 		io_req_msg_cleanup(req, 0);
 	}
