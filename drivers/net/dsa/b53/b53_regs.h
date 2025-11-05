@@ -111,14 +111,17 @@
 
 /* IP Multicast control (8 bit) */
 #define B53_IP_MULTICAST_CTRL		0x21
-#define  B53_IP_MCAST_25		BIT(0)
-#define  B53_IPMC_FWD_EN		BIT(1)
+#define  B53_IP_MC			BIT(0)
 #define  B53_UC_FWD_EN			BIT(6)
 #define  B53_MC_FWD_EN			BIT(7)
 
 /* Switch control (8 bit) */
 #define B53_SWITCH_CTRL			0x22
 #define  B53_MII_DUMB_FWDG_EN		BIT(6)
+
+/* Protected Port Selection (16 bit) */
+#define B53_PROTECTED_PORT_SEL		0x24
+#define B53_PROTECTED_PORT_SEL_25	0x26
 
 /* (16 bit) */
 #define B53_UC_FLOOD_MASK		0x32

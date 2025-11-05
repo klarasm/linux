@@ -25,11 +25,12 @@ extern void (*pm_power_off)(void);
 
 struct device; /* we have a circular dep with device.h */
 #ifdef CONFIG_VT_CONSOLE_SLEEP
-extern void pm_vt_switch_required(struct device *dev, bool required);
+extern int pm_vt_switch_required(struct device *dev, bool required);
 extern void pm_vt_switch_unregister(struct device *dev);
 #else
-static inline void pm_vt_switch_required(struct device *dev, bool required)
+static inline int pm_vt_switch_required(struct device *dev, bool required)
 {
+	return 0;
 }
 static inline void pm_vt_switch_unregister(struct device *dev)
 {
@@ -684,6 +685,7 @@ struct dev_pm_info {
 	bool			smart_suspend:1;	/* Owned by the PM core */
 	bool			must_resume:1;		/* Owned by the PM core */
 	bool			may_skip_resume:1;	/* Set by subsystems */
+	bool			out_band_wakeup:1;
 	bool			strict_midlayer:1;
 #else
 	bool			should_wakeup:1;

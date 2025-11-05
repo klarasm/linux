@@ -44,6 +44,8 @@ config ARM
 	select ARCH_USE_BUILTIN_BSWAP
 	select ARCH_USE_CMPXCHG_LOCKREF
 	select ARCH_USE_MEMTEST
+	# https://github.com/llvm/llvm-project/commit/d130f402642fba3d065aacb506cb061c899558de
+	select ARCH_USES_CFI_GENERIC_LLVM_PASS if CLANG_VERSION < 220000
 	select ARCH_WANT_DEFAULT_TOPDOWN_MMAP_LAYOUT if MMU
 	select ARCH_WANT_GENERAL_HUGETLB
 	select ARCH_WANT_IPC_PARSE_VERSION
@@ -1159,8 +1161,6 @@ config AEABI
 	  option also changes the kernel syscall calling convention to
 	  disambiguate both ABIs and allow for backward compatibility support
 	  (selected with CONFIG_OABI_COMPAT).
-
-	  To use this you need GCC version 4.0.0 or later.
 
 config OABI_COMPAT
 	bool "Allow old ABI binaries to run with this kernel (EXPERIMENTAL)"
