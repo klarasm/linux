@@ -42,6 +42,7 @@ MODULE_PARM_DESC(polling_limit_us,
 		 "time in us to run a transfer in polling mode\n");
 
 #define MXC_RPM_TIMEOUT		2000 /* 2000ms */
+#define MXC_SPI_DEFAULT_SPEED	500000 /* 500KHz */
 
 #define MXC_CSPIRXDATA		0x00
 #define MXC_CSPITXDATA		0x04
@@ -519,9 +520,15 @@ static void mx51_ecspi_trigger(struct spi_imx_data *spi_imx)
 {
 	u32 reg;
 
-	reg = readl(spi_imx->base + MX51_ECSPI_CTRL);
-	reg |= MX51_ECSPI_CTRL_XCH;
-	writel(reg, spi_imx->base + MX51_ECSPI_CTRL);
+	if (spi_imx->usedma) {
+		reg = readl(spi_imx->base + MX51_ECSPI_DMA);
+		reg |= MX51_ECSPI_DMA_TEDEN | MX51_ECSPI_DMA_RXDEN;
+		writel(reg, spi_imx->base + MX51_ECSPI_DMA);
+	} else {
+		reg = readl(spi_imx->base + MX51_ECSPI_CTRL);
+		reg |= MX51_ECSPI_CTRL_XCH;
+		writel(reg, spi_imx->base + MX51_ECSPI_CTRL);
+	}
 }
 
 static void mx51_ecspi_disable(struct spi_imx_data *spi_imx)
@@ -684,8 +691,11 @@ static int mx51_ecspi_prepare_transfer(struct spi_imx_data *spi_imx,
 	/* set clock speed */
 	ctrl &= ~(0xf << MX51_ECSPI_CTRL_POSTDIV_OFFSET |
 		  0xf << MX51_ECSPI_CTRL_PREDIV_OFFSET);
-	ctrl |= mx51_ecspi_clkdiv(spi_imx, spi_imx->spi_bus_clk, &clk);
-	spi_imx->spi_bus_clk = clk;
+
+	if (!spi_imx->target_mode) {
+		ctrl |= mx51_ecspi_clkdiv(spi_imx, spi_imx->spi_bus_clk, &clk);
+		spi_imx->spi_bus_clk = clk;
+	}
 
 	mx51_configure_cpha(spi_imx, spi);
 
@@ -759,7 +769,6 @@ static void mx51_setup_wml(struct spi_imx_data *spi_imx)
 	writel(MX51_ECSPI_DMA_RX_WML(spi_imx->wml - 1) |
 		MX51_ECSPI_DMA_TX_WML(tx_wml) |
 		MX51_ECSPI_DMA_RXT_WML(spi_imx->wml) |
-		MX51_ECSPI_DMA_TEDEN | MX51_ECSPI_DMA_RXDEN |
 		MX51_ECSPI_DMA_RXTDEN, spi_imx->base + MX51_ECSPI_DMA);
 }
 
@@ -1308,15 +1317,18 @@ static int spi_imx_setupxfer(struct spi_device *spi,
 	if (!t)
 		return 0;
 
-	if (!t->speed_hz) {
-		if (!spi->max_speed_hz) {
-			dev_err(&spi->dev, "no speed_hz provided!\n");
-			return -EINVAL;
+	if (!spi_imx->target_mode) {
+		if (!t->speed_hz) {
+			if (!spi->max_speed_hz) {
+				dev_err(&spi->dev, "no speed_hz provided!\n");
+				return -EINVAL;
+			}
+			dev_dbg(&spi->dev, "using spi->max_speed_hz!\n");
+			spi_imx->spi_bus_clk = spi->max_speed_hz;
+		} else {
+			spi_imx->spi_bus_clk = t->speed_hz;
 		}
-		dev_dbg(&spi->dev, "using spi->max_speed_hz!\n");
-		spi_imx->spi_bus_clk = spi->max_speed_hz;
-	} else
-		spi_imx->spi_bus_clk = t->speed_hz;
+	}
 
 	spi_imx->bits_per_word = t->bits_per_word;
 	spi_imx->count = t->len;
@@ -1519,6 +1531,8 @@ static int spi_imx_dma_transfer(struct spi_imx_data *spi_imx,
 	dmaengine_submit(desc_tx);
 	reinit_completion(&spi_imx->dma_tx_completion);
 	dma_async_issue_pending(controller->dma_tx);
+
+	spi_imx->devtype_data->trigger(spi_imx);
 
 	transfer_timeout = spi_imx_calculate_timeout(spi_imx, transfer->len);
 
@@ -1831,6 +1845,7 @@ static int spi_imx_probe(struct platform_device *pdev)
 	controller->prepare_message = spi_imx_prepare_message;
 	controller->unprepare_message = spi_imx_unprepare_message;
 	controller->target_abort = spi_imx_target_abort;
+	spi_imx->spi_bus_clk = MXC_SPI_DEFAULT_SPEED;
 	controller->mode_bits = SPI_CPOL | SPI_CPHA | SPI_CS_HIGH | SPI_NO_CS |
 				SPI_MOSI_IDLE_LOW;
 

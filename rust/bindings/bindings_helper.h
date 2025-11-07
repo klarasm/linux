@@ -72,6 +72,7 @@
 #include <linux/pm_opp.h>
 #include <linux/poll.h>
 #include <linux/property.h>
+#include <linux/pwm.h>
 #include <linux/random.h>
 #include <linux/refcount.h>
 #include <linux/regulator/consumer.h>
@@ -80,10 +81,17 @@
 #include <linux/slab.h>
 #include <linux/task_work.h>
 #include <linux/tracepoint.h>
+#include <linux/usb.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
 #include <linux/xarray.h>
 #include <trace/events/rust_sample.h>
+
+/*
+ * The driver-core Rust code needs to know about some C driver-core private
+ * structures.
+ */
+#include <../../drivers/base/base.h>
 
 #if defined(CONFIG_DRM_PANIC_SCREEN_QR_CODE)
 // Used by `#[export]` in `drivers/gpu/drm/drm_panic_qr.rs`.
