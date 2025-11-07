@@ -72,6 +72,8 @@ enum memory_block_state {
 	MEM_GOING_ONLINE,
 	MEM_CANCEL_ONLINE,
 	MEM_CANCEL_OFFLINE,
+	MEM_PREPARE_ONLINE,
+	MEM_FINISH_OFFLINE,
 };
 
 struct memory_block {
