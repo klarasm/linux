@@ -397,14 +397,13 @@ enum {
 #define	NFSD_CB_GETATTR_TIMEOUT		NFSD_DELEGRETURN_TIMEOUT
 
 /*
- * The following attributes are currently not supported by the NFSv4 server:
+ * The following attributes are not implemented by NFSD:
  *    ARCHIVE       (deprecated anyway)
  *    HIDDEN        (unlikely to be supported any time soon)
  *    MIMETYPE      (unlikely to be supported any time soon)
  *    QUOTA_*       (will be supported in a forthcoming patch)
  *    SYSTEM        (unlikely to be supported any time soon)
  *    TIME_BACKUP   (unlikely to be supported any time soon)
- *    TIME_CREATE   (unlikely to be supported any time soon)
  */
 #define NFSD4_SUPPORTED_ATTRS_WORD0                                                         \
 (FATTR4_WORD0_SUPPORTED_ATTRS   | FATTR4_WORD0_TYPE         | FATTR4_WORD0_FH_EXPIRE_TYPE   \
@@ -458,6 +457,7 @@ enum {
 #define NFSD4_2_SUPPORTED_ATTRS_WORD2 \
 	(NFSD4_1_SUPPORTED_ATTRS_WORD2 | \
 	FATTR4_WORD2_MODE_UMASK | \
+	FATTR4_WORD2_CLONE_BLKSIZE | \
 	NFSD4_2_SECURITY_ATTRS | \
 	FATTR4_WORD2_XATTR_SUPPORT | \
 	FATTR4_WORD2_TIME_DELEG_ACCESS | \
