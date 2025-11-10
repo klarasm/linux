@@ -1431,9 +1431,9 @@ retry:
 					len);
 	} else { /* !pte_present() */
 		struct folio *folio = NULL;
-		const leaf_entry_t entry = leafent_from_pte(orig_src_pte);
+		const softleaf_t entry = softleaf_from_pte(orig_src_pte);
 
-		if (leafent_is_migration(entry)) {
+		if (softleaf_is_migration(entry)) {
 			pte_unmap(src_pte);
 			pte_unmap(dst_pte);
 			src_pte = dst_pte = NULL;
@@ -1441,7 +1441,7 @@ retry:
 
 			ret = -EAGAIN;
 			goto out;
-		} else if (!leafent_is_swap(entry)) {
+		} else if (!softleaf_is_swap(entry)) {
 			ret = -EFAULT;
 			goto out;
 		}

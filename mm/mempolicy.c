@@ -707,9 +707,9 @@ static int queue_folios_pte_range(pmd_t *pmd, unsigned long addr,
 		if (pte_none(ptent))
 			continue;
 		if (!pte_present(ptent)) {
-			const leaf_entry_t entry = leafent_from_pte(ptent);
+			const softleaf_t entry = softleaf_from_pte(ptent);
 
-			if (leafent_is_migration(entry))
+			if (softleaf_is_migration(entry))
 				qp->nr_failed++;
 			continue;
 		}
@@ -778,9 +778,9 @@ static int queue_folios_hugetlb(pte_t *pte, unsigned long hmask,
 	ptep = huge_ptep_get(walk->mm, addr, pte);
 	if (!pte_present(ptep)) {
 		if (!huge_pte_none(ptep)) {
-			const leaf_entry_t entry = leafent_from_pte(ptep);
+			const softleaf_t entry = softleaf_from_pte(ptep);
 
-			if (unlikely(leafent_is_migration(entry)))
+			if (unlikely(softleaf_is_migration(entry)))
 				qp->nr_failed++;
 		}
 

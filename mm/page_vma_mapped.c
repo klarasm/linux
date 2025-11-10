@@ -49,7 +49,7 @@ again:
 		if (is_migration)
 			return false;
 	} else if (!is_migration) {
-		leaf_entry_t entry;
+		softleaf_t entry;
 
 		/*
 		 * Handle un-addressable ZONE_DEVICE memory.
@@ -67,9 +67,9 @@ again:
 		 * For more details on device private memory see HMM
 		 * (include/linux/hmm.h or mm/hmm.c).
 		 */
-		entry = leafent_from_pte(ptent);
-		if (!leafent_is_device_private(entry) &&
-		    !leafent_is_device_exclusive(entry))
+		entry = softleaf_from_pte(ptent);
+		if (!softleaf_is_device_private(entry) &&
+		    !softleaf_is_device_exclusive(entry))
 			return false;
 	}
 	spin_lock(*ptlp);
@@ -110,23 +110,23 @@ static bool check_pte(struct page_vma_mapped_walk *pvmw, unsigned long pte_nr)
 	pte_t ptent = ptep_get(pvmw->pte);
 
 	if (pvmw->flags & PVMW_MIGRATION) {
-		const leaf_entry_t entry = leafent_from_pte(ptent);
+		const softleaf_t entry = softleaf_from_pte(ptent);
 
-		if (!leafent_is_migration(entry))
+		if (!softleaf_is_migration(entry))
 			return false;
 
-		pfn = leafent_to_pfn(entry);
+		pfn = softleaf_to_pfn(entry);
 	} else if (pte_present(ptent)) {
 		pfn = pte_pfn(ptent);
 	} else {
-		const leaf_entry_t entry = leafent_from_pte(ptent);
+		const softleaf_t entry = softleaf_from_pte(ptent);
 
 		/* Handle un-addressable ZONE_DEVICE memory */
-		if (!leafent_is_device_private(entry) &&
-		    !leafent_is_device_exclusive(entry))
+		if (!softleaf_is_device_private(entry) &&
+		    !softleaf_is_device_exclusive(entry))
 			return false;
 
-		pfn = leafent_to_pfn(entry);
+		pfn = softleaf_to_pfn(entry);
 	}
 
 	if ((pfn + pte_nr - 1) < pvmw->pfn)
@@ -246,15 +246,15 @@ restart:
 			pvmw->ptl = pmd_lock(mm, pvmw->pmd);
 			pmde = *pvmw->pmd;
 			if (!pmd_present(pmde)) {
-				leaf_entry_t entry;
+				softleaf_t entry;
 
 				if (!thp_migration_supported() ||
 				    !(pvmw->flags & PVMW_MIGRATION))
 					return not_found(pvmw);
-				entry = leafent_from_pmd(pmde);
+				entry = softleaf_from_pmd(pmde);
 
-				if (!leafent_is_migration(entry) ||
-				    !check_pmd(leafent_to_pfn(entry), pvmw))
+				if (!softleaf_is_migration(entry) ||
+				    !check_pmd(softleaf_to_pfn(entry), pvmw))
 					return not_found(pvmw);
 				return true;
 			}
@@ -274,9 +274,9 @@ restart:
 			 * cannot return prematurely, while zap_huge_pmd() has
 			 * cleared *pmd but not decremented compound_mapcount().
 			 */
-			const leaf_entry_t entry = leafent_from_pmd(pmde);
+			const softleaf_t entry = softleaf_from_pmd(pmde);
 
-			if (leafent_is_device_private(entry)) {
+			if (softleaf_is_device_private(entry)) {
 				pvmw->ptl = pmd_lock(mm, pvmw->pmd);
 				return true;
 			}

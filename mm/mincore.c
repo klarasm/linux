@@ -74,7 +74,7 @@ static unsigned char mincore_swap(swp_entry_t entry, bool shmem)
 	 * absent. Page table may contain migration or hwpoison
 	 * entries which are always uptodate.
 	 */
-	if (!leafent_is_swap(entry))
+	if (!softleaf_is_swap(entry))
 		return !shmem;
 
 	/*
@@ -202,7 +202,7 @@ static int mincore_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end,
 			for (i = 0; i < step; i++)
 				vec[i] = 1;
 		} else { /* pte is a swap entry */
-			const leaf_entry_t entry = leafent_from_pte(pte);
+			const softleaf_t entry = softleaf_from_pte(pte);
 
 			*vec = mincore_swap(entry, false);
 		}

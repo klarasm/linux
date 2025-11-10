@@ -353,7 +353,7 @@ static bool remove_migration_pte(struct folio *folio,
 		rmap_t rmap_flags = RMAP_NONE;
 		pte_t old_pte;
 		pte_t pte;
-		leaf_entry_t entry;
+		softleaf_t entry;
 		struct page *new;
 		unsigned long idx = 0;
 
@@ -379,22 +379,22 @@ static bool remove_migration_pte(struct folio *folio,
 		folio_get(folio);
 		pte = mk_pte(new, READ_ONCE(vma->vm_page_prot));
 
-		entry = leafent_from_pte(old_pte);
-		if (!leafent_is_migration_young(entry))
+		entry = softleaf_from_pte(old_pte);
+		if (!softleaf_is_migration_young(entry))
 			pte = pte_mkold(pte);
-		if (folio_test_dirty(folio) && leafent_is_migration_dirty(entry))
+		if (folio_test_dirty(folio) && softleaf_is_migration_dirty(entry))
 			pte = pte_mkdirty(pte);
 		if (pte_swp_soft_dirty(old_pte))
 			pte = pte_mksoft_dirty(pte);
 		else
 			pte = pte_clear_soft_dirty(pte);
 
-		if (leafent_is_migration_write(entry))
+		if (softleaf_is_migration_write(entry))
 			pte = pte_mkwrite(pte, vma);
 		else if (pte_swp_uffd_wp(old_pte))
 			pte = pte_mkuffd_wp(pte);
 
-		if (folio_test_anon(folio) && !leafent_is_migration_read(entry))
+		if (folio_test_anon(folio) && !softleaf_is_migration_read(entry))
 			rmap_flags |= RMAP_EXCLUSIVE;
 
 		if (unlikely(is_device_private_page(new))) {
@@ -404,7 +404,7 @@ static bool remove_migration_pte(struct folio *folio,
 			else
 				entry = make_readable_device_private_entry(
 							page_to_pfn(new));
-			pte = leafent_to_pte(entry);
+			pte = softleaf_to_pte(entry);
 			if (pte_swp_soft_dirty(old_pte))
 				pte = pte_swp_mksoft_dirty(pte);
 			if (pte_swp_uffd_wp(old_pte))
@@ -483,7 +483,7 @@ void migration_entry_wait(struct mm_struct *mm, pmd_t *pmd,
 	spinlock_t *ptl;
 	pte_t *ptep;
 	pte_t pte;
-	leaf_entry_t entry;
+	softleaf_t entry;
 
 	ptep = pte_offset_map_lock(mm, pmd, address, &ptl);
 	if (!ptep)
@@ -495,8 +495,8 @@ void migration_entry_wait(struct mm_struct *mm, pmd_t *pmd,
 	if (pte_none(pte) || pte_present(pte))
 		goto out;
 
-	entry = leafent_from_pte(pte);
-	if (!leafent_is_migration(entry))
+	entry = softleaf_from_pte(pte);
+	if (!softleaf_is_migration(entry))
 		goto out;
 
 	migration_entry_wait_on_locked(entry, ptl);
@@ -515,7 +515,7 @@ out:
 void migration_entry_wait_huge(struct vm_area_struct *vma, unsigned long addr, pte_t *ptep)
 {
 	spinlock_t *ptl = huge_pte_lockptr(hstate_vma(vma), vma->vm_mm, ptep);
-	leaf_entry_t entry;
+	softleaf_t entry;
 	pte_t pte;
 
 	hugetlb_vma_assert_locked(vma);
@@ -525,8 +525,8 @@ void migration_entry_wait_huge(struct vm_area_struct *vma, unsigned long addr, p
 	if (huge_pte_none(pte))
 		goto fail;
 
-	entry = leafent_from_pte(pte);
-	if (leafent_is_migration(entry)) {
+	entry = softleaf_from_pte(pte);
+	if (softleaf_is_migration(entry)) {
 		/*
 		 * If migration entry existed, safe to release vma lock
 		 * here because the pgtable page won't be freed without the
@@ -552,7 +552,7 @@ void pmd_migration_entry_wait(struct mm_struct *mm, pmd_t *pmd)
 	ptl = pmd_lock(mm, pmd);
 	if (!pmd_is_migration_entry(*pmd))
 		goto unlock;
-	migration_entry_wait_on_locked(leafent_from_pmd(*pmd), ptl);
+	migration_entry_wait_on_locked(softleaf_from_pmd(*pmd), ptl);
 	return;
 unlock:
 	spin_unlock(ptl);
@@ -2172,7 +2172,7 @@ struct folio *alloc_migration_target(struct folio *src, unsigned long private)
 	gfp_t gfp_mask;
 	unsigned int order = 0;
 	int nid;
-	int zidx;
+	enum zone_type zidx;
 
 	mtc = (struct migration_target_control *)private;
 	gfp_mask = mtc->gfp_mask;
@@ -2198,7 +2198,7 @@ struct folio *alloc_migration_target(struct folio *src, unsigned long private)
 		gfp_mask |= GFP_TRANSHUGE;
 		order = folio_order(src);
 	}
-	zidx = zone_idx(folio_zone(src));
+	zidx = folio_zonenum(src);
 	if (is_highmem_idx(zidx) || zidx == ZONE_MOVABLE)
 		gfp_mask |= __GFP_HIGHMEM;
 

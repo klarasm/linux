@@ -1,4 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * Describes operations that can be performed on software-defined page table
+ * leaf entries. These are abstracted from the hardware page table entries
+ * themselves by the softleaf_t type, see mm_types.h.
+ */
 #ifndef _LINUX_LEAFOPS_H
 #define _LINUX_LEAFOPS_H
 
@@ -11,35 +16,35 @@
 /* Temporary until swp_entry_t eliminated. */
 #define LEAF_TYPE_SHIFT SWP_TYPE_SHIFT
 
-enum leaf_entry_type {
+enum softleaf_type {
 	/* Fundamental types. */
-	LEAFENT_NONE,
-	LEAFENT_SWAP,
+	SOFTLEAF_NONE,
+	SOFTLEAF_SWAP,
 	/* Migration types. */
-	LEAFENT_MIGRATION_READ,
-	LEAFENT_MIGRATION_READ_EXCLUSIVE,
-	LEAFENT_MIGRATION_WRITE,
+	SOFTLEAF_MIGRATION_READ,
+	SOFTLEAF_MIGRATION_READ_EXCLUSIVE,
+	SOFTLEAF_MIGRATION_WRITE,
 	/* Device types. */
-	LEAFENT_DEVICE_PRIVATE_READ,
-	LEAFENT_DEVICE_PRIVATE_WRITE,
-	LEAFENT_DEVICE_EXCLUSIVE,
+	SOFTLEAF_DEVICE_PRIVATE_READ,
+	SOFTLEAF_DEVICE_PRIVATE_WRITE,
+	SOFTLEAF_DEVICE_EXCLUSIVE,
 	/* H/W posion types. */
-	LEAFENT_HWPOISON,
+	SOFTLEAF_HWPOISON,
 	/* Marker types. */
-	LEAFENT_MARKER,
+	SOFTLEAF_MARKER,
 };
 
 /**
- * leafent_mk_none() - Create an empty ('none') leaf entry.
+ * softleaf_mk_none() - Create an empty ('none') leaf entry.
  * Returns: empty leaf entry.
  */
-static inline leaf_entry_t leafent_mk_none(void)
+static inline softleaf_t softleaf_mk_none(void)
 {
-	return ((leaf_entry_t) { 0 });
+	return ((softleaf_t) { 0 });
 }
 
 /**
- * leafent_from_pte() - Obtain a leaf entry from a PTE entry.
+ * softleaf_from_pte() - Obtain a leaf entry from a PTE entry.
  * @pte: PTE entry.
  *
  * If @pte is present (therefore not a leaf entry) the function returns an empty
@@ -47,12 +52,12 @@ static inline leaf_entry_t leafent_mk_none(void)
  *
  * Returns: Leaf entry.
  */
-static inline leaf_entry_t leafent_from_pte(pte_t pte)
+static inline softleaf_t softleaf_from_pte(pte_t pte)
 {
-	leaf_entry_t arch_entry;
+	softleaf_t arch_entry;
 
 	if (pte_present(pte))
-		return leafent_mk_none();
+		return softleaf_mk_none();
 
 	pte = pte_swp_clear_flags(pte);
 	arch_entry = __pte_to_swp_entry(pte);
@@ -62,7 +67,7 @@ static inline leaf_entry_t leafent_from_pte(pte_t pte)
 }
 
 /**
- * leafent_to_pte() - Obtain a PTE entry from a leaf entry.
+ * softleaf_to_pte() - Obtain a PTE entry from a leaf entry.
  * @entry: Leaf entry.
  *
  * This generates an architecture-specific PTE entry that can be utilised to
@@ -70,7 +75,7 @@ static inline leaf_entry_t leafent_from_pte(pte_t pte)
  *
  * Returns: Architecture-specific PTE entry encoding leaf entry.
  */
-static inline pte_t leafent_to_pte(leaf_entry_t entry)
+static inline pte_t softleaf_to_pte(softleaf_t entry)
 {
 	/* Temporary until swp_entry_t eliminated. */
 	return swp_entry_to_pte(entry);
@@ -78,7 +83,7 @@ static inline pte_t leafent_to_pte(leaf_entry_t entry)
 
 #ifdef CONFIG_ARCH_ENABLE_THP_MIGRATION
 /**
- * leafent_from_pmd() - Obtain a leaf entry from a PMD entry.
+ * softleaf_from_pmd() - Obtain a leaf entry from a PMD entry.
  * @pmd: PMD entry.
  *
  * If @pmd is present (therefore not a leaf entry) the function returns an empty
@@ -86,12 +91,12 @@ static inline pte_t leafent_to_pte(leaf_entry_t entry)
  *
  * Returns: Leaf entry.
  */
-static inline leaf_entry_t leafent_from_pmd(pmd_t pmd)
+static inline softleaf_t softleaf_from_pmd(pmd_t pmd)
 {
-	leaf_entry_t arch_entry;
+	softleaf_t arch_entry;
 
 	if (pmd_present(pmd))
-		return leafent_mk_none();
+		return softleaf_mk_none();
 
 	if (pmd_swp_soft_dirty(pmd))
 		pmd = pmd_swp_clear_soft_dirty(pmd);
@@ -105,15 +110,15 @@ static inline leaf_entry_t leafent_from_pmd(pmd_t pmd)
 
 #else
 
-static inline leaf_entry_t leafent_from_pmd(pmd_t pmd)
+static inline softleaf_t softleaf_from_pmd(pmd_t pmd)
 {
-	return leafent_mk_none();
+	return softleaf_mk_none();
 }
 
 #endif
 
 /**
- * leafent_is_none() - Is the leaf entry empty?
+ * softleaf_is_none() - Is the leaf entry empty?
  * @entry: Leaf entry.
  *
  * Empty entries are typically the result of a 'none' page table leaf entry
@@ -121,119 +126,119 @@ static inline leaf_entry_t leafent_from_pmd(pmd_t pmd)
  *
  * Returns: true if the entry is empty, false otherwise.
  */
-static inline bool leafent_is_none(leaf_entry_t entry)
+static inline bool softleaf_is_none(softleaf_t entry)
 {
 	return entry.val == 0;
 }
 
 /**
- * leafent_type() - Identify the type of leaf entry.
+ * softleaf_type() - Identify the type of leaf entry.
  * @enntry: Leaf entry.
  *
  * Returns: the leaf entry type associated with @entry.
  */
-static inline enum leaf_entry_type leafent_type(leaf_entry_t entry)
+static inline enum softleaf_type softleaf_type(softleaf_t entry)
 {
 	unsigned int type_num;
 
-	if (leafent_is_none(entry))
-		return LEAFENT_NONE;
+	if (softleaf_is_none(entry))
+		return SOFTLEAF_NONE;
 
 	type_num = entry.val >> LEAF_TYPE_SHIFT;
 
 	if (type_num < MAX_SWAPFILES)
-		return LEAFENT_SWAP;
+		return SOFTLEAF_SWAP;
 
 	switch (type_num) {
 #ifdef CONFIG_MIGRATION
 	case SWP_MIGRATION_READ:
-		return LEAFENT_MIGRATION_READ;
+		return SOFTLEAF_MIGRATION_READ;
 	case SWP_MIGRATION_READ_EXCLUSIVE:
-		return LEAFENT_MIGRATION_READ_EXCLUSIVE;
+		return SOFTLEAF_MIGRATION_READ_EXCLUSIVE;
 	case SWP_MIGRATION_WRITE:
-		return LEAFENT_MIGRATION_WRITE;
+		return SOFTLEAF_MIGRATION_WRITE;
 #endif
 #ifdef CONFIG_DEVICE_PRIVATE
 	case SWP_DEVICE_WRITE:
-		return LEAFENT_DEVICE_PRIVATE_WRITE;
+		return SOFTLEAF_DEVICE_PRIVATE_WRITE;
 	case SWP_DEVICE_READ:
-		return LEAFENT_DEVICE_PRIVATE_READ;
+		return SOFTLEAF_DEVICE_PRIVATE_READ;
 	case SWP_DEVICE_EXCLUSIVE:
-		return LEAFENT_DEVICE_EXCLUSIVE;
+		return SOFTLEAF_DEVICE_EXCLUSIVE;
 #endif
 #ifdef CONFIG_MEMORY_FAILURE
 	case SWP_HWPOISON:
-		return LEAFENT_HWPOISON;
+		return SOFTLEAF_HWPOISON;
 #endif
 	case SWP_PTE_MARKER:
-		return LEAFENT_MARKER;
+		return SOFTLEAF_MARKER;
 	}
 
 	/* Unknown entry type. */
 	VM_WARN_ON_ONCE(1);
-	return LEAFENT_NONE;
+	return SOFTLEAF_NONE;
 }
 
 /**
- * leafent_is_swap() - Is this leaf entry a swap entry?
+ * softleaf_is_swap() - Is this leaf entry a swap entry?
  * @entry: Leaf entry.
  *
  * Returns: true if the leaf entry is a swap entry, otherwise false.
  */
-static inline bool leafent_is_swap(leaf_entry_t entry)
+static inline bool softleaf_is_swap(softleaf_t entry)
 {
-	return leafent_type(entry) == LEAFENT_SWAP;
+	return softleaf_type(entry) == SOFTLEAF_SWAP;
 }
 
 /**
- * leafent_is_migration_write() - Is this leaf entry a writable migration entry?
+ * softleaf_is_migration_write() - Is this leaf entry a writable migration entry?
  * @entry: Leaf entry.
  *
  * Returns: true if the leaf entry is a writable migration entry, otherwise
  * false.
  */
-static inline bool leafent_is_migration_write(leaf_entry_t entry)
+static inline bool softleaf_is_migration_write(softleaf_t entry)
 {
-	return leafent_type(entry) == LEAFENT_MIGRATION_WRITE;
+	return softleaf_type(entry) == SOFTLEAF_MIGRATION_WRITE;
 }
 
 /**
- * leafent_is_migration_read() - Is this leaf entry a readable migration entry?
+ * softleaf_is_migration_read() - Is this leaf entry a readable migration entry?
  * @entry: Leaf entry.
  *
  * Returns: true if the leaf entry is a readable migration entry, otherwise
  * false.
  */
-static inline bool leafent_is_migration_read(leaf_entry_t entry)
+static inline bool softleaf_is_migration_read(softleaf_t entry)
 {
-	return leafent_type(entry) == LEAFENT_MIGRATION_READ;
+	return softleaf_type(entry) == SOFTLEAF_MIGRATION_READ;
 }
 
 /**
- * leafent_is_migration_read_exclusive() - Is this leaf entry an exclusive
+ * softleaf_is_migration_read_exclusive() - Is this leaf entry an exclusive
  * readable migration entry?
  * @entry: Leaf entry.
  *
  * Returns: true if the leaf entry is an exclusive readable migration entry,
  * otherwise false.
  */
-static inline bool leafent_is_migration_read_exclusive(leaf_entry_t entry)
+static inline bool softleaf_is_migration_read_exclusive(softleaf_t entry)
 {
-	return leafent_type(entry) == LEAFENT_MIGRATION_READ_EXCLUSIVE;
+	return softleaf_type(entry) == SOFTLEAF_MIGRATION_READ_EXCLUSIVE;
 }
 
 /**
- * leafent_is_swap() - Is this leaf entry a migration entry?
+ * softleaf_is_swap() - Is this leaf entry a migration entry?
  * @entry: Leaf entry.
  *
  * Returns: true if the leaf entry is a migration entry, otherwise false.
  */
-static inline bool leafent_is_migration(leaf_entry_t entry)
+static inline bool softleaf_is_migration(softleaf_t entry)
 {
-	switch (leafent_type(entry)) {
-	case LEAFENT_MIGRATION_READ:
-	case LEAFENT_MIGRATION_READ_EXCLUSIVE:
-	case LEAFENT_MIGRATION_WRITE:
+	switch (softleaf_type(entry)) {
+	case SOFTLEAF_MIGRATION_READ:
+	case SOFTLEAF_MIGRATION_READ_EXCLUSIVE:
+	case SOFTLEAF_MIGRATION_WRITE:
 		return true;
 	default:
 		return false;
@@ -241,29 +246,29 @@ static inline bool leafent_is_migration(leaf_entry_t entry)
 }
 
 /**
- * leafent_is_device_private_write() - Is this leaf entry a device private
+ * softleaf_is_device_private_write() - Is this leaf entry a device private
  * writable entry?
  * @entry: Leaf entry.
  *
  * Returns: true if the leaf entry is a device private writable entry, otherwise
  * false.
  */
-static inline bool leafent_is_device_private_write(leaf_entry_t entry)
+static inline bool softleaf_is_device_private_write(softleaf_t entry)
 {
-	return leafent_type(entry) == LEAFENT_DEVICE_PRIVATE_WRITE;
+	return softleaf_type(entry) == SOFTLEAF_DEVICE_PRIVATE_WRITE;
 }
 
 /**
- * leafent_is_device_private() - Is this leaf entry a device private entry?
+ * softleaf_is_device_private() - Is this leaf entry a device private entry?
  * @entry: Leaf entry.
  *
  * Returns: true if the leaf entry is a device private entry, otherwise false.
  */
-static inline bool leafent_is_device_private(leaf_entry_t entry)
+static inline bool softleaf_is_device_private(softleaf_t entry)
 {
-	switch (leafent_type(entry)) {
-	case LEAFENT_DEVICE_PRIVATE_WRITE:
-	case LEAFENT_DEVICE_PRIVATE_READ:
+	switch (softleaf_type(entry)) {
+	case SOFTLEAF_DEVICE_PRIVATE_WRITE:
+	case SOFTLEAF_DEVICE_PRIVATE_READ:
 		return true;
 	default:
 		return false;
@@ -271,53 +276,53 @@ static inline bool leafent_is_device_private(leaf_entry_t entry)
 }
 
 /**
- * leafent_is_device_exclusive() - Is this leaf entry a device-exclusive entry?
+ * softleaf_is_device_exclusive() - Is this leaf entry a device-exclusive entry?
  * @entry: Leaf entry.
  *
  * Returns: true if the leaf entry is a device-exclusive entry, otherwise false.
  */
-static inline bool leafent_is_device_exclusive(leaf_entry_t entry)
+static inline bool softleaf_is_device_exclusive(softleaf_t entry)
 {
-	return leafent_type(entry) == LEAFENT_DEVICE_EXCLUSIVE;
+	return softleaf_type(entry) == SOFTLEAF_DEVICE_EXCLUSIVE;
 }
 
 /**
- * leafent_is_hwpoison() - Is this leaf entry a hardware poison entry?
+ * softleaf_is_hwpoison() - Is this leaf entry a hardware poison entry?
  * @entry: Leaf entry.
  *
  * Returns: true if the leaf entry is a hardware poison entry, otherwise false.
  */
-static inline bool leafent_is_hwpoison(leaf_entry_t entry)
+static inline bool softleaf_is_hwpoison(softleaf_t entry)
 {
-	return leafent_type(entry) == LEAFENT_HWPOISON;
+	return softleaf_type(entry) == SOFTLEAF_HWPOISON;
 }
 
 /**
- * leafent_is_marker() - Is this leaf entry a marker?
+ * softleaf_is_marker() - Is this leaf entry a marker?
  * @entry: Leaf entry.
  *
  * Returns: true if the leaf entry is a marker entry, otherwise false.
  */
-static inline bool leafent_is_marker(leaf_entry_t entry)
+static inline bool softleaf_is_marker(softleaf_t entry)
 {
-	return leafent_type(entry) == LEAFENT_MARKER;
+	return softleaf_type(entry) == SOFTLEAF_MARKER;
 }
 
 /**
- * leafent_to_marker() - Obtain marker associated with leaf entry.
- * @entry: Leaf entry, leafent_is_marker(@entry) must return true.
+ * softleaf_to_marker() - Obtain marker associated with leaf entry.
+ * @entry: Leaf entry, softleaf_is_marker(@entry) must return true.
  *
  * Returns: Marker associated with the leaf entry.
  */
-static inline pte_marker leafent_to_marker(leaf_entry_t entry)
+static inline pte_marker softleaf_to_marker(softleaf_t entry)
 {
-	VM_WARN_ON_ONCE(!leafent_is_marker(entry));
+	VM_WARN_ON_ONCE(!softleaf_is_marker(entry));
 
 	return swp_offset(entry) & PTE_MARKER_MASK;
 }
 
 /**
- * leafent_has_pfn() - Does this leaf entry encode a valid PFN number?
+ * softleaf_has_pfn() - Does this leaf entry encode a valid PFN number?
  * @entry: Leaf entry.
  *
  * A pfn swap entry is a special type of swap entry that always has a pfn stored
@@ -327,111 +332,111 @@ static inline pte_marker leafent_to_marker(leaf_entry_t entry)
  *
  * Returns: true if the leaf entry encodes a PFN, otherwise false.
  */
-static inline bool leafent_has_pfn(leaf_entry_t entry)
+static inline bool softleaf_has_pfn(softleaf_t entry)
 {
 	/* Make sure the swp offset can always store the needed fields. */
 	BUILD_BUG_ON(SWP_TYPE_SHIFT < SWP_PFN_BITS);
 
-	if (leafent_is_migration(entry))
+	if (softleaf_is_migration(entry))
 		return true;
-	if (leafent_is_device_private(entry))
+	if (softleaf_is_device_private(entry))
 		return true;
-	if (leafent_is_device_exclusive(entry))
+	if (softleaf_is_device_exclusive(entry))
 		return true;
-	if (leafent_is_hwpoison(entry))
+	if (softleaf_is_hwpoison(entry))
 		return true;
 
 	return false;
 }
 
 /**
- * leafent_to_pfn() - Obtain PFN encoded within leaf entry.
- * @entry: Leaf entry, leafent_has_pfn(@entry) must return true.
+ * softleaf_to_pfn() - Obtain PFN encoded within leaf entry.
+ * @entry: Leaf entry, softleaf_has_pfn(@entry) must return true.
  *
  * Returns: The PFN associated with the leaf entry.
  */
-static inline unsigned long leafent_to_pfn(leaf_entry_t entry)
+static inline unsigned long softleaf_to_pfn(softleaf_t entry)
 {
-	VM_WARN_ON_ONCE(!leafent_has_pfn(entry));
+	VM_WARN_ON_ONCE(!softleaf_has_pfn(entry));
 
 	/* Temporary until swp_entry_t eliminated. */
 	return swp_offset(entry) & SWP_PFN_MASK;
 }
 
 /**
- * leafent_to_page() - Obtains struct page for PFN encoded within leaf entry.
- * @entry: Leaf entry, leafent_has_pfn(@entry) must return true.
+ * softleaf_to_page() - Obtains struct page for PFN encoded within leaf entry.
+ * @entry: Leaf entry, softleaf_has_pfn(@entry) must return true.
  *
  * Returns: Pointer to the struct page associated with the leaf entry's PFN.
  */
-static inline struct page *leafent_to_page(leaf_entry_t entry)
+static inline struct page *softleaf_to_page(softleaf_t entry)
 {
-	struct page *page = pfn_to_page(leafent_to_pfn(entry));
+	struct page *page = pfn_to_page(softleaf_to_pfn(entry));
 
-	VM_WARN_ON_ONCE(!leafent_has_pfn(entry));
+	VM_WARN_ON_ONCE(!softleaf_has_pfn(entry));
 	/*
 	 * Any use of migration entries may only occur while the
 	 * corresponding page is locked
 	 */
-	VM_WARN_ON_ONCE(leafent_is_migration(entry) && !PageLocked(page));
+	VM_WARN_ON_ONCE(softleaf_is_migration(entry) && !PageLocked(page));
 
 	return page;
 }
 
 /**
- * leafent_to_folio() - Obtains struct folio for PFN encoded within leaf entry.
- * @entry: Leaf entry, leafent_has_pfn(@entry) must return true.
+ * softleaf_to_folio() - Obtains struct folio for PFN encoded within leaf entry.
+ * @entry: Leaf entry, softleaf_has_pfn(@entry) must return true.
  *
  * Returns: Pointer to the struct folio associated with the leaf entry's PFN.
  * Returns:
  */
-static inline struct folio *leafent_to_folio(leaf_entry_t entry)
+static inline struct folio *softleaf_to_folio(softleaf_t entry)
 {
-	struct folio *folio = pfn_folio(leafent_to_pfn(entry));
+	struct folio *folio = pfn_folio(softleaf_to_pfn(entry));
 
-	VM_WARN_ON_ONCE(!leafent_has_pfn(entry));
+	VM_WARN_ON_ONCE(!softleaf_has_pfn(entry));
 	/*
 	 * Any use of migration entries may only occur while the
 	 * corresponding folio is locked.
 	 */
-	VM_WARN_ON_ONCE(leafent_is_migration(entry) &&
+	VM_WARN_ON_ONCE(softleaf_is_migration(entry) &&
 			!folio_test_locked(folio));
 
 	return folio;
 }
 
 /**
- * leafent_is_poison_marker() - Is this leaf entry a poison marker?
+ * softleaf_is_poison_marker() - Is this leaf entry a poison marker?
  * @entry: Leaf entry.
  *
  * The poison marker is set via UFFDIO_POISON. Userfaultfd-specific.
  *
  * Returns: true if the leaf entry is a poison marker, otherwise false.
  */
-static inline bool leafent_is_poison_marker(leaf_entry_t entry)
+static inline bool softleaf_is_poison_marker(softleaf_t entry)
 {
-	if (!leafent_is_marker(entry))
+	if (!softleaf_is_marker(entry))
 		return false;
 
-	return leafent_to_marker(entry) & PTE_MARKER_POISONED;
+	return softleaf_to_marker(entry) & PTE_MARKER_POISONED;
 }
 
 /**
- * leafent_is_guard_marker() - Is this leaf entry a guard region marker?
+ * softleaf_is_guard_marker() - Is this leaf entry a guard region marker?
  * @entry: Leaf entry.
  *
  * Returns: true if the leaf entry is a guard marker, otherwise false.
  */
-static inline bool leafent_is_guard_marker(leaf_entry_t entry)
+static inline bool softleaf_is_guard_marker(softleaf_t entry)
 {
-	if (!leafent_is_marker(entry))
+	if (!softleaf_is_marker(entry))
 		return false;
 
-	return leafent_to_marker(entry) & PTE_MARKER_GUARD;
+	return softleaf_to_marker(entry) & PTE_MARKER_GUARD;
 }
 
 /**
- * leafent_is_uffd_wp_marker() - Is this leaf entry a userfautlfd write protect
+ * softleaf_is_uffd_wp_marker() - Is this leaf entry a userfautlfd write protect
  * marker?
  * @entry: Leaf entry.
  *
@@ -439,18 +444,18 @@ static inline bool leafent_is_guard_marker(leaf_entry_t entry)
  *
  * Returns: true if the leaf entry is a UFFD WP marker, otherwise false.
  */
-static inline bool leafent_is_uffd_wp_marker(leaf_entry_t entry)
+static inline bool softleaf_is_uffd_wp_marker(softleaf_t entry)
 {
-	if (!leafent_is_marker(entry))
+	if (!softleaf_is_marker(entry))
 		return false;
 
-	return leafent_to_marker(entry) & PTE_MARKER_UFFD_WP;
+	return softleaf_to_marker(entry) & PTE_MARKER_UFFD_WP;
 }
 
 #ifdef CONFIG_MIGRATION
 
 /**
- * leafent_is_migration_young() - Does this migration entry contain an accessed
+ * softleaf_is_migration_young() - Does this migration entry contain an accessed
  * bit?
  * @entry: Leaf entry.
  *
@@ -460,9 +465,9 @@ static inline bool leafent_is_uffd_wp_marker(leaf_entry_t entry)
  *
  * Returns: true if the entry contains an accessed bit, otherwise false.
  */
-static inline bool leafent_is_migration_young(leaf_entry_t entry)
+static inline bool softleaf_is_migration_young(softleaf_t entry)
 {
-	VM_WARN_ON_ONCE(!leafent_is_migration(entry));
+	VM_WARN_ON_ONCE(!softleaf_is_migration(entry));
 
 	if (migration_entry_supports_ad())
 		return swp_offset(entry) & SWP_MIG_YOUNG;
@@ -471,7 +476,7 @@ static inline bool leafent_is_migration_young(leaf_entry_t entry)
 }
 
 /**
- * leafent_is_migration_dirty() - Does this migration entry contain a dirty bit?
+ * softleaf_is_migration_dirty() - Does this migration entry contain a dirty bit?
  * @entry: Leaf entry.
  *
  * If the architecture can support storing A/D bits in migration entries, this
@@ -479,9 +484,9 @@ static inline bool leafent_is_migration_young(leaf_entry_t entry)
  *
  * Returns: true if the entry contains a dirty bit, otherwise false.
  */
-static inline bool leafent_is_migration_dirty(leaf_entry_t entry)
+static inline bool softleaf_is_migration_dirty(softleaf_t entry)
 {
-	VM_WARN_ON_ONCE(!leafent_is_migration(entry));
+	VM_WARN_ON_ONCE(!softleaf_is_migration(entry));
 
 	if (migration_entry_supports_ad())
 		return swp_offset(entry) & SWP_MIG_DIRTY;
@@ -491,12 +496,12 @@ static inline bool leafent_is_migration_dirty(leaf_entry_t entry)
 
 #else /* CONFIG_MIGRATION */
 
-static inline bool leafent_is_migration_young(leaf_entry_t entry)
+static inline bool softleaf_is_migration_young(softleaf_t entry)
 {
 	return false;
 }
 
-static inline bool leafent_is_migration_dirty(leaf_entry_t entry)
+static inline bool softleaf_is_migration_dirty(softleaf_t entry)
 {
 	return false;
 }
@@ -510,7 +515,7 @@ static inline bool leafent_is_migration_dirty(leaf_entry_t entry)
  */
 static inline bool pte_is_marker(pte_t pte)
 {
-	return leafent_is_marker(leafent_from_pte(pte));
+	return softleaf_is_marker(softleaf_from_pte(pte));
 }
 
 /**
@@ -522,9 +527,9 @@ static inline bool pte_is_marker(pte_t pte)
  */
 static inline bool pte_is_uffd_wp_marker(pte_t pte)
 {
-	const leaf_entry_t entry = leafent_from_pte(pte);
+	const softleaf_t entry = softleaf_from_pte(pte);
 
-	return leafent_is_uffd_wp_marker(entry);
+	return softleaf_is_uffd_wp_marker(entry);
 }
 
 /**
@@ -539,15 +544,15 @@ static inline bool pte_is_uffd_wp_marker(pte_t pte)
  */
 static inline bool pte_is_uffd_marker(pte_t pte)
 {
-	const leaf_entry_t entry = leafent_from_pte(pte);
+	const softleaf_t entry = softleaf_from_pte(pte);
 
-	if (!leafent_is_marker(entry))
+	if (!softleaf_is_marker(entry))
 		return false;
 
 	/* UFFD WP, poisoned swap entries are UFFD-handled. */
-	if (leafent_is_uffd_wp_marker(entry))
+	if (softleaf_is_uffd_wp_marker(entry))
 		return true;
-	if (leafent_is_poison_marker(entry))
+	if (softleaf_is_poison_marker(entry))
 		return true;
 
 	return false;
@@ -569,7 +574,7 @@ static inline bool pte_is_uffd_marker(pte_t pte)
  */
 static inline bool pmd_is_device_private_entry(pmd_t pmd)
 {
-	return leafent_is_device_private(leafent_from_pmd(pmd));
+	return softleaf_is_device_private(softleaf_from_pmd(pmd));
 }
 
 #else  /* CONFIG_ZONE_DEVICE && CONFIG_ARCH_ENABLE_THP_MIGRATION */
@@ -589,11 +594,11 @@ static inline bool pmd_is_device_private_entry(pmd_t pmd)
  */
 static inline bool pmd_is_migration_entry(pmd_t pmd)
 {
-	return leafent_is_migration(leafent_from_pmd(pmd));
+	return softleaf_is_migration(softleaf_from_pmd(pmd));
 }
 
 /**
- * pmd_is_valid_leafent() - Is this PMD entry a valid leaf entry?
+ * pmd_is_valid_softleaf() - Is this PMD entry a valid leaf entry?
  * @pmd: PMD entry.
  *
  * PMD leaf entries are valid only if they are device private or migration
@@ -602,13 +607,13 @@ static inline bool pmd_is_migration_entry(pmd_t pmd)
  *
  * Returns: true if the PMD entry is a valid leaf entry, otherwise false.
  */
-static inline bool pmd_is_valid_leafent(pmd_t pmd)
+static inline bool pmd_is_valid_softleaf(pmd_t pmd)
 {
-	const leaf_entry_t entry = leafent_from_pmd(pmd);
+	const softleaf_t entry = softleaf_from_pmd(pmd);
 
 	/* Only device private, migration entries valid for PMD. */
-	return leafent_is_device_private(entry) ||
-		leafent_is_migration(entry);
+	return softleaf_is_device_private(entry) ||
+		softleaf_is_migration(entry);
 }
 
 #endif  /* CONFIG_MMU */

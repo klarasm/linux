@@ -7,6 +7,7 @@
 #
 
 menu "Live Update and Kexec HandOver"
+	depends on !DEFERRED_STRUCT_PAGE_INIT
 
 config LIVEUPDATE
 	bool "Live Update Orchestrator"

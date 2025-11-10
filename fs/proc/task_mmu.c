@@ -1020,9 +1020,9 @@ static void smaps_pte_entry(pte_t *pte, unsigned long addr,
 	} else if (pte_none(ptent)) {
 		smaps_pte_hole_lookup(addr, walk);
 	} else {
-		const leaf_entry_t entry = leafent_from_pte(ptent);
+		const softleaf_t entry = softleaf_from_pte(ptent);
 
-		if (leafent_is_swap(entry)) {
+		if (softleaf_is_swap(entry)) {
 			int mapcount;
 
 			mss->swap += PAGE_SIZE;
@@ -1035,10 +1035,10 @@ static void smaps_pte_entry(pte_t *pte, unsigned long addr,
 			} else {
 				mss->swap_pss += (u64)PAGE_SIZE << PSS_SHIFT;
 			}
-		} else if (leafent_has_pfn(entry)) {
-			if (leafent_is_device_private(entry))
+		} else if (softleaf_has_pfn(entry)) {
+			if (softleaf_is_device_private(entry))
 				present = true;
-			page = leafent_to_page(entry);
+			page = softleaf_to_page(entry);
 		}
 	}
 
@@ -1065,10 +1065,10 @@ static void smaps_pmd_entry(pmd_t *pmd, unsigned long addr,
 		page = vm_normal_page_pmd(vma, addr, *pmd);
 		present = true;
 	} else if (unlikely(thp_migration_supported())) {
-		const leaf_entry_t entry = leafent_from_pmd(*pmd);
+		const softleaf_t entry = softleaf_from_pmd(*pmd);
 
-		if (leafent_has_pfn(entry))
-			page = leafent_to_page(entry);
+		if (softleaf_has_pfn(entry))
+			page = softleaf_to_page(entry);
 	}
 	if (IS_ERR_OR_NULL(page))
 		return;
@@ -1147,6 +1147,7 @@ static void show_smap_vma_flags(struct seq_file *m, struct vm_area_struct *vma)
 		[ilog2(VM_MAYSHARE)]	= "ms",
 		[ilog2(VM_GROWSDOWN)]	= "gd",
 		[ilog2(VM_PFNMAP)]	= "pf",
+		[ilog2(VM_MAYBE_GUARD)]	= "gu",
 		[ilog2(VM_LOCKED)]	= "lo",
 		[ilog2(VM_IO)]		= "io",
 		[ilog2(VM_SEQ_READ)]	= "sr",
@@ -1232,10 +1233,10 @@ static int smaps_hugetlb_range(pte_t *pte, unsigned long hmask,
 		folio = page_folio(pte_page(ptent));
 		present = true;
 	} else {
-		const leaf_entry_t entry = leafent_from_pte(ptent);
+		const softleaf_t entry = softleaf_from_pte(ptent);
 
-		if (leafent_has_pfn(entry))
-			folio = leafent_to_folio(entry);
+		if (softleaf_has_pfn(entry))
+			folio = softleaf_to_folio(entry);
 	}
 
 	if (folio) {
@@ -1940,13 +1941,13 @@ static pagemap_entry_t pte_to_pagemap_entry(struct pagemapread *pm,
 		if (pte_uffd_wp(pte))
 			flags |= PM_UFFD_WP;
 	} else {
-		leaf_entry_t entry;
+		softleaf_t entry;
 
 		if (pte_swp_soft_dirty(pte))
 			flags |= PM_SOFT_DIRTY;
 		if (pte_swp_uffd_wp(pte))
 			flags |= PM_UFFD_WP;
-		entry = leafent_from_pte(pte);
+		entry = softleaf_from_pte(pte);
 		if (pm->show_pfn) {
 			pgoff_t offset;
 
@@ -1954,19 +1955,19 @@ static pagemap_entry_t pte_to_pagemap_entry(struct pagemapread *pm,
 			 * For PFN swap offsets, keeping the offset field
 			 * to be PFN only to be compatible with old smaps.
 			 */
-			if (leafent_has_pfn(entry))
-				offset = leafent_to_pfn(entry);
+			if (softleaf_has_pfn(entry))
+				offset = softleaf_to_pfn(entry);
 			else
 				offset = swp_offset(entry);
 			frame = swp_type(entry) |
 			    (offset << MAX_SWAPFILES_SHIFT);
 		}
 		flags |= PM_SWAP;
-		if (leafent_has_pfn(entry))
-			page = leafent_to_page(entry);
-		if (leafent_is_uffd_wp_marker(entry))
+		if (softleaf_has_pfn(entry))
+			page = softleaf_to_page(entry);
+		if (softleaf_is_uffd_wp_marker(entry))
 			flags |= PM_UFFD_WP;
-		if (leafent_is_guard_marker(entry))
+		if (softleaf_is_guard_marker(entry))
 			flags |=  PM_GUARD_REGION;
 	}
 
@@ -2015,12 +2016,12 @@ static int pagemap_pmd_range_thp(pmd_t *pmdp, unsigned long addr,
 		if (pm->show_pfn)
 			frame = pmd_pfn(pmd) + idx;
 	} else if (thp_migration_supported()) {
-		const leaf_entry_t entry = leafent_from_pmd(pmd);
+		const softleaf_t entry = softleaf_from_pmd(pmd);
 		unsigned long offset;
 
 		if (pm->show_pfn) {
-			if (leafent_has_pfn(entry))
-				offset = leafent_to_pfn(entry) + idx;
+			if (softleaf_has_pfn(entry))
+				offset = softleaf_to_pfn(entry) + idx;
 			else
 				offset = swp_offset(entry) + idx;
 			frame = swp_type(entry) |
@@ -2032,7 +2033,7 @@ static int pagemap_pmd_range_thp(pmd_t *pmdp, unsigned long addr,
 		if (pmd_swp_uffd_wp(pmd))
 			flags |= PM_UFFD_WP;
 		VM_WARN_ON_ONCE(!pmd_is_migration_entry(pmd));
-		page = leafent_to_page(entry);
+		page = softleaf_to_page(entry);
 	}
 
 	if (page) {
@@ -2357,19 +2358,19 @@ static unsigned long pagemap_page_category(struct pagemap_scan_private *p,
 		if (pte_soft_dirty(pte))
 			categories |= PAGE_IS_SOFT_DIRTY;
 	} else {
-		leaf_entry_t entry;
+		softleaf_t entry;
 
 		categories = PAGE_IS_SWAPPED;
 
 		if (!pte_swp_uffd_wp_any(pte))
 			categories |= PAGE_IS_WRITTEN;
 
-		entry = leafent_from_pte(pte);
-		if (leafent_is_guard_marker(entry))
+		entry = softleaf_from_pte(pte);
+		if (softleaf_is_guard_marker(entry))
 			categories |= PAGE_IS_GUARD;
 		else if ((p->masks_of_interest & PAGE_IS_FILE) &&
-			 leafent_has_pfn(entry) &&
-			 !folio_test_anon(leafent_to_folio(entry)))
+			 softleaf_has_pfn(entry) &&
+			 !folio_test_anon(softleaf_to_folio(entry)))
 			categories |= PAGE_IS_FILE;
 
 		if (pte_swp_soft_dirty(pte))
@@ -2432,10 +2433,10 @@ static unsigned long pagemap_thp_category(struct pagemap_scan_private *p,
 			categories |= PAGE_IS_SOFT_DIRTY;
 
 		if (p->masks_of_interest & PAGE_IS_FILE) {
-			const leaf_entry_t entry = leafent_from_pmd(pmd);
+			const softleaf_t entry = softleaf_from_pmd(pmd);
 
-			if (leafent_has_pfn(entry) &&
-			    !folio_test_anon(leafent_to_folio(entry)))
+			if (softleaf_has_pfn(entry) &&
+			    !folio_test_anon(softleaf_to_folio(entry)))
 				categories |= PAGE_IS_FILE;
 		}
 	}
@@ -2500,17 +2501,17 @@ static void make_uffd_wp_huge_pte(struct vm_area_struct *vma,
 				  pte_t ptent)
 {
 	const unsigned long psize = huge_page_size(hstate_vma(vma));
-	leaf_entry_t entry;
+	softleaf_t entry;
 
 	if (huge_pte_none(ptent))
 		set_huge_pte_at(vma->vm_mm, addr, ptep,
 				make_pte_marker(PTE_MARKER_UFFD_WP), psize);
 
-	entry = leafent_from_pte(ptent);
-	if (leafent_is_hwpoison(entry) || leafent_is_marker(entry))
+	entry = softleaf_from_pte(ptent);
+	if (softleaf_is_hwpoison(entry) || softleaf_is_marker(entry))
 		return;
 
-	if (leafent_is_migration(entry))
+	if (softleaf_is_migration(entry))
 		set_huge_pte_at(vma->vm_mm, addr, ptep,
 				pte_swp_mkuffd_wp(ptent), psize);
 	else

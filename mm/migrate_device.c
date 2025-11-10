@@ -168,24 +168,24 @@ static int migrate_vma_collect_huge_pmd(pmd_t *pmdp, unsigned long start,
 		if (pmd_write(*pmdp))
 			write = MIGRATE_PFN_WRITE;
 	} else if (!pmd_present(*pmdp)) {
-		const leaf_entry_t entry = leafent_from_pmd(*pmdp);
+		const softleaf_t entry = softleaf_from_pmd(*pmdp);
 
-		folio = leafent_to_folio(entry);
+		folio = softleaf_to_folio(entry);
 
-		if (!leafent_is_device_private(entry) ||
+		if (!softleaf_is_device_private(entry) ||
 			!(migrate->flags & MIGRATE_VMA_SELECT_DEVICE_PRIVATE) ||
 			(folio->pgmap->owner != migrate->pgmap_owner)) {
 			spin_unlock(ptl);
 			return migrate_vma_collect_skip(start, end, walk);
 		}
 
-		if (leafent_is_migration(entry)) {
+		if (softleaf_is_migration(entry)) {
 			migration_entry_wait_on_locked(entry, ptl);
 			spin_unlock(ptl);
 			return -EAGAIN;
 		}
 
-		if (leafent_is_device_private_write(entry))
+		if (softleaf_is_device_private_write(entry))
 			write = MIGRATE_PFN_WRITE;
 	} else {
 		spin_unlock(ptl);
@@ -282,7 +282,7 @@ again:
 		unsigned long mpfn = 0, pfn;
 		struct folio *folio;
 		struct page *page;
-		leaf_entry_t entry;
+		softleaf_t entry;
 		pte_t pte;
 
 		pte = ptep_get(ptep);
@@ -301,11 +301,11 @@ again:
 			 * page table entry. Other special swap entries are not
 			 * migratable, and we ignore regular swapped page.
 			 */
-			entry = leafent_from_pte(pte);
-			if (!leafent_is_device_private(entry))
+			entry = softleaf_from_pte(pte);
+			if (!softleaf_is_device_private(entry))
 				goto next;
 
-			page = leafent_to_page(entry);
+			page = softleaf_to_page(entry);
 			pgmap = page_pgmap(page);
 			if (!(migrate->flags &
 				MIGRATE_VMA_SELECT_DEVICE_PRIVATE) ||
@@ -331,7 +331,7 @@ again:
 
 			mpfn = migrate_pfn(page_to_pfn(page)) |
 					MIGRATE_PFN_MIGRATE;
-			if (leafent_is_device_private_write(entry))
+			if (softleaf_is_device_private_write(entry))
 				mpfn |= MIGRATE_PFN_WRITE;
 		} else {
 			pfn = pte_pfn(pte);

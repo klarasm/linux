@@ -1969,9 +1969,9 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 		if (likely(pte_present(pteval))) {
 			pfn = pte_pfn(pteval);
 		} else {
-			const leaf_entry_t entry = leafent_from_pte(pteval);
+			const softleaf_t entry = softleaf_from_pte(pteval);
 
-			pfn = leafent_to_pfn(entry);
+			pfn = softleaf_to_pfn(entry);
 			VM_WARN_ON_FOLIO(folio_test_hugetlb(folio), folio);
 		}
 
@@ -2343,7 +2343,7 @@ static bool try_to_migrate_one(struct folio *folio, struct vm_area_struct *vma,
 			if (likely(pmd_present(pmdval)))
 				pfn = pmd_pfn(pmdval);
 			else
-				pfn = leafent_to_pfn(leafent_from_pmd(pmdval));
+				pfn = softleaf_to_pfn(softleaf_from_pmd(pmdval));
 
 			subpage = folio_page(folio, pfn - folio_pfn(folio));
 
@@ -2370,9 +2370,9 @@ static bool try_to_migrate_one(struct folio *folio, struct vm_area_struct *vma,
 		if (likely(pte_present(pteval))) {
 			pfn = pte_pfn(pteval);
 		} else {
-			const leaf_entry_t entry = leafent_from_pte(pteval);
+			const softleaf_t entry = softleaf_from_pte(pteval);
 
-			pfn = leafent_to_pfn(entry);
+			pfn = softleaf_to_pfn(entry);
 			VM_WARN_ON_FOLIO(folio_test_hugetlb(folio), folio);
 		}
 
@@ -2457,11 +2457,11 @@ static bool try_to_migrate_one(struct folio *folio, struct vm_area_struct *vma,
 				folio_mark_dirty(folio);
 			writable = pte_write(pteval);
 		} else {
-			const leaf_entry_t entry = leafent_from_pte(pteval);
+			const softleaf_t entry = softleaf_from_pte(pteval);
 
 			pte_clear(mm, address, pvmw.pte);
 
-			writable = leafent_is_device_private_write(entry);
+			writable = softleaf_is_device_private_write(entry);
 		}
 
 		VM_WARN_ON_FOLIO(writable && folio_test_anon(folio) &&

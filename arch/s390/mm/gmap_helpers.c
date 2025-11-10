@@ -18,20 +18,20 @@
 #include <asm/pgtable.h>
 
 /**
- * ptep_zap_leaf_entry() - discard a leaf entry.
+ * ptep_zap_softleaf_entry() - discard a software leaf entry.
  * @mm: the mm
- * @entry: the leaf entry that needs to be zapped
+ * @entry: the software leaf entry that needs to be zapped
  *
- * Discards the given leaf entry. If the leaf entry was an actual swap
- * entry (and not a migration entry, for example), the actual swapped
+ * Discards the given software leaf entry. If the leaf entry was an actual
+ * swap entry (and not a migration entry, for example), the actual swapped
  * page is also discarded from swap.
  */
-static void ptep_zap_leaf_entry(struct mm_struct *mm, leaf_entry_t entry)
+static void ptep_zap_softleaf_entry(struct mm_struct *mm, softleaf_t entry)
 {
-	if (leafent_is_swap(entry))
+	if (softleaf_is_swap(entry))
 		dec_mm_counter(mm, MM_SWAPENTS);
-	else if (leafent_is_migration(entry))
-		dec_mm_counter(mm, mm_counter(leafent_to_folio(entry)));
+	else if (softleaf_is_migration(entry))
+		dec_mm_counter(mm, mm_counter(softleaf_to_folio(entry)));
 	free_swap_and_cache(entry);
 }
 
@@ -66,7 +66,7 @@ void gmap_helper_zap_one_page(struct mm_struct *mm, unsigned long vmaddr)
 		preempt_disable();
 		pgste = pgste_get_lock(ptep);
 
-		ptep_zap_leaf_entry(mm, leafent_from_pte(*ptep));
+		ptep_zap_softleaf_entry(mm, softleaf_from_pte(*ptep));
 		pte_clear(mm, vmaddr, ptep);
 
 		pgste_set_unlock(ptep, pgste);

@@ -2257,7 +2257,7 @@ static int unuse_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 		struct folio *folio;
 		unsigned long offset;
 		unsigned char swp_count;
-		leaf_entry_t entry;
+		softleaf_t entry;
 		int ret;
 		pte_t ptent;
 
@@ -2268,9 +2268,9 @@ static int unuse_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 		}
 
 		ptent = ptep_get_lockless(pte);
-		entry = leafent_from_pte(ptent);
+		entry = softleaf_from_pte(ptent);
 
-		if (!leafent_is_swap(entry))
+		if (!softleaf_is_swap(entry))
 			continue;
 		if (swp_type(entry) != type)
 			continue;
@@ -3202,9 +3202,9 @@ static int claim_swapfile(struct swap_info_struct *si, struct inode *inode)
  */
 unsigned long generic_max_swapfile_size(void)
 {
-	const leaf_entry_t entry = swp_entry(0, ~0UL);
+	const softleaf_t entry = swp_entry(0, ~0UL);
 
-	return swp_offset(leafent_from_pte(leafent_to_pte(entry))) + 1;
+	return swp_offset(softleaf_from_pte(softleaf_to_pte(entry))) + 1;
 }
 
 /* Can be overridden by an architecture for additional checks. */

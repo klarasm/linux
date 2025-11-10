@@ -715,16 +715,16 @@ static void __init pte_soft_dirty_tests(struct pgtable_debug_args *args)
 static void __init pte_swap_soft_dirty_tests(struct pgtable_debug_args *args)
 {
 	pte_t pte;
-	leaf_entry_t entry;
+	softleaf_t entry;
 
 	if (!IS_ENABLED(CONFIG_MEM_SOFT_DIRTY))
 		return;
 
 	pr_debug("Validating PTE swap soft dirty\n");
 	pte = swp_entry_to_pte(args->swp_entry);
-	entry = leafent_from_pte(pte);
+	entry = softleaf_from_pte(pte);
 
-	WARN_ON(!leafent_is_swap(entry));
+	WARN_ON(!softleaf_is_swap(entry));
 	WARN_ON(!pte_swp_soft_dirty(pte_swp_mksoft_dirty(pte)));
 	WARN_ON(pte_swp_soft_dirty(pte_swp_clear_soft_dirty(pte)));
 }
@@ -760,7 +760,7 @@ static void __init pmd_leaf_soft_dirty_tests(struct pgtable_debug_args *args)
 	pr_debug("Validating PMD swap soft dirty\n");
 	pmd = swp_entry_to_pmd(args->leaf_entry);
 	WARN_ON(!pmd_is_huge(pmd));
-	WARN_ON(!pmd_is_valid_leafent(pmd));
+	WARN_ON(!pmd_is_valid_softleaf(pmd));
 
 	WARN_ON(!pmd_swp_soft_dirty(pmd_swp_mksoft_dirty(pmd)));
 	WARN_ON(pmd_swp_soft_dirty(pmd_swp_clear_soft_dirty(pmd)));
@@ -773,46 +773,46 @@ static void __init pmd_leaf_soft_dirty_tests(struct pgtable_debug_args *args) { 
 static void __init pte_swap_exclusive_tests(struct pgtable_debug_args *args)
 {
 	swp_entry_t entry;
-	leaf_entry_t leafent;
+	softleaf_t softleaf;
 	pte_t pte;
 
 	pr_debug("Validating PTE swap exclusive\n");
 	entry = args->swp_entry;
 
 	pte = swp_entry_to_pte(entry);
-	leafent = leafent_from_pte(pte);
+	softleaf = softleaf_from_pte(pte);
 
 	WARN_ON(pte_swp_exclusive(pte));
-	WARN_ON(!leafent_is_swap(leafent));
-	WARN_ON(memcmp(&entry, &leafent, sizeof(entry)));
+	WARN_ON(!softleaf_is_swap(softleaf));
+	WARN_ON(memcmp(&entry, &softleaf, sizeof(entry)));
 
 	pte = pte_swp_mkexclusive(pte);
-	leafent = leafent_from_pte(pte);
+	softleaf = softleaf_from_pte(pte);
 
 	WARN_ON(!pte_swp_exclusive(pte));
-	WARN_ON(!leafent_is_swap(leafent));
+	WARN_ON(!softleaf_is_swap(softleaf));
 	WARN_ON(pte_swp_soft_dirty(pte));
-	WARN_ON(memcmp(&entry, &leafent, sizeof(entry)));
+	WARN_ON(memcmp(&entry, &softleaf, sizeof(entry)));
 
 	pte = pte_swp_clear_exclusive(pte);
-	leafent = leafent_from_pte(pte);
+	softleaf = softleaf_from_pte(pte);
 
 	WARN_ON(pte_swp_exclusive(pte));
-	WARN_ON(!leafent_is_swap(leafent));
-	WARN_ON(memcmp(&entry, &leafent, sizeof(entry)));
+	WARN_ON(!softleaf_is_swap(softleaf));
+	WARN_ON(memcmp(&entry, &softleaf, sizeof(entry)));
 }
 
 static void __init pte_swap_tests(struct pgtable_debug_args *args)
 {
 	swp_entry_t arch_entry;
-	leaf_entry_t entry;
+	softleaf_t entry;
 	pte_t pte1, pte2;
 
 	pr_debug("Validating PTE swap\n");
 	pte1 = swp_entry_to_pte(args->swp_entry);
-	entry = leafent_from_pte(pte1);
+	entry = softleaf_from_pte(pte1);
 
-	WARN_ON(!leafent_is_swap(entry));
+	WARN_ON(!softleaf_is_swap(entry));
 
 	arch_entry = __pte_to_swp_entry(pte1);
 	pte2 = __swp_entry_to_pte(arch_entry);
@@ -820,7 +820,7 @@ static void __init pte_swap_tests(struct pgtable_debug_args *args)
 }
 
 #ifdef CONFIG_ARCH_ENABLE_THP_MIGRATION
-static void __init pmd_leafent_tests(struct pgtable_debug_args *args)
+static void __init pmd_softleaf_tests(struct pgtable_debug_args *args)
 {
 	swp_entry_t arch_entry;
 	pmd_t pmd1, pmd2;
@@ -831,20 +831,20 @@ static void __init pmd_leafent_tests(struct pgtable_debug_args *args)
 	pr_debug("Validating PMD swap\n");
 	pmd1 = swp_entry_to_pmd(args->leaf_entry);
 	WARN_ON(!pmd_is_huge(pmd1));
-	WARN_ON(!pmd_is_valid_leafent(pmd1));
+	WARN_ON(!pmd_is_valid_softleaf(pmd1));
 
 	arch_entry = __pmd_to_swp_entry(pmd1);
 	pmd2 = __swp_entry_to_pmd(arch_entry);
 	WARN_ON(memcmp(&pmd1, &pmd2, sizeof(pmd1)));
 }
 #else  /* !CONFIG_ARCH_ENABLE_THP_MIGRATION */
-static void __init pmd_leafent_tests(struct pgtable_debug_args *args) { }
+static void __init pmd_softleaf_tests(struct pgtable_debug_args *args) { }
 #endif /* CONFIG_ARCH_ENABLE_THP_MIGRATION */
 
 static void __init swap_migration_tests(struct pgtable_debug_args *args)
 {
 	struct page *page;
-	leaf_entry_t entry;
+	softleaf_t entry;
 
 	if (!IS_ENABLED(CONFIG_MIGRATION))
 		return;
@@ -868,16 +868,16 @@ static void __init swap_migration_tests(struct pgtable_debug_args *args)
 	 */
 	__SetPageLocked(page);
 	entry = make_writable_migration_entry(page_to_pfn(page));
-	WARN_ON(!leafent_is_migration(entry));
-	WARN_ON(!leafent_is_migration_write(entry));
+	WARN_ON(!softleaf_is_migration(entry));
+	WARN_ON(!softleaf_is_migration_write(entry));
 
 	entry = make_readable_migration_entry(swp_offset(entry));
-	WARN_ON(!leafent_is_migration(entry));
-	WARN_ON(leafent_is_migration_write(entry));
+	WARN_ON(!softleaf_is_migration(entry));
+	WARN_ON(softleaf_is_migration_write(entry));
 
 	entry = make_readable_migration_entry(page_to_pfn(page));
-	WARN_ON(!leafent_is_migration(entry));
-	WARN_ON(leafent_is_migration_write(entry));
+	WARN_ON(!softleaf_is_migration(entry));
+	WARN_ON(softleaf_is_migration_write(entry));
 	__ClearPageLocked(page);
 }
 
@@ -1229,7 +1229,7 @@ static int __init init_args(struct pgtable_debug_args *args)
 	init_fixed_pfns(args);
 
 	/* See generic_max_swapfile_size(): probe the maximum offset */
-	max_swap_offset = swp_offset(leafent_from_pte(leafent_to_pte(swp_entry(0, ~0UL))));
+	max_swap_offset = swp_offset(softleaf_from_pte(softleaf_to_pte(swp_entry(0, ~0UL))));
 	/* Create a swp entry with all possible bits set while still being swap. */
 	args->swp_entry = swp_entry(MAX_SWAPFILES - 1, max_swap_offset);
 	/* Create a non-present migration entry. */
@@ -1328,7 +1328,7 @@ static int __init debug_vm_pgtable(void)
 	pte_swap_exclusive_tests(&args);
 
 	pte_swap_tests(&args);
-	pmd_leafent_tests(&args);
+	pmd_softleaf_tests(&args);
 
 	swap_migration_tests(&args);
 

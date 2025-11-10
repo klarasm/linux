@@ -51,7 +51,7 @@ void damon_ptep_mkold(pte_t *pte, struct vm_area_struct *vma, unsigned long addr
 	if (likely(pte_present(pteval)))
 		pfn = pte_pfn(pteval);
 	else
-		pfn = leafent_to_pfn(leafent_from_pte(pteval));
+		pfn = softleaf_to_pfn(softleaf_from_pte(pteval));
 
 	folio = damon_get_folio(pfn);
 	if (!folio)
@@ -83,7 +83,7 @@ void damon_pmdp_mkold(pmd_t *pmd, struct vm_area_struct *vma, unsigned long addr
 	if (likely(pmd_present(pmdval)))
 		pfn = pmd_pfn(pmdval);
 	else
-		pfn = leafent_to_pfn(leafent_from_pmd(pmdval));
+		pfn = softleaf_to_pfn(softleaf_from_pmd(pmdval));
 
 	folio = damon_get_folio(pfn);
 	if (!folio)

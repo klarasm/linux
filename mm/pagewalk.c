@@ -967,9 +967,9 @@ pmd_table:
 			}
 		} else if ((flags & FW_MIGRATION) &&
 			   pmd_is_migration_entry(pmd)) {
-			const leaf_entry_t entry = leafent_from_pmd(pmd);
+			const softleaf_t entry = softleaf_from_pmd(pmd);
 
-			page = leafent_to_page(entry);
+			page = softleaf_to_page(entry);
 			expose_page = false;
 			goto found;
 		}
@@ -1000,10 +1000,10 @@ pte_table:
 			goto found;
 		}
 	} else if (!pte_none(pte)) {
-		const leaf_entry_t entry = leafent_from_pte(pte);
+		const softleaf_t entry = softleaf_from_pte(pte);
 
-		if ((flags & FW_MIGRATION) && leafent_is_migration(entry)) {
-			page = leafent_to_page(entry);
+		if ((flags & FW_MIGRATION) && softleaf_is_migration(entry)) {
+			page = softleaf_to_page(entry);
 			expose_page = false;
 			goto found;
 		}

@@ -253,19 +253,19 @@ static int hmm_vma_handle_pte(struct mm_walk *walk, unsigned long addr,
 	}
 
 	if (!pte_present(pte)) {
-		const leaf_entry_t entry = leafent_from_pte(pte);
+		const softleaf_t entry = softleaf_from_pte(pte);
 
 		/*
 		 * Don't fault in device private pages owned by the caller,
 		 * just report the PFN.
 		 */
-		if (leafent_is_device_private(entry) &&
-		    page_pgmap(leafent_to_page(entry))->owner ==
+		if (softleaf_is_device_private(entry) &&
+		    page_pgmap(softleaf_to_page(entry))->owner ==
 		    range->dev_private_owner) {
 			cpu_flags = HMM_PFN_VALID;
-			if (leafent_is_device_private_write(entry))
+			if (softleaf_is_device_private_write(entry))
 				cpu_flags |= HMM_PFN_WRITE;
-			new_pfn_flags = leafent_to_pfn(entry) | cpu_flags;
+			new_pfn_flags = softleaf_to_pfn(entry) | cpu_flags;
 			goto out;
 		}
 
@@ -274,16 +274,16 @@ static int hmm_vma_handle_pte(struct mm_walk *walk, unsigned long addr,
 		if (!required_fault)
 			goto out;
 
-		if (leafent_is_swap(entry))
+		if (softleaf_is_swap(entry))
 			goto fault;
 
-		if (leafent_is_device_private(entry))
+		if (softleaf_is_device_private(entry))
 			goto fault;
 
-		if (leafent_is_device_exclusive(entry))
+		if (softleaf_is_device_exclusive(entry))
 			goto fault;
 
-		if (leafent_is_migration(entry)) {
+		if (softleaf_is_migration(entry)) {
 			pte_unmap(ptep);
 			hmm_vma_walk->last = addr;
 			migration_entry_wait(walk->mm, pmdp, addr);
@@ -334,19 +334,19 @@ static int hmm_vma_handle_absent_pmd(struct mm_walk *walk, unsigned long start,
 	struct hmm_vma_walk *hmm_vma_walk = walk->private;
 	struct hmm_range *range = hmm_vma_walk->range;
 	unsigned long npages = (end - start) >> PAGE_SHIFT;
-	const leaf_entry_t entry = leafent_from_pmd(pmd);
+	const softleaf_t entry = softleaf_from_pmd(pmd);
 	unsigned long addr = start;
 	unsigned int required_fault;
 
-	if (leafent_is_device_private(entry) &&
-	    leafent_to_folio(entry)->pgmap->owner ==
+	if (softleaf_is_device_private(entry) &&
+	    softleaf_to_folio(entry)->pgmap->owner ==
 	    range->dev_private_owner) {
 		unsigned long cpu_flags = HMM_PFN_VALID |
 			hmm_pfn_flags_order(PMD_SHIFT - PAGE_SHIFT);
-		unsigned long pfn = leafent_to_pfn(entry);
+		unsigned long pfn = softleaf_to_pfn(entry);
 		unsigned long i;
 
-		if (leafent_is_device_private_write(entry))
+		if (softleaf_is_device_private_write(entry))
 			cpu_flags |= HMM_PFN_WRITE;
 
 		/*
@@ -365,7 +365,7 @@ static int hmm_vma_handle_absent_pmd(struct mm_walk *walk, unsigned long start,
 	required_fault = hmm_range_need_fault(hmm_vma_walk, hmm_pfns,
 					      npages, 0);
 	if (required_fault) {
-		if (leafent_is_device_private(entry))
+		if (softleaf_is_device_private(entry))
 			return hmm_vma_fault(addr, end, required_fault, walk);
 		else
 			return -EFAULT;

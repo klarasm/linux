@@ -317,11 +317,11 @@ static long change_pte_range(struct mmu_gather *tlb,
 				pages++;
 			}
 		} else  {
-			leaf_entry_t entry = leafent_from_pte(oldpte);
+			softleaf_t entry = softleaf_from_pte(oldpte);
 			pte_t newpte;
 
-			if (leafent_is_migration_write(entry)) {
-				const struct folio *folio = leafent_to_folio(entry);
+			if (softleaf_is_migration_write(entry)) {
+				const struct folio *folio = softleaf_to_folio(entry);
 
 				/*
 				 * A protection check is difficult so
@@ -335,7 +335,7 @@ static long change_pte_range(struct mmu_gather *tlb,
 				newpte = swp_entry_to_pte(entry);
 				if (pte_swp_soft_dirty(oldpte))
 					newpte = pte_swp_mksoft_dirty(newpte);
-			} else if (leafent_is_device_private_write(entry)) {
+			} else if (softleaf_is_device_private_write(entry)) {
 				/*
 				 * We do not preserve soft-dirtiness. See
 				 * copy_nonpresent_pte() for explanation.
@@ -345,14 +345,14 @@ static long change_pte_range(struct mmu_gather *tlb,
 				newpte = swp_entry_to_pte(entry);
 				if (pte_swp_uffd_wp(oldpte))
 					newpte = pte_swp_mkuffd_wp(newpte);
-			} else if (leafent_is_marker(entry)) {
+			} else if (softleaf_is_marker(entry)) {
 				/*
 				 * Ignore error swap entries unconditionally,
 				 * because any access should sigbus/sigsegv
 				 * anyway.
 				 */
-				if (leafent_is_poison_marker(entry) ||
-				    leafent_is_guard_marker(entry))
+				if (softleaf_is_poison_marker(entry) ||
+				    softleaf_is_guard_marker(entry))
 					continue;
 				/*
 				 * If this is uffd-wp pte marker and we'd like

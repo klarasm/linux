@@ -286,21 +286,29 @@ typedef struct {
 } swp_entry_t;
 
 /**
- * typedef leaf_entry_t - Describes a page table 'leaf entry'.
+ * typedef softleaf_t - Describes a page table software leaf entry, abstracted
+ * from its architecture-specific encoding.
  *
- * Leaf entries are an abstract representation of all page table entries which
- * are non-present. Therefore these describe:
+ * Page table leaf entries are those which do not reference any descendent page
+ * tables but rather either reference a data page, are an empty (or 'none'
+ * entry), or contain a non-present entry.
  *
- * - None or 'empty' entries.
+ * If referencing another page table or a data page then the page table entry is
+ * pertinent to hardware - that is it tells the hardware how to decode the page
+ * table entry.
  *
- * - All other entries which cause page faults and therefore encode
- *   software-controlled metadata.
+ * Otherwise it is a software-defined leaf page table entry, which this type
+ * describes. See leafops.h and specifically @softleaf_type for a list of all
+ * possible kinds of software leaf entry.
+ *
+ * A softleaf_t entry is abstracted from the hardware page table entry, so is
+ * not architecture-specific.
  *
  * NOTE: While we transition from the confusing swp_entry_t type used for this
  *       purpose, we simply alias this type. This will be removed once the
  *       transition is complete.
  */
-typedef swp_entry_t leaf_entry_t;
+typedef swp_entry_t softleaf_t;
 
 #if defined(CONFIG_MEMCG) || defined(CONFIG_SLAB_OBJ_EXT)
 /* We have some extra room after the refcount in tail pages. */

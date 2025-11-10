@@ -179,10 +179,10 @@ void __page_table_check_pud_clear(struct mm_struct *mm, pud_t pud)
 EXPORT_SYMBOL(__page_table_check_pud_clear);
 
 /* Whether the swap entry cached writable information */
-static inline bool leafent_cached_writable(leaf_entry_t entry)
+static inline bool softleaf_cached_writable(softleaf_t entry)
 {
-	return leafent_is_device_private(entry) ||
-		leafent_is_migration_write(entry);
+	return softleaf_is_device_private(entry) ||
+		softleaf_is_migration_write(entry);
 }
 
 static void page_table_check_pte_flags(pte_t pte)
@@ -190,9 +190,9 @@ static void page_table_check_pte_flags(pte_t pte)
 	if (pte_present(pte)) {
 		WARN_ON_ONCE(pte_uffd_wp(pte) && pte_write(pte));
 	} else if (pte_swp_uffd_wp(pte)) {
-		const leaf_entry_t entry = leafent_from_pte(pte);
+		const softleaf_t entry = softleaf_from_pte(pte);
 
-		WARN_ON_ONCE(leafent_cached_writable(entry));
+		WARN_ON_ONCE(softleaf_cached_writable(entry));
 	}
 }
 
@@ -219,9 +219,9 @@ static inline void page_table_check_pmd_flags(pmd_t pmd)
 		if (pmd_uffd_wp(pmd))
 			WARN_ON_ONCE(pmd_write(pmd));
 	} else if (pmd_swp_uffd_wp(pmd)) {
-		const leaf_entry_t entry = leafent_from_pmd(pmd);
+		const softleaf_t entry = softleaf_from_pmd(pmd);
 
-		WARN_ON_ONCE(leafent_cached_writable(entry));
+		WARN_ON_ONCE(softleaf_cached_writable(entry));
 	}
 }
 
