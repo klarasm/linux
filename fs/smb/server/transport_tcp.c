@@ -290,8 +290,11 @@ static int ksmbd_kthread_fn(void *p)
 			}
 		}
 		up_read(&conn_list_lock);
-		if (ret == -EAGAIN)
+		if (ret == -EAGAIN) {
+			/* Per-IP limit hit: release the just-accepted socket. */
+			sock_release(client_sk);
 			continue;
+		}
 
 skip_max_ip_conns_limit:
 		if (server_conf.max_connections &&
@@ -519,10 +522,10 @@ static int create_socket(struct interface *iface)
 	}
 
 	if (ipv4)
-		ret = kernel_bind(ksmbd_socket, (struct sockaddr *)&sin,
+		ret = kernel_bind(ksmbd_socket, (struct sockaddr_unsized *)&sin,
 				  sizeof(sin));
 	else
-		ret = kernel_bind(ksmbd_socket, (struct sockaddr *)&sin6,
+		ret = kernel_bind(ksmbd_socket, (struct sockaddr_unsized *)&sin6,
 				  sizeof(sin6));
 	if (ret) {
 		pr_err("Failed to bind socket: %d\n", ret);

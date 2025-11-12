@@ -18,10 +18,12 @@ TEST_PROGS := \
 	netcons_fragmented_msg.sh \
 	netcons_overflow.sh \
 	netcons_sysdata.sh \
+	netcons_torture.sh \
 	netpoll_basic.py \
 	ping.py \
 	psp.py \
 	queues.py \
+	ring_reconfig.py \
 	shaper.py \
 	stats.py \
 	xdp.py \

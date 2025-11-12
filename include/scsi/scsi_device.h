@@ -179,6 +179,12 @@ struct scsi_device {
 	unsigned manage_shutdown:1;
 
 	/*
+	 * If true, let the high-level device driver (sd) manage the device
+	 * power state for system restart (reboot) operations.
+	 */
+	unsigned manage_restart:1;
+
+	/*
 	 * If set and if the device is runtime suspended, ask the high-level
 	 * device driver (sd) to force a runtime resume of the device.
 	 */
@@ -313,8 +319,8 @@ sdev_prefix_printk(const char *, const struct scsi_device *, const char *,
 #define sdev_printk(l, sdev, fmt, a...)				\
 	sdev_prefix_printk(l, sdev, NULL, fmt, ##a)
 
-__printf(3, 4) void
-scmd_printk(const char *, const struct scsi_cmnd *, const char *, ...);
+__printf(3, 4) void scmd_printk(const char *, struct scsi_cmnd *, const char *,
+				...);
 
 #define scmd_dbg(scmd, fmt, a...)					\
 	do {								\

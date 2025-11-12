@@ -1062,9 +1062,10 @@ static ssize_t svc_tcp_read_marker(struct svc_sock *svsk,
 	return svc_sock_reclen(svsk);
 
 err_too_large:
-	net_notice_ratelimited("svc: %s %s RPC fragment too large: %d\n",
-			       __func__, svsk->sk_xprt.xpt_server->sv_name,
-			       svc_sock_reclen(svsk));
+	net_notice_ratelimited("svc: %s oversized RPC fragment (%u octets) from %pISpc\n",
+			       svsk->sk_xprt.xpt_server->sv_name,
+			       svc_sock_reclen(svsk),
+			       (struct sockaddr *)&svsk->sk_xprt.xpt_remote);
 	svc_xprt_deferred_close(&svsk->sk_xprt);
 err_short:
 	return -EAGAIN;
@@ -1557,7 +1558,7 @@ static struct svc_xprt *svc_create_socket(struct svc_serv *serv,
 		ip6_sock_set_v6only(sock->sk);
 	if (type == SOCK_STREAM)
 		sock->sk->sk_reuse = SK_CAN_REUSE; /* allow address reuse */
-	error = kernel_bind(sock, sin, len);
+	error = kernel_bind(sock, (struct sockaddr_unsized *)sin, len);
 	if (error < 0)
 		goto bummer;
 
