@@ -21,6 +21,7 @@
 #include <linux/buffer_head.h>
 #include <linux/kmemleak.h>
 #include <linux/kfence.h>
+#include <linux/liveupdate.h>
 #include <linux/page_ext.h>
 #include <linux/pti.h>
 #include <linux/pgtable.h>
@@ -1909,7 +1910,7 @@ void __init free_area_init(unsigned long *max_zone_pfn)
 		free_area_init_node(nid);
 
 		/*
-		 * No sysfs hierarchy will be created via register_one_node()
+		 * No sysfs hierarchy will be created via register_node()
 		 *for memory-less node because here it's not marked as N_MEMORY
 		 *and won't be set online later. The benefit is userspace
 		 *program won't be confused by sysfs files/directories of
@@ -2702,6 +2703,9 @@ void __init mm_core_init(void)
 	 * as close as possible to buddy initialization
 	 */
 	kho_memory_init();
+
+	/* Live Update should follow right after KHO is initialized */
+	liveupdate_init();
 
 	memblock_free_all();
 	mem_init();
