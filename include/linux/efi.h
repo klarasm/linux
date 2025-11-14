@@ -772,7 +772,7 @@ extern unsigned long efi_mem_attr_table;
  */
 typedef int (*efi_memattr_perm_setter)(struct mm_struct *, efi_memory_desc_t *, bool);
 
-extern int efi_memattr_init(void);
+extern void efi_memattr_init(void);
 extern int efi_memattr_apply_permissions(struct mm_struct *mm,
 					 efi_memattr_perm_setter fn);
 
@@ -1125,6 +1125,8 @@ static inline bool efi_runtime_disabled(void) { return true; }
 
 extern void efi_call_virt_check_flags(unsigned long flags, const void *caller);
 extern unsigned long efi_call_virt_save_flags(void);
+
+void efi_runtime_assert_lock_held(void);
 
 enum efi_secureboot_mode {
 	efi_secureboot_mode_unset,

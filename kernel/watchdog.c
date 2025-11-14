@@ -196,6 +196,15 @@ void watchdog_hardlockup_check(unsigned int cpu, struct pt_regs *regs)
 #ifdef CONFIG_SYSFS
 		++hardlockup_count;
 #endif
+		/*
+		 * A poorly behaving BPF scheduler can trigger hard lockup by
+		 * e.g. putting numerous affinitized tasks in a single queue and
+		 * directing all CPUs at it. The following call can return true
+		 * only once when sched_ext is enabled and will immediately
+		 * abort the BPF scheduler and print out a warning message.
+		 */
+		if (scx_hardlockup())
+			return;
 
 		/* Only print hardlockups once. */
 		if (per_cpu(watchdog_hardlockup_warned, cpu))
@@ -1231,14 +1240,11 @@ static const struct ctl_table watchdog_sysctls[] = {
 	},
 #endif /* CONFIG_SMP */
 #endif
-};
-
-static struct ctl_table watchdog_hardlockup_sysctl[] = {
 	{
 		.procname       = "nmi_watchdog",
 		.data		= &watchdog_hardlockup_user_enabled,
 		.maxlen		= sizeof(int),
-		.mode		= 0444,
+		.mode		= 0644,
 		.proc_handler   = proc_nmi_watchdog,
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_ONE,
@@ -1248,10 +1254,6 @@ static struct ctl_table watchdog_hardlockup_sysctl[] = {
 static void __init watchdog_sysctl_init(void)
 {
 	register_sysctl_init("kernel", watchdog_sysctls);
-
-	if (watchdog_hardlockup_available)
-		watchdog_hardlockup_sysctl[0].mode = 0644;
-	register_sysctl_init("kernel", watchdog_hardlockup_sysctl);
 }
 
 #else

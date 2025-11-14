@@ -659,13 +659,7 @@ void *trace_event_buffer_reserve(struct trace_event_buffer *fbuffer,
 	    trace_event_ignore_this_pid(trace_file))
 		return NULL;
 
-	/*
-	 * If CONFIG_PREEMPTION is enabled, then the tracepoint itself disables
-	 * preemption (adding one to the preempt_count). Since we are
-	 * interested in the preempt_count at the time the tracepoint was
-	 * hit, we need to subtract one to offset the increment.
-	 */
-	fbuffer->trace_ctx = tracing_gen_ctx_dec();
+	fbuffer->trace_ctx = tracing_gen_ctx_dec_cond();
 	fbuffer->trace_file = trace_file;
 
 	fbuffer->event =
@@ -845,13 +839,13 @@ static int __ftrace_event_enable_disable(struct trace_event_file *file,
 			if (soft_disable)
 				set_bit(EVENT_FILE_FL_SOFT_DISABLED_BIT, &file->flags);
 
-			if (tr->trace_flags & TRACE_ITER_RECORD_CMD) {
+			if (tr->trace_flags & TRACE_ITER(RECORD_CMD)) {
 				cmd = true;
 				tracing_start_cmdline_record();
 				set_bit(EVENT_FILE_FL_RECORDED_CMD_BIT, &file->flags);
 			}
 
-			if (tr->trace_flags & TRACE_ITER_RECORD_TGID) {
+			if (tr->trace_flags & TRACE_ITER(RECORD_TGID)) {
 				tgid = true;
 				tracing_start_tgid_record();
 				set_bit(EVENT_FILE_FL_RECORDED_TGID_BIT, &file->flags);
