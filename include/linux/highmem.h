@@ -249,10 +249,11 @@ static inline void clear_highpage_kasan_tagged(struct page *page)
 	kunmap_local(kaddr);
 }
 
-#ifndef __HAVE_ARCH_TAG_CLEAR_HIGHPAGE
+#ifndef CONFIG_ARCH_HAS_MEMORY_TAGS
 
 static inline void tag_clear_highpage(struct page *page)
 {
+	BUILD_BUG();
 }
 
 #endif
