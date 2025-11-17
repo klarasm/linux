@@ -51,38 +51,46 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/anon_inodes.h>
+#include <linux/cleanup.h>
+#include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/io.h>
+#include <linux/kexec_handover.h>
 #include <linux/libfdt.h>
+#include <linux/list.h>
 #include <linux/liveupdate.h>
 #include <linux/liveupdate/abi/luo.h>
+#include <linux/mutex.h>
+#include <linux/slab.h>
+#include <linux/unaligned.h>
 #include <uapi/linux/liveupdate.h>
 #include "luo_internal.h"
 
 /* 16 4K pages, give space for 819 sessions */
 #define LUO_SESSION_PGCNT	16ul
 #define LUO_SESSION_MAX		(((LUO_SESSION_PGCNT << PAGE_SHIFT) -	\
-		sizeof(struct luo_session_head_ser)) /			\
+		sizeof(struct luo_session_header_ser)) /		\
 		sizeof(struct luo_session_ser))
 
 /**
- * struct luo_session_head - Head struct for managing LUO sessions.
- * @count:    The number of sessions currently tracked in the @list.
- * @list:     The head of the linked list of `struct luo_session` instances.
- * @rwsem:    A read-write semaphore providing synchronized access to the
- *            session list and other fields in this structure.
- * @head_ser: The head data of serialization array.
- * @ser:      The serialized session data (an array of
- *            `struct luo_session_ser`).
- * @active:   Set to true when first initialized. If previous kernel did not
- *            send session data, active stays false for incoming.
+ * struct luo_session_header - Header struct for managing LUO sessions.
+ * @count:      The number of sessions currently tracked in the @list.
+ * @list:       The head of the linked list of `struct luo_session` instances.
+ * @rwsem:      A read-write semaphore providing synchronized access to the
+ *              session list and other fields in this structure.
+ * @header_ser: The header data of serialization array.
+ * @ser:        The serialized session data (an array of
+ *              `struct luo_session_ser`).
+ * @active:     Set to true when first initialized. If previous kernel did not
+ *              send session data, active stays false for incoming.
  */
-struct luo_session_head {
+struct luo_session_header {
 	long count;
 	struct list_head list;
 	struct rw_semaphore rwsem;
-	struct luo_session_head_ser *head_ser;
+	struct luo_session_header_ser *header_ser;
 	struct luo_session_ser *ser;
 	bool active;
 };
@@ -95,8 +103,8 @@ struct luo_session_head {
  *                has been opened.
  */
 struct luo_session_global {
-	struct luo_session_head incoming;
-	struct luo_session_head outgoing;
+	struct luo_session_header incoming;
+	struct luo_session_header outgoing;
 	bool deserialized;
 };
 
@@ -107,13 +115,13 @@ static struct luo_session *luo_session_alloc(const char *name)
 	struct luo_session *session = kzalloc(sizeof(*session), GFP_KERNEL);
 
 	if (!session)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	strscpy(session->name, name, sizeof(session->name));
 	INIT_LIST_HEAD(&session->files_list);
-	session->count = 0;
 	INIT_LIST_HEAD(&session->list);
 	mutex_init(&session->mutex);
+	session->count = 0;
 
 	return session;
 }
@@ -126,7 +134,7 @@ static void luo_session_free(struct luo_session *session)
 	kfree(session);
 }
 
-static int luo_session_insert(struct luo_session_head *sh,
+static int luo_session_insert(struct luo_session_header *sh,
 			      struct luo_session *session)
 {
 	struct luo_session *it;
@@ -158,7 +166,7 @@ static int luo_session_insert(struct luo_session_head *sh,
 	return 0;
 }
 
-static void luo_session_remove(struct luo_session_head *sh,
+static void luo_session_remove(struct luo_session_header *sh,
 			       struct luo_session *session)
 {
 	guard(rwsem_write)(&sh->rwsem);
@@ -187,7 +195,7 @@ static int luo_session_freeze_one(struct luo_session *session)
 static int luo_session_release(struct inode *inodep, struct file *filep)
 {
 	struct luo_session *session = filep->private_data;
-	struct luo_session_head *sh;
+	struct luo_session_header *sh;
 	int err = 0;
 
 	/* If retrieved is set, it means this session is from incoming list */
@@ -246,19 +254,23 @@ static int luo_session_retrieve_fd(struct luo_session *session,
 
 	guard(mutex)(&session->mutex);
 	err = luo_retrieve_file(session, argp->token, &file);
-	if (err < 0) {
-		put_unused_fd(argp->fd);
-
-		return err;
-	}
+	if (err < 0)
+		goto  err_put_fd;
 
 	err = luo_ucmd_respond(ucmd, sizeof(*argp));
 	if (err)
-		return err;
+		goto err_put_file;
 
 	fd_install(argp->fd, file);
 
 	return 0;
+
+err_put_file:
+	fput(file);
+err_put_fd:
+	put_unused_fd(argp->fd);
+
+	return err;
 }
 
 static int luo_session_finish(struct luo_session *session,
@@ -370,27 +382,30 @@ int luo_session_create(const char *name, struct file **filep)
 	int err;
 
 	session = luo_session_alloc(name);
-	if (!session)
-		return -ENOMEM;
+	if (IS_ERR(session))
+		return PTR_ERR(session);
 
 	err = luo_session_insert(&luo_session_global.outgoing, session);
-	if (err) {
-		luo_session_free(session);
-		return err;
-	}
+	if (err)
+		goto err_free;
 
 	err = luo_session_getfile(session, filep);
-	if (err) {
-		luo_session_remove(&luo_session_global.outgoing, session);
-		luo_session_free(session);
-	}
+	if (err)
+		goto err_remove;
+
+	return 0;
+
+err_remove:
+	luo_session_remove(&luo_session_global.outgoing, session);
+err_free:
+	luo_session_free(session);
 
 	return err;
 }
 
 int luo_session_retrieve(const char *name, struct file **filep)
 {
-	struct luo_session_head *sh = &luo_session_global.incoming;
+	struct luo_session_header *sh = &luo_session_global.incoming;
 	struct luo_session *session = NULL;
 	struct luo_session *it;
 	int err;
@@ -423,45 +438,45 @@ int luo_session_retrieve(const char *name, struct file **filep)
 
 int __init luo_session_setup_outgoing(void *fdt_out)
 {
-	struct luo_session_head_ser *head_ser;
-	u64 head_ser_pa;
+	struct luo_session_header_ser *header_ser;
+	u64 header_ser_pa;
 	int err;
 
-	head_ser = luo_alloc_preserve(LUO_SESSION_PGCNT << PAGE_SHIFT);
-	if (IS_ERR(head_ser))
-		return PTR_ERR(head_ser);
-	head_ser_pa = __pa(head_ser);
+	header_ser = kho_alloc_preserve(LUO_SESSION_PGCNT << PAGE_SHIFT);
+	if (IS_ERR(header_ser))
+		return PTR_ERR(header_ser);
+	header_ser_pa = virt_to_phys(header_ser);
 
 	err = fdt_begin_node(fdt_out, LUO_FDT_SESSION_NODE_NAME);
 	err |= fdt_property_string(fdt_out, "compatible",
 				   LUO_FDT_SESSION_COMPATIBLE);
-	err |= fdt_property(fdt_out, LUO_FDT_SESSION_HEAD, &head_ser_pa,
-			    sizeof(head_ser_pa));
+	err |= fdt_property(fdt_out, LUO_FDT_SESSION_HEADER, &header_ser_pa,
+			    sizeof(header_ser_pa));
 	err |= fdt_end_node(fdt_out);
 
 	if (err)
 		goto err_unpreserve;
 
-	head_ser->pgcnt = LUO_SESSION_PGCNT;
+	header_ser->pgcnt = LUO_SESSION_PGCNT;
 	INIT_LIST_HEAD(&luo_session_global.outgoing.list);
 	init_rwsem(&luo_session_global.outgoing.rwsem);
-	luo_session_global.outgoing.head_ser = head_ser;
-	luo_session_global.outgoing.ser = (void *)(head_ser + 1);
+	luo_session_global.outgoing.header_ser = header_ser;
+	luo_session_global.outgoing.ser = (void *)(header_ser + 1);
 	luo_session_global.outgoing.active = true;
 
 	return 0;
 
 err_unpreserve:
-	luo_free_unpreserve(head_ser, LUO_SESSION_PGCNT << PAGE_SHIFT);
+	kho_unpreserve_free(header_ser);
 	return err;
 }
 
 int __init luo_session_setup_incoming(void *fdt_in)
 {
-	struct luo_session_head_ser *head_ser;
-	int err, head_size, offset;
+	struct luo_session_header_ser *header_ser;
+	int err, header_size, offset;
+	u64 header_ser_pa;
 	const void *ptr;
-	u64 head_ser_pa;
 
 	offset = fdt_subnode_offset(fdt_in, 0, LUO_FDT_SESSION_NODE_NAME);
 	if (offset < 0) {
@@ -473,24 +488,24 @@ int __init luo_session_setup_incoming(void *fdt_in)
 	err = fdt_node_check_compatible(fdt_in, offset,
 					LUO_FDT_SESSION_COMPATIBLE);
 	if (err) {
-		pr_err("Session node incompatibale [%s]\n",
+		pr_err("Session node incompatible [%s]\n",
 		       LUO_FDT_SESSION_COMPATIBLE);
 		return -EINVAL;
 	}
 
-	head_size = 0;
-	ptr = fdt_getprop(fdt_in, offset, LUO_FDT_SESSION_HEAD, &head_size);
-	if (!ptr || head_size != sizeof(u64)) {
-		pr_err("Unable to get session head '%s' [%d]\n",
-		       LUO_FDT_SESSION_HEAD, head_size);
+	header_size = 0;
+	ptr = fdt_getprop(fdt_in, offset, LUO_FDT_SESSION_HEADER, &header_size);
+	if (!ptr || header_size != sizeof(u64)) {
+		pr_err("Unable to get session header '%s' [%d]\n",
+		       LUO_FDT_SESSION_HEADER, header_size);
 		return -EINVAL;
 	}
 
-	memcpy(&head_ser_pa, ptr, sizeof(u64));
-	head_ser = __va(head_ser_pa);
+	header_ser_pa = get_unaligned((u64 *)ptr);
+	header_ser = phys_to_virt(header_ser_pa);
 
-	luo_session_global.incoming.head_ser = head_ser;
-	luo_session_global.incoming.ser = (void *)(head_ser + 1);
+	luo_session_global.incoming.header_ser = header_ser;
+	luo_session_global.incoming.ser = (void *)(header_ser + 1);
 	INIT_LIST_HEAD(&luo_session_global.incoming.list);
 	init_rwsem(&luo_session_global.incoming.rwsem);
 	luo_session_global.incoming.active = true;
@@ -505,7 +520,8 @@ bool luo_session_is_deserialized(void)
 
 int luo_session_deserialize(void)
 {
-	struct luo_session_head *sh = &luo_session_global.incoming;
+	struct luo_session_header *sh = &luo_session_global.incoming;
+	int err;
 
 	if (luo_session_is_deserialized())
 		return 0;
@@ -517,31 +533,33 @@ int luo_session_deserialize(void)
 		return 0;
 	}
 
-	for (int i = 0; i < sh->head_ser->count; i++) {
+	for (int i = 0; i < sh->header_ser->count; i++) {
 		struct luo_session *session;
 
 		session = luo_session_alloc(sh->ser[i].name);
-		if (!session) {
-			pr_warn("Failed to allocate session [%s] during deserialization\n",
-				sh->ser[i].name);
-			return -ENOMEM;
+		if (IS_ERR(session)) {
+			pr_warn("Failed to allocate session [%s] during deserialization %pe\n",
+				sh->ser[i].name, session);
+			return PTR_ERR(session);
 		}
 
-		if (luo_session_insert(sh, session)) {
-			pr_warn("Failed to insert session due to name conflict [%s]\n",
-				session->name);
-			return -EEXIST;
+		err = luo_session_insert(sh, session);
+		if (err) {
+			luo_session_free(session);
+			pr_warn("Failed to insert session [%s] %pe\n",
+				session->name, ERR_PTR(err));
+			return err;
 		}
 
 		session->count = sh->ser[i].count;
-		session->files = __va(sh->ser[i].files);
+		session->files = sh->ser[i].files ? phys_to_virt(sh->ser[i].files) : 0;
 		session->pgcnt = sh->ser[i].pgcnt;
 		scoped_guard(mutex, &session->mutex)
 			luo_file_deserialize(session);
 	}
 
-	luo_free_restore(sh->head_ser, sh->head_ser->pgcnt << PAGE_SHIFT);
-	sh->head_ser = NULL;
+	kho_restore_free(sh->header_ser);
+	sh->header_ser = NULL;
 	sh->ser = NULL;
 
 	return 0;
@@ -549,7 +567,7 @@ int luo_session_deserialize(void)
 
 int luo_session_serialize(void)
 {
-	struct luo_session_head *sh = &luo_session_global.outgoing;
+	struct luo_session_header *sh = &luo_session_global.outgoing;
 	struct luo_session *session;
 	int i = 0;
 	int err;
@@ -563,19 +581,19 @@ int luo_session_serialize(void)
 		strscpy(sh->ser[i].name, session->name,
 			sizeof(sh->ser[i].name));
 		sh->ser[i].count = session->count;
-		sh->ser[i].files = __pa(session->files);
+		sh->ser[i].files = session->files ? virt_to_phys(session->files) : 0;
 		sh->ser[i].pgcnt = session->pgcnt;
 		i++;
 	}
-	sh->head_ser->count = sh->count;
+	sh->header_ser->count = sh->count;
 
 	return 0;
 
 err_undo:
 	list_for_each_entry_continue_reverse(session, &sh->list, list) {
 		luo_session_unfreeze_one(session);
-		memset(&sh->ser[i], 0, sizeof(sh->ser[i]));
 		i--;
+		memset(&sh->ser[i], 0, sizeof(sh->ser[i]));
 	}
 
 	return err;

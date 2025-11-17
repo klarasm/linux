@@ -7,15 +7,28 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME " test: " fmt
 
+#include <linux/cleanup.h>
+#include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/liveupdate.h>
 #include <linux/module.h>
 #include "../../kernel/liveupdate/luo_internal.h"
 
-#define TEST_NFLBS 3
-#define TEST_FLB_MAGIC_BASE 0xFEEDF00DCAFEBEE0ULL
+static const struct liveupdate_flb_ops test_flb_ops;
+#define DEFINE_TEST_FLB(i) {						\
+	.ops = &test_flb_ops,						\
+	.compatible = LIVEUPDATE_TEST_FLB_COMPATIBLE(i),		\
+}
 
-static struct liveupdate_flb test_flbs[TEST_NFLBS];
+/* Number of Test FLBs to register with every file handler */
+#define TEST_NFLBS 3
+static struct liveupdate_flb test_flbs[TEST_NFLBS] = {
+	DEFINE_TEST_FLB(0),
+	DEFINE_TEST_FLB(1),
+	DEFINE_TEST_FLB(2),
+};
+
+#define TEST_FLB_MAGIC_BASE 0xFEEDF00DCAFEBEE0ULL
 
 static int test_flb_preserve(struct liveupdate_flb_op_args *argp)
 {
@@ -32,7 +45,7 @@ static void test_flb_unpreserve(struct liveupdate_flb_op_args *argp)
 	pr_info("%s: unpreserve was triggered\n", argp->flb->compatible);
 }
 
-static void test_flb_retrieve(struct liveupdate_flb_op_args *argp)
+static int test_flb_retrieve(struct liveupdate_flb_op_args *argp)
 {
 	ptrdiff_t index = argp->flb - test_flbs;
 	u64 expected_data = TEST_FLB_MAGIC_BASE + index;
@@ -44,7 +57,10 @@ static void test_flb_retrieve(struct liveupdate_flb_op_args *argp)
 	} else {
 		pr_err("%s: ERROR - incorrect data handle: %llx, expected %llx\n",
 		       argp->flb->compatible, argp->data, expected_data);
+		return -EINVAL;
 	}
+
+	return 0;
 }
 
 static void test_flb_finish(struct liveupdate_flb_op_args *argp)
@@ -52,11 +68,12 @@ static void test_flb_finish(struct liveupdate_flb_op_args *argp)
 	ptrdiff_t index = argp->flb - test_flbs;
 	void *expected_obj = (void *)(TEST_FLB_MAGIC_BASE + index);
 
-	if (argp->obj == expected_obj)
+	if (argp->obj == expected_obj) {
 		pr_info("%s: finish was triggered\n", argp->flb->compatible);
-	else
+	} else {
 		pr_err("%s: ERROR - finish called with invalid object\n",
 		       argp->flb->compatible);
+	}
 }
 
 static const struct liveupdate_flb_ops test_flb_ops = {
@@ -64,23 +81,19 @@ static const struct liveupdate_flb_ops test_flb_ops = {
 	.unpreserve	= test_flb_unpreserve,
 	.retrieve	= test_flb_retrieve,
 	.finish		= test_flb_finish,
+	.owner		= THIS_MODULE,
 };
 
-#define DEFINE_TEST_FLB(i) \
-	{ .ops = &test_flb_ops, .compatible = "test-flb-v" #i }
-
-static struct liveupdate_flb test_flbs[TEST_NFLBS] = {
-	DEFINE_TEST_FLB(0),
-	DEFINE_TEST_FLB(1),
-	DEFINE_TEST_FLB(2),
-};
-
-static int __init liveupdate_test_early_init(void)
+static void liveupdate_test_init(void)
 {
+	static DEFINE_MUTEX(init_lock);
+	static bool initialized;
 	int i;
 
-	if (!liveupdate_enabled())
-		return 0;
+	guard(mutex)(&init_lock);
+
+	if (initialized)
+		return;
 
 	for (i = 0; i < TEST_NFLBS; i++) {
 		struct liveupdate_flb *flb = &test_flbs[i];
@@ -97,14 +110,14 @@ static int __init liveupdate_test_early_init(void)
 			       flb->compatible, ERR_PTR(err));
 		}
 	}
-
-	return 0;
+	initialized = true;
 }
-early_initcall(liveupdate_test_early_init);
 
 void liveupdate_test_register(struct liveupdate_file_handler *h)
 {
 	int err, i;
+
+	liveupdate_test_init();
 
 	for (i = 0; i < TEST_NFLBS; i++) {
 		struct liveupdate_flb *flb = &test_flbs[i];

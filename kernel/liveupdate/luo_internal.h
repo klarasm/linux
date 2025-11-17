@@ -31,10 +31,6 @@ static inline int luo_ucmd_respond(struct luo_ucmd *ucmd,
 	return 0;
 }
 
-void *luo_alloc_preserve(size_t size);
-void luo_free_unpreserve(void *mem, size_t size);
-void luo_free_restore(void *mem, size_t size);
-
 /**
  * struct luo_session - Represents an active or incoming Live Update session.
  * @name:       A unique name for this session, used for identification and
@@ -43,7 +39,7 @@ void luo_free_restore(void *mem, size_t size);
  *              ordered by preservation time.
  * @ser:        Pointer to the serialized data for this session.
  * @count:      A counter tracking the number of files currently stored in the
- *              @files_xa for this session.
+ *              @files_list for this session.
  * @list:       A list_head member used to link this session into a global list
  *              of either outgoing (to be preserved) or incoming (restored from
  *              previous kernel) sessions.
@@ -52,7 +48,7 @@ void luo_free_restore(void *mem, size_t size);
  * @mutex:      Session lock, protects files_list, and count.
  * @files:      The physically contiguous memory block that holds the serialized
  *              state of files.
- * @pgcnt:      The number of pages files occupy.
+ * @pgcnt:      The number of pages @files occupy.
  */
 struct luo_session {
 	char name[LIVEUPDATE_SESSION_NAME_LENGTH];
@@ -93,9 +89,7 @@ void luo_flb_serialize(void);
 #ifdef CONFIG_LIVEUPDATE_TEST
 void liveupdate_test_register(struct liveupdate_file_handler *h);
 #else
-static inline void liveupdate_test_register(struct liveupdate_file_handler *h)
-{
-}
+static inline void liveupdate_test_register(struct liveupdate_file_handler *h) { }
 #endif
 
 #endif /* _LINUX_LUO_INTERNAL_H */

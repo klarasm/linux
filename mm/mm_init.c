@@ -2704,9 +2704,6 @@ void __init mm_core_init(void)
 	 */
 	kho_memory_init();
 
-	/* Live Update should follow right after KHO is initialized */
-	liveupdate_init();
-
 	memblock_free_all();
 	mem_init();
 	kmem_cache_init();

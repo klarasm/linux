@@ -8,16 +8,76 @@
  * Pratyush Yadav <ptyadav@amazon.de>
  */
 
+/**
+ * DOC: Memfd Preservation via LUO
+ *
+ * Overview
+ * ========
+ *
+ * Memory file descriptors (memfd) can be preserved over a kexec using the Live
+ * Update Orchestrator (LUO) file preservation. This allows userspace to
+ * transfer its memory contents to the next kernel after a kexec.
+ *
+ * The preservation is not intended to be transparent. Only select properties of
+ * the file are preserved. All others are reset to default. The preserved
+ * properties are described below.
+ *
+ * .. note::
+ *    The LUO API is not stabilized yet, so the preserved properties of a memfd
+ *    are also not stable and are subject to backwards incompatible changes.
+ *
+ * .. note::
+ *    Currently a memfd backed by Hugetlb is not supported. Memfds created
+ *    with ``MFD_HUGETLB`` will be rejected.
+ *
+ * Preserved Properties
+ * ====================
+ *
+ * The following properties of the memfd are preserved across kexec:
+ *
+ * File Contents
+ *   All data stored in the file is preserved.
+ *
+ * File Size
+ *   The size of the file is preserved. Holes in the file are filled by
+ *   allocating pages for them during preservation.
+ *
+ * File Position
+ *   The current file position is preserved, allowing applications to continue
+ *   reading/writing from their last position.
+ *
+ * File Status Flags
+ *   memfds are always opened with ``O_RDWR`` and ``O_LARGEFILE``. This property
+ *   is maintained.
+ *
+ * Non-Preserved Properties
+ * ========================
+ *
+ * All properties which are not preserved must be assumed to be reset to
+ * default. This section describes some of those properties which may be more of
+ * note.
+ *
+ * ``FD_CLOEXEC`` flag
+ *   A memfd can be created with the ``MFD_CLOEXEC`` flag that sets the
+ *   ``FD_CLOEXEC`` on the file. This flag is not preserved and must be set
+ *   again after restore via ``fcntl()``.
+ *
+ * Seals
+ *   File seals are not preserved. The file is unsealed on restore and if
+ *   needed, must be sealed again via ``fcntl()``.
+ */
+
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <linux/bits.h>
+#include <linux/err.h>
 #include <linux/file.h>
 #include <linux/io.h>
+#include <linux/kexec_handover.h>
 #include <linux/libfdt.h>
 #include <linux/liveupdate.h>
 #include <linux/liveupdate/abi/memfd.h>
-#include <linux/kexec_handover.h>
 #include <linux/shmem_fs.h>
-#include <linux/bits.h>
 #include <linux/vmalloc.h>
 #include "internal.h"
 
@@ -598,12 +658,14 @@ static struct liveupdate_file_handler memfd_luo_handler = {
 
 static int __init memfd_luo_init(void)
 {
-	int err;
+	int err = liveupdate_register_file_handler(&memfd_luo_handler);
 
-	err = liveupdate_register_file_handler(&memfd_luo_handler);
-	if (err)
-		pr_err("Could not register luo filesystem handler: %d\n", err);
+	if (err && err != -EOPNOTSUPP) {
+		pr_err("Could not register luo filesystem handler: %pe\n", ERR_PTR(err));
 
-	return err;
+		return err;
+	}
+
+	return 0;
 }
 late_initcall(memfd_luo_init);

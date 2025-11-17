@@ -43,55 +43,60 @@ static int luo_ioctl_create_session(struct luo_ucmd *ucmd)
 {
 	struct liveupdate_ioctl_create_session *argp = ucmd->cmd;
 	struct file *file;
-	int ret;
+	int err;
 
 	argp->fd = get_unused_fd_flags(O_CLOEXEC);
 	if (argp->fd < 0)
 		return argp->fd;
 
-	ret = luo_session_create(argp->name, &file);
-	if (ret)
-		return ret;
+	err = luo_session_create(argp->name, &file);
+	if (err)
+		goto err_put_fd;
 
-	ret = luo_ucmd_respond(ucmd, sizeof(*argp));
-	if (ret) {
-		fput(file);
-		put_unused_fd(argp->fd);
-		return ret;
-	}
+	err = luo_ucmd_respond(ucmd, sizeof(*argp));
+	if (err)
+		goto err_put_file;
 
 	fd_install(argp->fd, file);
 
 	return 0;
+
+err_put_file:
+	fput(file);
+err_put_fd:
+	put_unused_fd(argp->fd);
+
+	return err;
 }
 
 static int luo_ioctl_retrieve_session(struct luo_ucmd *ucmd)
 {
 	struct liveupdate_ioctl_retrieve_session *argp = ucmd->cmd;
 	struct file *file;
-	int ret;
+	int err;
 
 	argp->fd = get_unused_fd_flags(O_CLOEXEC);
 	if (argp->fd < 0)
 		return argp->fd;
 
-	ret = luo_session_retrieve(argp->name, &file);
-	if (ret < 0) {
-		put_unused_fd(argp->fd);
+	err = luo_session_retrieve(argp->name, &file);
+	if (err < 0)
+		goto err_put_fd;
 
-		return ret;
-	}
-
-	ret = luo_ucmd_respond(ucmd, sizeof(*argp));
-	if (ret) {
-		fput(file);
-		put_unused_fd(argp->fd);
-		return ret;
-	}
+	err = luo_ucmd_respond(ucmd, sizeof(*argp));
+	if (err)
+		goto err_put_file;
 
 	fd_install(argp->fd, file);
 
 	return 0;
+
+err_put_file:
+	fput(file);
+err_put_fd:
+	put_unused_fd(argp->fd);
+
+	return err;
 }
 
 static int luo_open(struct inode *inodep, struct file *filep)
@@ -153,7 +158,7 @@ static long luo_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 	struct luo_ucmd ucmd = {};
 	union ucmd_buffer buf;
 	unsigned int nr;
-	int ret;
+	int err;
 
 	nr = _IOC_NR(cmd);
 	if (nr < LIVEUPDATE_CMD_BASE ||
@@ -162,9 +167,9 @@ static long luo_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 	}
 
 	ucmd.ubuffer = (void __user *)arg;
-	ret = get_user(ucmd.user_size, (u32 __user *)ucmd.ubuffer);
-	if (ret)
-		return ret;
+	err = get_user(ucmd.user_size, (u32 __user *)ucmd.ubuffer);
+	if (err)
+		return err;
 
 	op = &luo_ioctl_ops[nr - LIVEUPDATE_CMD_BASE];
 	if (op->ioctl_num != cmd)
@@ -173,10 +178,10 @@ static long luo_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 		return -EINVAL;
 
 	ucmd.cmd = &buf;
-	ret = copy_struct_from_user(ucmd.cmd, op->size, ucmd.ubuffer,
+	err = copy_struct_from_user(ucmd.cmd, op->size, ucmd.ubuffer,
 				    ucmd.user_size);
-	if (ret)
-		return ret;
+	if (err)
+		return err;
 
 	return op->execute(&ucmd);
 }

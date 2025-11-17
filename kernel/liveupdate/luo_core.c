@@ -42,6 +42,7 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <linux/io.h>
 #include <linux/kexec_handover.h>
 #include <linux/kobject.h>
 #include <linux/libfdt.h>
@@ -50,9 +51,10 @@
 #include <linux/mm.h>
 #include <linux/sizes.h>
 #include <linux/string.h>
+#include <linux/unaligned.h>
 
-#include "luo_internal.h"
 #include "kexec_handover_internal.h"
+#include "luo_internal.h"
 
 static struct {
 	bool enabled;
@@ -92,7 +94,7 @@ static int __init luo_early_startup(void)
 		return 0;
 	}
 
-	luo_global.fdt_in = __va(fdt_phys);
+	luo_global.fdt_in = phys_to_virt(fdt_phys);
 	err = fdt_node_check_compatible(luo_global.fdt_in, 0,
 					LUO_FDT_COMPATIBLE);
 	if (err) {
@@ -111,8 +113,8 @@ static int __init luo_early_startup(void)
 
 		return -EINVAL;
 	}
-	memcpy(&luo_global.liveupdate_num, ptr,
-	       sizeof(luo_global.liveupdate_num));
+
+	luo_global.liveupdate_num = get_unaligned((u64 *)ptr);
 	pr_info("Retrieved live update data, liveupdate number: %lld\n",
 		luo_global.liveupdate_num);
 
@@ -125,7 +127,7 @@ static int __init luo_early_startup(void)
 	return err;
 }
 
-void __init liveupdate_init(void)
+static int __init liveupdate_early_init(void)
 {
 	int err;
 
@@ -135,16 +137,19 @@ void __init liveupdate_init(void)
 		       ERR_PTR(err));
 		luo_global.enabled = false;
 	}
-}
 
-/* Called during boot to create LUO fdt tree */
+	return err;
+}
+early_initcall(liveupdate_early_init);
+
+/* Called during boot to create outgoing LUO fdt tree */
 static int __init luo_fdt_setup(void)
 {
 	const u64 ln = luo_global.liveupdate_num + 1;
 	void *fdt_out;
 	int err;
 
-	fdt_out = luo_alloc_preserve(LUO_FDT_SIZE);
+	fdt_out = kho_alloc_preserve(LUO_FDT_SIZE);
 	if (IS_ERR(fdt_out)) {
 		pr_err("failed to allocate/preserve FDT memory\n");
 		return PTR_ERR(fdt_out);
@@ -170,12 +175,16 @@ static int __init luo_fdt_setup(void)
 	return 0;
 
 exit_free:
-	luo_free_unpreserve(fdt_out, LUO_FDT_SIZE);
+	kho_unpreserve_free(fdt_out);
 	pr_err("failed to prepare LUO FDT: %d\n", err);
 
 	return err;
 }
 
+/*
+ * late initcall because it initializes the outgoing tree that is needed only
+ * once userspace starts using /dev/liveupdate.
+ */
 static int __init luo_late_startup(void)
 {
 	int err;
@@ -240,102 +249,4 @@ int liveupdate_reboot(void)
 bool liveupdate_enabled(void)
 {
 	return luo_global.enabled;
-}
-
-/**
- * luo_alloc_preserve - Allocate, zero, and preserve memory.
- * @size: The number of bytes to allocate.
- *
- * Allocates a physically contiguous block of zeroed pages that is large
- * enough to hold @size bytes. The allocated memory is then registered with
- * KHO for preservation across a kexec.
- *
- * Note: The actual allocated size will be rounded up to the nearest
- * power-of-two page boundary.
- *
- * @return A virtual pointer to the allocated and preserved memory on success,
- * or an ERR_PTR() encoded error on failure.
- */
-void *luo_alloc_preserve(size_t size)
-{
-	struct folio *folio;
-	int order, ret;
-
-	if (!size)
-		return ERR_PTR(-EINVAL);
-
-	order = get_order(size);
-	if (order > MAX_PAGE_ORDER)
-		return ERR_PTR(-E2BIG);
-
-	folio = folio_alloc(GFP_KERNEL | __GFP_ZERO, order);
-	if (!folio)
-		return ERR_PTR(-ENOMEM);
-
-	ret = kho_preserve_folio(folio);
-	if (ret) {
-		folio_put(folio);
-		return ERR_PTR(ret);
-	}
-
-	return folio_address(folio);
-}
-
-/**
- * luo_free_unpreserve - Unpreserve and free memory.
- * @mem:  Pointer to the memory allocated by luo_alloc_preserve().
- * @size: The original size requested during allocation. This is used to
- *        recalculate the correct order for freeing the pages.
- *
- * Unregisters the memory from KHO preservation and frees the underlying
- * pages back to the system. This function should be called to clean up
- * memory allocated with luo_alloc_preserve().
- */
-void luo_free_unpreserve(void *mem, size_t size)
-{
-	struct folio *folio;
-
-	unsigned int order;
-
-	if (!mem || !size)
-		return;
-
-	order = get_order(size);
-	if (WARN_ON_ONCE(order > MAX_PAGE_ORDER))
-		return;
-
-	folio = virt_to_folio(mem);
-	kho_unpreserve_folio(folio);
-	folio_put(folio);
-}
-
-/**
- * luo_free_restore - Restore and free memory after kexec.
- * @mem:  Pointer to the memory (in the new kernel's address space)
- * that was allocated by the old kernel.
- * @size: The original size requested during allocation. This is used to
- * recalculate the correct order for freeing the pages.
- *
- * This function is intended to be called in the new kernel (post-kexec)
- * to take ownership of and free a memory region that was preserved by the
- * old kernel using luo_alloc_preserve().
- *
- * It first restores the pages from KHO (using their physical address)
- * and then frees the pages back to the new kernel's page allocator.
- */
-void luo_free_restore(void *mem, size_t size)
-{
-	struct folio *folio;
-	unsigned int order;
-
-	if (!mem || !size)
-		return;
-
-	order = get_order(size);
-	if (WARN_ON_ONCE(order > MAX_PAGE_ORDER))
-		return;
-
-	folio = kho_restore_folio(__pa(mem));
-	if (!WARN_ON(!folio))
-		free_pages((unsigned long)mem, order);
 }

@@ -44,7 +44,7 @@
 #define LIVEUPDATE_IOCTL_TYPE		0xBA
 
 /* The maximum length of session name including null termination */
-#define LIVEUPDATE_SESSION_NAME_LENGTH 56
+#define LIVEUPDATE_SESSION_NAME_LENGTH 64
 
 /* The /dev/liveupdate ioctl commands */
 enum {
@@ -112,7 +112,7 @@ struct liveupdate_ioctl_create_session {
 struct liveupdate_ioctl_retrieve_session {
 	__u32		size;
 	__s32		fd;
-	__u8		name[64];
+	__u8		name[LIVEUPDATE_SESSION_NAME_LENGTH];
 };
 
 #define LIVEUPDATE_IOCTL_RETRIEVE_SESSION \
@@ -126,8 +126,7 @@ struct liveupdate_ioctl_retrieve_session {
  * @fd:    Input; The user-space file descriptor to be preserved.
  * @token: Input; An opaque, unique token for preserved resource.
  *
- * Holds parameters for preserving Validate and initiate preservation for a file
- * descriptor.
+ * Holds parameters for preserving a file descriptor.
  *
  * User sets the @fd field identifying the file descriptor to preserve
  * (e.g., memfd, kvm, iommufd, VFIO). The kernel validates if this FD type
@@ -208,7 +207,7 @@ struct liveupdate_session_retrieve_fd {
  */
 struct liveupdate_session_finish {
 	__u32		size;
-	__u8		reserved[2];
+	__u32		reserved;
 };
 
 #define LIVEUPDATE_SESSION_FINISH					\

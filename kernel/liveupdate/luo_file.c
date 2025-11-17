@@ -96,13 +96,13 @@
 
 #include <linux/cleanup.h>
 #include <linux/err.h>
+#include <linux/errno.h>
 #include <linux/file.h>
+#include <linux/fs.h>
 #include <linux/kexec_handover.h>
 #include <linux/liveupdate.h>
 #include <linux/liveupdate/abi/luo.h>
 #include <linux/module.h>
-#include <linux/rwsem.h>
-#include <linux/fs.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/string.h>
@@ -128,7 +128,7 @@ static LIST_HEAD(luo_file_handler_list);
  *                 and update its serialized state across phases.
  * @private_data:  Pointer to the private data for the file used to hold runtime
  *                 state that is not preserved. Set by the handler's .preserve()
- *                 callback, and must be freed in the handlers's .unpreserve()
+ *                 callback, and must be freed in the handler's .unpreserve()
  *                 callback.
  * @retrieved:     A flag indicating whether a user/kernel in the new kernel has
  *                 successfully called retrieve() on this file. This prevents
@@ -174,7 +174,7 @@ static int luo_session_alloc_files_mem(struct luo_session *session)
 	WARN_ON_ONCE(session->count);
 
 	size = LUO_FILE_PGCNT << PAGE_SHIFT;
-	mem = luo_alloc_preserve(size);
+	mem = kho_alloc_preserve(size);
 	if (IS_ERR(mem))
 		return PTR_ERR(mem);
 
@@ -193,7 +193,7 @@ static void luo_session_free_files_mem(struct luo_session *session)
 	if (!session->files)
 		return;
 
-	luo_free_unpreserve(session->files, session->pgcnt << PAGE_SHIFT);
+	kho_unpreserve_free(session->files);
 	session->files = NULL;
 	session->pgcnt = 0;
 }
@@ -255,7 +255,7 @@ int luo_preserve_file(struct luo_session *session, u64 token, int fd)
 	struct liveupdate_file_handler *fh;
 	struct luo_file *luo_file;
 	struct file *file;
-	int err = -ENOENT;
+	int err;
 
 	lockdep_assert_held(&session->mutex);
 
@@ -275,6 +275,7 @@ int luo_preserve_file(struct luo_session *session, u64 token, int fd)
 		goto exit_err;
 	}
 
+	err = -ENOENT;
 	list_for_each_entry(fh, &luo_file_handler_list, list) {
 		if (fh->ops->can_preserve(fh, file)) {
 			err = 0;
@@ -707,7 +708,7 @@ int luo_file_finish(struct luo_session *session)
 	}
 
 	if (session->files) {
-		luo_free_restore(session->files, session->pgcnt << PAGE_SHIFT);
+		kho_restore_free(session->files);
 		session->files = NULL;
 		session->pgcnt = 0;
 	}
@@ -801,6 +802,9 @@ int liveupdate_register_file_handler(struct liveupdate_file_handler *fh)
 	static DEFINE_MUTEX(register_file_handler_lock);
 	struct liveupdate_file_handler *fh_iter;
 
+	if (!liveupdate_enabled())
+		return -EOPNOTSUPP;
+
 	/*
 	 * Once sessions have been deserialized, file handlers cannot be
 	 * registered, it is too late.
@@ -883,8 +887,8 @@ int liveupdate_get_token_outgoing(struct liveupdate_session *s,
  * The operation is idempotent; subsequent calls for the same token will return
  * a pointer to the same 'struct file' object.
  *
- * The caller receives a pointer to the file but does not receive a new
- * reference. The file's lifetime is managed by LUO and any userspace file
+ * The caller receives a pointer to the file with a reference incremented. The
+ * file's lifetime is managed by LUO and any userspace file
  * descriptors. If the caller needs to hold a reference to the file beyond the
  * immediate scope, it must call get_file() itself.
  *

@@ -31,7 +31,7 @@ struct file;
  *                    this field.
  * @private_data:     Private data for the file used to hold runtime state that
  *                    is not preserved. Set by the handler's .preserve()
- *                    callback, and must be freed in the handlers's
+ *                    callback, and must be freed in the handler's
  *                    .unpreserve() callback.
  *
  * This structure bundles all parameters for the file operation callbacks.
@@ -136,6 +136,7 @@ struct liveupdate_flb_op_args {
  * @finish:          Called in the new kernel when the last file using this FLB
  *                   is finished. Receives the live object via 'argp->obj' for
  *                   cleanup.
+ * @owner:           Module reference
  *
  * Operations that manage global shared data with file bound lifecycle,
  * triggered by the first file that uses it and concluded by the last file that
@@ -144,8 +145,9 @@ struct liveupdate_flb_op_args {
 struct liveupdate_flb_ops {
 	int (*preserve)(struct liveupdate_flb_op_args *argp);
 	void (*unpreserve)(struct liveupdate_flb_op_args *argp);
-	void (*retrieve)(struct liveupdate_flb_op_args *argp);
+	int (*retrieve)(struct liveupdate_flb_op_args *argp);
 	void (*finish)(struct liveupdate_flb_op_args *argp);
+	struct module *owner;
 };
 
 /**
@@ -173,8 +175,6 @@ struct liveupdate_flb {
 };
 
 #ifdef CONFIG_LIVEUPDATE
-
-void __init liveupdate_init(void);
 
 /* Return true if live update orchestrator is enabled */
 bool liveupdate_enabled(void);
@@ -205,10 +205,6 @@ void liveupdate_flb_outgoing_unlock(struct liveupdate_flb *flb, void *obj);
 
 #else /* CONFIG_LIVEUPDATE */
 
-static inline void liveupdate_init(void)
-{
-}
-
 static inline bool liveupdate_enabled(void)
 {
 	return false;
@@ -221,7 +217,7 @@ static inline int liveupdate_reboot(void)
 
 static inline int liveupdate_register_file_handler(struct liveupdate_file_handler *h)
 {
-	return 0;
+	return -EOPNOTSUPP;
 }
 
 static inline int liveupdate_get_file_incoming(struct liveupdate_session *s,
@@ -238,7 +234,7 @@ static inline int liveupdate_get_token_outgoing(struct liveupdate_session *s,
 
 static inline int liveupdate_init_flb(struct liveupdate_flb *flb)
 {
-	return 0;
+	return -EOPNOTSUPP;
 }
 
 static inline int liveupdate_register_flb(struct liveupdate_file_handler *h,
@@ -254,9 +250,7 @@ static inline int liveupdate_flb_incoming_locked(struct liveupdate_flb *flb,
 }
 
 static inline void liveupdate_flb_incoming_unlock(struct liveupdate_flb *flb,
-						  void *obj)
-{
-}
+						  void *obj) { }
 
 static inline int liveupdate_flb_outgoing_locked(struct liveupdate_flb *flb,
 						 void **objp)
@@ -265,9 +259,7 @@ static inline int liveupdate_flb_outgoing_locked(struct liveupdate_flb *flb,
 }
 
 static inline void liveupdate_flb_outgoing_unlock(struct liveupdate_flb *flb,
-						  void *obj)
-{
-}
+						  void *obj) { }
 
 #endif /* CONFIG_LIVEUPDATE */
 #endif /* _LINUX_LIVEUPDATE_H */

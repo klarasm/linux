@@ -40,26 +40,32 @@
 
 #include <linux/cleanup.h>
 #include <linux/err.h>
+#include <linux/errno.h>
+#include <linux/io.h>
+#include <linux/kexec_handover.h>
 #include <linux/libfdt.h>
+#include <linux/list.h>
 #include <linux/liveupdate.h>
 #include <linux/liveupdate/abi/luo.h>
-#include <linux/rwsem.h>
+#include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/slab.h>
+#include <linux/unaligned.h>
 #include "luo_internal.h"
 
 #define LUO_FLB_PGCNT		1ul
 #define LUO_FLB_MAX		(((LUO_FLB_PGCNT << PAGE_SHIFT) -	\
-		sizeof(struct luo_flb_head_ser)) / sizeof(struct luo_flb_ser))
+		sizeof(struct luo_flb_header_ser)) / sizeof(struct luo_flb_ser))
 
-struct luo_flb_head {
-	struct luo_flb_head_ser *head_ser;
+struct luo_flb_header {
+	struct luo_flb_header_ser *header_ser;
 	struct luo_flb_ser *ser;
 	bool active;
 };
 
 struct luo_flb_global {
-	struct luo_flb_head incoming;
-	struct luo_flb_head outgoing;
+	struct luo_flb_header incoming;
+	struct luo_flb_header outgoing;
 	struct list_head list;
 	long count;
 };
@@ -155,10 +161,11 @@ static void luo_flb_file_unpreserve_one(struct liveupdate_flb *flb)
 
 static int luo_flb_retrieve_one(struct liveupdate_flb *flb)
 {
-	struct luo_flb_head *fh = &luo_flb_global.incoming;
+	struct luo_flb_header *fh = &luo_flb_global.incoming;
 	struct luo_flb_internal *internal = flb->internal;
 	struct liveupdate_flb_op_args args = {0};
 	bool found = false;
+	int err;
 
 	guard(mutex)(&internal->incoming.lock);
 
@@ -168,7 +175,7 @@ static int luo_flb_retrieve_one(struct liveupdate_flb *flb)
 	if (!fh->active)
 		return -ENODATA;
 
-	for (int i = 0; i < fh->head_ser->count; i++) {
+	for (int i = 0; i < fh->header_ser->count; i++) {
 		if (!strcmp(fh->ser[i].name, flb->compatible)) {
 			internal->incoming.data = fh->ser[i].data;
 			internal->incoming.count = fh->ser[i].count;
@@ -183,7 +190,10 @@ static int luo_flb_retrieve_one(struct liveupdate_flb *flb)
 	args.flb = flb;
 	args.data = internal->incoming.data;
 
-	flb->ops->retrieve(&args);
+	err = flb->ops->retrieve(&args);
+	if (err)
+		return err;
+
 	internal->incoming.obj = args.obj;
 
 	if (WARN_ON_ONCE(!internal->incoming.obj))
@@ -305,13 +315,17 @@ void luo_flb_file_finish(struct liveupdate_file_handler *h)
  * Context: Typically called once from a subsystem's module init function for
  *          each global FLB object that the module defines.
  *
- * Return: 0 on success, or -ENOMEM if memory allocation fails.
+ * Return: 0 on success, or -ENOMEM if memory allocation fails, and -EOPNOTSUPP
+ * when live update is disabled or not configured.
  */
 int liveupdate_init_flb(struct liveupdate_flb *flb)
 {
-	struct luo_flb_internal *internal = kzalloc(sizeof(*internal),
-						    GFP_KERNEL | __GFP_ZERO);
+	struct luo_flb_internal *internal;
 
+	if (!liveupdate_enabled())
+		return -EOPNOTSUPP;
+
+	internal = kzalloc(sizeof(*internal), GFP_KERNEL | __GFP_ZERO);
 	if (!internal)
 		return -ENOMEM;
 
@@ -344,6 +358,7 @@ int liveupdate_init_flb(struct liveupdate_flb *flb)
  *         -ENOMEM on memory allocation failure.
  *         -EEXIST if this FLB is already registered with this handler.
  *         -ENOSPC if the maximum number of global FLBs has been reached.
+ *         -EOPNOTSUPP if live update is disabled or not configured.
  */
 int liveupdate_register_flb(struct liveupdate_file_handler *h,
 			    struct liveupdate_flb *flb)
@@ -353,6 +368,9 @@ int liveupdate_register_flb(struct liveupdate_file_handler *h,
 	static DEFINE_MUTEX(register_flb_lock);
 	struct liveupdate_flb *gflb;
 	struct luo_flb_link *iter;
+
+	if (!liveupdate_enabled())
+		return -EOPNOTSUPP;
 
 	if (WARN_ON(!h || !flb || !internal))
 		return -EINVAL;
@@ -400,6 +418,9 @@ int liveupdate_register_flb(struct liveupdate_file_handler *h,
 				return -EEXIST;
 		}
 
+		if (!try_module_get(flb->ops->owner))
+			return -EAGAIN;
+
 		list_add_tail(&flb->list, &luo_flb_global.list);
 		luo_flb_global.count++;
 	}
@@ -427,12 +448,15 @@ int liveupdate_register_flb(struct liveupdate_file_handler *h,
  * The caller MUST call liveupdate_flb_incoming_unlock() to release the lock.
  *
  * Return: 0 on success, or a negative errno on failure. -ENODATA means no
- * incoming FLB data, and -ENOENT means specific flb not found in the incoming
- * data.
+ * incoming FLB data, -ENOENT means specific flb not found in the incoming
+ * data, and -EOPNOTSUPP when live update is disabled or not configured.
  */
 int liveupdate_flb_incoming_locked(struct liveupdate_flb *flb, void **objp)
 {
 	struct luo_flb_internal *internal = flb->internal;
+
+	if (!liveupdate_enabled())
+		return -EOPNOTSUPP;
 
 	if (WARN_ON(!internal))
 		return -EINVAL;
@@ -486,6 +510,12 @@ int liveupdate_flb_outgoing_locked(struct liveupdate_flb *flb, void **objp)
 {
 	struct luo_flb_internal *internal = flb->internal;
 
+	if (!liveupdate_enabled())
+		return -EOPNOTSUPP;
+
+	if (WARN_ON(!internal))
+		return -EINVAL;
+
 	mutex_lock(&internal->outgoing.lock);
 
 	/* The object must exist if any file is being preserved */
@@ -517,45 +547,45 @@ void liveupdate_flb_outgoing_unlock(struct liveupdate_flb *flb, void *obj)
 
 int __init luo_flb_setup_outgoing(void *fdt_out)
 {
-	struct luo_flb_head_ser *head_ser;
-	u64 head_ser_pa;
+	struct luo_flb_header_ser *header_ser;
+	u64 header_ser_pa;
 	int err;
 
-	head_ser = luo_alloc_preserve(LUO_FLB_PGCNT << PAGE_SHIFT);
-	if (IS_ERR(head_ser))
-		return PTR_ERR(head_ser);
+	header_ser = kho_alloc_preserve(LUO_FLB_PGCNT << PAGE_SHIFT);
+	if (IS_ERR(header_ser))
+		return PTR_ERR(header_ser);
 
-	head_ser_pa = __pa(head_ser);
+	header_ser_pa = virt_to_phys(header_ser);
 
 	err = fdt_begin_node(fdt_out, LUO_FDT_FLB_NODE_NAME);
 	err |= fdt_property_string(fdt_out, "compatible",
 				   LUO_FDT_FLB_COMPATIBLE);
-	err |= fdt_property(fdt_out, LUO_FDT_FLB_HEAD, &head_ser_pa,
-			    sizeof(head_ser_pa));
+	err |= fdt_property(fdt_out, LUO_FDT_FLB_HEADER, &header_ser_pa,
+			    sizeof(header_ser_pa));
 	err |= fdt_end_node(fdt_out);
 
 	if (err)
 		goto err_unpreserve;
 
-	head_ser->pgcnt = LUO_FLB_PGCNT;
-	luo_flb_global.outgoing.head_ser = head_ser;
-	luo_flb_global.outgoing.ser = (void *)(head_ser + 1);
+	header_ser->pgcnt = LUO_FLB_PGCNT;
+	luo_flb_global.outgoing.header_ser = header_ser;
+	luo_flb_global.outgoing.ser = (void *)(header_ser + 1);
 	luo_flb_global.outgoing.active = true;
 
 	return 0;
 
 err_unpreserve:
-	luo_free_unpreserve(head_ser, LUO_FLB_PGCNT << PAGE_SHIFT);
+	kho_unpreserve_free(header_ser);
 
 	return err;
 }
 
 int __init luo_flb_setup_incoming(void *fdt_in)
 {
-	struct luo_flb_head_ser *head_ser;
-	int err, head_size, offset;
+	struct luo_flb_header_ser *header_ser;
+	int err, header_size, offset;
 	const void *ptr;
-	u64 head_ser_pa;
+	u64 header_ser_pa;
 
 	offset = fdt_subnode_offset(fdt_in, 0, LUO_FDT_FLB_NODE_NAME);
 	if (offset < 0) {
@@ -573,20 +603,20 @@ int __init luo_flb_setup_incoming(void *fdt_in)
 		return -EINVAL;
 	}
 
-	head_size = 0;
-	ptr = fdt_getprop(fdt_in, offset, LUO_FDT_FLB_HEAD, &head_size);
-	if (!ptr || head_size != sizeof(u64)) {
-		pr_err("Unable to get FLB head property '%s' [%d]\n",
-		       LUO_FDT_FLB_HEAD, head_size);
+	header_size = 0;
+	ptr = fdt_getprop(fdt_in, offset, LUO_FDT_FLB_HEADER, &header_size);
+	if (!ptr || header_size != sizeof(u64)) {
+		pr_err("Unable to get FLB header property '%s' [%d]\n",
+		       LUO_FDT_FLB_HEADER, header_size);
 
 		return -EINVAL;
 	}
 
-	memcpy(&head_ser_pa, ptr, sizeof(u64));
-	head_ser = __va(head_ser_pa);
+	header_ser_pa = get_unaligned((u64 *)ptr);
+	header_ser = phys_to_virt(header_ser_pa);
 
-	luo_flb_global.incoming.head_ser = head_ser;
-	luo_flb_global.incoming.ser = (void *)(head_ser + 1);
+	luo_flb_global.incoming.header_ser = header_ser;
+	luo_flb_global.incoming.ser = (void *)(header_ser + 1);
 	luo_flb_global.incoming.active = true;
 
 	return 0;
@@ -608,7 +638,7 @@ int __init luo_flb_setup_incoming(void *fdt_in)
  */
 void luo_flb_serialize(void)
 {
-	struct luo_flb_head *fh = &luo_flb_global.outgoing;
+	struct luo_flb_header *fh = &luo_flb_global.outgoing;
 	struct liveupdate_flb *flb;
 	int i = 0;
 
@@ -624,5 +654,5 @@ void luo_flb_serialize(void)
 		}
 	}
 
-	fh->head_ser->count = i;
+	fh->header_ser->count = i;
 }

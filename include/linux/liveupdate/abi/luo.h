@@ -31,12 +31,12 @@
  *
  *         luo-session {
  *             compatible = "luo-session-v1";
- *             luo-session-head = <phys_addr_of_session_head_ser>;
+ *             luo-session-header = <phys_addr_of_session_header_ser>;
  *         };
  *
  *         luo-flb {
  *             compatible = "luo-flb-v1";
- *             luo-flb-head = <phys_addr_of_flb_head_ser>;
+ *             luo-flb-header = <phys_addr_of_flb_header_ser>;
  *         };
  *     };
  *
@@ -52,9 +52,9 @@
  *
  *   - compatible: "luo-session-v1"
  *     Identifies the session ABI version.
- *   - luo-session-head: u64
- *     The physical address of a `struct luo_session_head_ser`. This structure is
- *     the header for a contiguous block of memory containing an array of
+ *   - luo-session-header: u64
+ *     The physical address of a `struct luo_session_header_ser`. This structure
+ *     is the header for a contiguous block of memory containing an array of
  *     `struct luo_session_ser`, one for each preserved session.
  *
  * File-Lifecycle-Bound Node (luo-flb):
@@ -63,8 +63,8 @@
  *
  *   - compatible: "luo-flb-v1"
  *     Identifies the FLB ABI version.
- *   - luo-flb-head: u64
- *     The physical address of a `struct luo_flb_head_ser`. This structure is
+ *   - luo-flb-header: u64
+ *     The physical address of a `struct luo_flb_header_ser`. This structure is
  *     the header for a contiguous block of memory containing an array of
  *     `struct luo_flb_ser`, one for each preserved global object.
  *
@@ -72,7 +72,7 @@
  *   The FDT properties point to memory regions containing arrays of simple,
  *   `__packed` structures. These structures contain the actual preserved state.
  *
- *   - struct luo_session_head_ser:
+ *   - struct luo_session_header_ser:
  *     Header for the session array. Contains the total page count of the
  *     preserved memory block and the number of `struct luo_session_ser`
  *     entries that follow.
@@ -87,7 +87,7 @@
  *     find the correct handler in the new kernel, a user-provided `token` for
  *     identification, and an opaque `data` handle for the handler to use.
  *
- *   - struct luo_flb_head_ser:
+ *   - struct luo_flb_header_ser:
  *     Header for the FLB array. Contains the total page count of the
  *     preserved memory block and the number of `struct luo_flb_ser` entries
  *     that follow.
@@ -105,7 +105,7 @@
 
 /*
  * The LUO FDT hooks all LUO state for sessions, fds, etc.
- * In the root it allso carries "liveupdate-number" 64-bit property that
+ * In the root it also carries "liveupdate-number" 64-bit property that
  * corresponds to the number of live-updates performed on this machine.
  */
 #define LUO_FDT_SIZE		PAGE_SIZE
@@ -115,15 +115,15 @@
 
 /*
  * LUO FDT session node
- * LUO_FDT_SESSION_HEAD:  is a u64 physical address of struct
- *                        luo_session_head_ser
+ * LUO_FDT_SESSION_HEADER:  is a u64 physical address of struct
+ *                          luo_session_header_ser
  */
 #define LUO_FDT_SESSION_NODE_NAME	"luo-session"
 #define LUO_FDT_SESSION_COMPATIBLE	"luo-session-v1"
-#define LUO_FDT_SESSION_HEAD		"luo-session-head"
+#define LUO_FDT_SESSION_HEADER		"luo-session-header"
 
 /**
- * struct luo_session_head_ser - Header for the serialized session data block.
+ * struct luo_session_header_ser - Header for the serialized session data block.
  * @pgcnt: The total size, in pages, of the entire preserved memory block
  *         that this header describes.
  * @count: The number of 'struct luo_session_ser' entries that immediately
@@ -133,7 +133,7 @@
  * physical memory preserved across the kexec. It provides the necessary
  * metadata to interpret the array of session entries that follow.
  */
-struct luo_session_head_ser {
+struct luo_session_header_ser {
 	u64 pgcnt;
 	u64 count;
 } __packed;
@@ -168,7 +168,7 @@ struct luo_session_ser {
 
 /**
  * struct luo_file_ser - Represents the serialized preserves files.
- * @compatible:  File handler compatabile string.
+ * @compatible:  File handler compatible string.
  * @data:        Private data
  * @token:       User provided token for this file
  *
@@ -185,10 +185,10 @@ struct luo_file_ser {
 
 #define LUO_FDT_FLB_NODE_NAME	"luo-flb"
 #define LUO_FDT_FLB_COMPATIBLE	"luo-flb-v1"
-#define LUO_FDT_FLB_HEAD	"luo-flb-head"
+#define LUO_FDT_FLB_HEADER	"luo-flb-header"
 
 /**
- * struct luo_flb_head_ser - Header for the serialized FLB data block.
+ * struct luo_flb_header_ser - Header for the serialized FLB data block.
  * @pgcnt: The total number of pages occupied by the entire preserved memory
  *         region, including this header and the subsequent array of
  *         &struct luo_flb_ser entries.
@@ -196,13 +196,13 @@ struct luo_file_ser {
  *         in the memory block.
  *
  * This structure is located at the physical address specified by the
- * `LUO_FDT_FLB_HEAD` FDT property. It provides the new kernel with the
+ * `LUO_FDT_FLB_HEADER` FDT property. It provides the new kernel with the
  * necessary information to find and iterate over the array of preserved
  * File-Lifecycle-Bound objects and to manage the underlying memory.
  *
  * If this structure is modified, LUO_FDT_FLB_COMPATIBLE must be updated.
  */
-struct luo_flb_head_ser {
+struct luo_flb_header_ser {
 	u64 pgcnt;
 	u64 count;
 } __packed;
@@ -229,5 +229,10 @@ struct luo_flb_ser {
 	u64 data;
 	u64 count;
 } __packed;
+
+/* Kernel Live Update Test ABI */
+#ifdef CONFIG_LIVEUPDATE_TEST
+#define LIVEUPDATE_TEST_FLB_COMPATIBLE(i)	"liveupdate-test-flb-v" #i
+#endif
 
 #endif /* _LINUX_LIVEUPDATE_ABI_LUO_H */
