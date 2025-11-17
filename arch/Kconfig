@@ -348,6 +348,10 @@ config ARCH_HAS_SET_MEMORY
 config ARCH_HAS_SET_DIRECT_MAP
 	bool
 
+# Select if memory tags (e.g., GFP_ZEROTAGS) are supported
+config ARCH_HAS_MEMORY_TAGS
+	bool
+
 #
 # Select if the architecture provides the arch_dma_set_uncached symbol to
 # either provide an uncached segment alias for a DMA allocation, or
