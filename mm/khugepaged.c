@@ -30,8 +30,7 @@
 enum scan_result {
 	SCAN_FAIL,
 	SCAN_SUCCEED,
-	SCAN_PMD_NULL,
-	SCAN_PMD_NONE,
+	SCAN_NO_PTE_TABLE,
 	SCAN_PMD_MAPPED,
 	SCAN_EXCEED_NONE_PTE,
 	SCAN_EXCEED_SWAP_PTE,
@@ -934,7 +933,7 @@ static inline int check_pmd_state(pmd_t *pmd)
 	pmd_t pmde = pmdp_get_lockless(pmd);
 
 	if (pmd_none(pmde))
-		return SCAN_PMD_NONE;
+		return SCAN_NO_PTE_TABLE;
 
 	/*
 	 * The folio may be under migration when khugepaged is trying to
@@ -944,11 +943,11 @@ static inline int check_pmd_state(pmd_t *pmd)
 	if (pmd_is_migration_entry(pmde))
 		return SCAN_PMD_MAPPED;
 	if (!pmd_present(pmde))
-		return SCAN_PMD_NULL;
+		return SCAN_NO_PTE_TABLE;
 	if (pmd_trans_huge(pmde))
 		return SCAN_PMD_MAPPED;
 	if (pmd_bad(pmde))
-		return SCAN_PMD_NULL;
+		return SCAN_NO_PTE_TABLE;
 	return SCAN_SUCCEED;
 }
 
@@ -958,7 +957,7 @@ static int find_pmd_or_thp_or_none(struct mm_struct *mm,
 {
 	*pmd = mm_find_pmd(mm, address);
 	if (!*pmd)
-		return SCAN_PMD_NULL;
+		return SCAN_NO_PTE_TABLE;
 
 	return check_pmd_state(*pmd);
 }
@@ -1013,7 +1012,7 @@ static int __collapse_huge_page_swapin(struct mm_struct *mm,
 			pte = pte_offset_map_ro_nolock(mm, pmd, addr, &ptl);
 			if (!pte) {
 				mmap_read_unlock(mm);
-				result = SCAN_PMD_NULL;
+				result = SCAN_NO_PTE_TABLE;
 				goto out;
 			}
 		}
@@ -1187,7 +1186,7 @@ static int collapse_huge_page(struct mm_struct *mm, unsigned long address,
 						      &compound_pagelist);
 		spin_unlock(pte_ptl);
 	} else {
-		result = SCAN_PMD_NULL;
+		result = SCAN_NO_PTE_TABLE;
 	}
 
 	if (unlikely(result != SCAN_SUCCEED)) {
@@ -1270,7 +1269,7 @@ static int hpage_collapse_scan_pmd(struct mm_struct *mm,
 	nodes_clear(cc->alloc_nmask);
 	pte = pte_offset_map_lock(mm, pmd, start_addr, &ptl);
 	if (!pte) {
-		result = SCAN_PMD_NULL;
+		result = SCAN_NO_PTE_TABLE;
 		goto out;
 	}
 
@@ -1544,8 +1543,7 @@ int collapse_pte_mapped_thp(struct mm_struct *mm, unsigned long addr,
 	switch (result) {
 	case SCAN_SUCCEED:
 		break;
-	case SCAN_PMD_NULL:
-	case SCAN_PMD_NONE:
+	case SCAN_NO_PTE_TABLE:
 		/*
 		 * All pte entries have been removed and pmd cleared.
 		 * Skip all the pte checks and just update the pmd mapping.
@@ -1742,7 +1740,7 @@ static bool file_backed_vma_is_retractable(struct vm_area_struct *vma)
 	 * obtained on guard region installation after the flag is set, so this
 	 * check being performed under this lock excludes races.
 	 */
-	if (vma_flag_test_atomic(vma, VM_MAYBE_GUARD_BIT))
+	if (vma_flag_test_atomic(vma, VMA_MAYBE_GUARD_BIT))
 		return false;
 
 	return true;
@@ -2197,14 +2195,14 @@ immap_locked:
 	}
 
 	if (is_shmem)
-		__lruvec_stat_mod_folio(new_folio, NR_SHMEM_THPS, HPAGE_PMD_NR);
+		lruvec_stat_mod_folio(new_folio, NR_SHMEM_THPS, HPAGE_PMD_NR);
 	else
-		__lruvec_stat_mod_folio(new_folio, NR_FILE_THPS, HPAGE_PMD_NR);
+		lruvec_stat_mod_folio(new_folio, NR_FILE_THPS, HPAGE_PMD_NR);
 
 	if (nr_none) {
-		__lruvec_stat_mod_folio(new_folio, NR_FILE_PAGES, nr_none);
+		lruvec_stat_mod_folio(new_folio, NR_FILE_PAGES, nr_none);
 		/* nr_none is always 0 for non-shmem. */
-		__lruvec_stat_mod_folio(new_folio, NR_SHMEM, nr_none);
+		lruvec_stat_mod_folio(new_folio, NR_SHMEM, nr_none);
 	}
 
 	/*
@@ -2803,8 +2801,6 @@ int madvise_collapse(struct vm_area_struct *vma, unsigned long start,
 			hend = min(hend, vma->vm_end & HPAGE_PMD_MASK);
 		}
 		mmap_assert_locked(mm);
-		memset(cc->node_load, 0, sizeof(cc->node_load));
-		nodes_clear(cc->alloc_nmask);
 		if (!vma_is_anonymous(vma)) {
 			struct file *file = get_file(vma->vm_file);
 			pgoff_t pgoff = linear_page_index(vma, addr);
@@ -2834,7 +2830,7 @@ handle_result:
 			mmap_read_unlock(mm);
 			goto handle_result;
 		/* Whitelisted set of results where continuing OK */
-		case SCAN_PMD_NULL:
+		case SCAN_NO_PTE_TABLE:
 		case SCAN_PTE_NON_PRESENT:
 		case SCAN_PTE_UFFD_WP:
 		case SCAN_LACK_REFERENCED_PAGE:

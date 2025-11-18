@@ -172,6 +172,9 @@ static int madvise_update_vma(vm_flags_t new_flags,
 	if (IS_ERR(vma))
 		return PTR_ERR(vma);
 
+	/* Account for sticky flags. */
+	new_flags |= vma->vm_flags;
+
 	madv_behavior->vma = vma;
 
 	/* vm_flags is protected by the mmap_lock held in write mode. */
@@ -1142,7 +1145,7 @@ static long madvise_guard_install(struct madvise_behavior *madv_behavior)
 	 * acquire an mmap/VMA write lock to read it. All remaining readers may
 	 * or may not see the flag set, but we don't care.
 	 */
-	vma_flag_set_atomic(vma, VM_MAYBE_GUARD_BIT);
+	vma_flag_set_atomic(vma, VMA_MAYBE_GUARD_BIT);
 
 	/*
 	 * If anonymous and we are establishing page tables the VMA ought to

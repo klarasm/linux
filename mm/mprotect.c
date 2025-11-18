@@ -759,6 +759,9 @@ mprotect_fixup(struct vma_iterator *vmi, struct mmu_gather *tlb,
 		goto fail;
 	}
 
+	/* Account for sticky flags. */
+	newflags |= vma->vm_flags;
+
 	*pprev = vma;
 
 	/*

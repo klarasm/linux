@@ -500,6 +500,24 @@ out:
 }
 
 #ifdef CONFIG_ZRAM_WRITEBACK
+struct zram_wb_ctl {
+	struct list_head idle_reqs;
+	struct list_head inflight_reqs;
+
+	atomic_t num_inflight;
+	struct completion done;
+};
+
+struct zram_wb_req {
+	unsigned long blk_idx;
+	struct page *page;
+	struct zram_pp_slot *pps;
+	struct bio_vec bio_vec;
+	struct bio bio;
+
+	struct list_head entry;
+};
+
 static ssize_t writeback_limit_enable_store(struct device *dev,
 					    struct device_attribute *attr,
 					    const char *buf, size_t len)
@@ -765,25 +783,6 @@ static void read_from_bdev_async(struct zram *zram, struct page *page,
 	submit_bio(bio);
 }
 
-struct zram_wb_ctl {
-	struct list_head idle_reqs;
-	struct list_head inflight_reqs;
-
-	atomic_t num_inflight;
-	struct completion done;
-	struct blk_plug plug;
-};
-
-struct zram_wb_req {
-	unsigned long blk_idx;
-	struct page *page;
-	struct zram_pp_slot *pps;
-	struct bio_vec bio_vec;
-	struct bio bio;
-
-	struct list_head entry;
-};
-
 static void release_wb_req(struct zram_wb_req *req)
 {
 	__free_page(req->page);
@@ -831,17 +830,16 @@ static struct zram_wb_ctl *init_wb_ctl(struct zram *zram)
 		 * writeback can still proceed, even if there is only one
 		 * request on the idle list.
 		 */
-		req = kzalloc(sizeof(*req), GFP_NOIO | __GFP_NOWARN);
+		req = kzalloc(sizeof(*req), GFP_KERNEL | __GFP_NOWARN);
 		if (!req)
 			break;
 
-		req->page = alloc_page(GFP_NOIO | __GFP_NOWARN);
+		req->page = alloc_page(GFP_KERNEL | __GFP_NOWARN);
 		if (!req->page) {
 			kfree(req);
 			break;
 		}
 
-		INIT_LIST_HEAD(&req->entry);
 		list_add(&req->entry, &wb_ctl->idle_reqs);
 	}
 
@@ -978,10 +976,11 @@ static int zram_writeback_slots(struct zram *zram,
 	struct zram_wb_req *req = NULL;
 	unsigned long blk_idx = 0;
 	struct zram_pp_slot *pps;
+	struct blk_plug io_plug;
 	int ret = 0, err;
 	u32 index = 0;
 
-	blk_start_plug(&wb_ctl->plug);
+	blk_start_plug(&io_plug);
 	while ((pps = select_pp_slot(ctl))) {
 		if (zram->wb_limit_enable && !zram->bd_wb_limit) {
 			ret = -EIO;
@@ -993,9 +992,9 @@ static int zram_writeback_slots(struct zram *zram,
 			if (req)
 				break;
 
-			blk_finish_plug(&wb_ctl->plug);
+			blk_finish_plug(&io_plug);
 			err = zram_wb_wait_for_completion(zram, wb_ctl);
-			blk_start_plug(&wb_ctl->plug);
+			blk_start_plug(&io_plug);
 			/*
 			 * BIO errors are not fatal, we continue and simply
 			 * attempt to writeback the remaining objects (pages).
@@ -1031,14 +1030,13 @@ static int zram_writeback_slots(struct zram *zram,
 
 		/*
 		 * From now on pp-slot is owned by the req, remove it from
-		 * its pps bucket.
+		 * its pp bucket.
 		 */
 		list_del_init(&pps->entry);
 
 		req->blk_idx = blk_idx;
 		req->pps = pps;
-		bio_init(&req->bio, zram->bdev, &req->bio_vec, 1,
-			 REQ_OP_WRITE | REQ_SYNC);
+		bio_init(&req->bio, zram->bdev, &req->bio_vec, 1, REQ_OP_WRITE);
 		req->bio.bi_iter.bi_sector = req->blk_idx * (PAGE_SIZE >> 9);
 		req->bio.bi_end_io = zram_writeback_endio;
 		req->bio.bi_private = wb_ctl;
@@ -1062,7 +1060,7 @@ next:
 	if (req)
 		release_wb_req(req);
 
-	blk_finish_plug(&wb_ctl->plug);
+	blk_finish_plug(&io_plug);
 	err = zram_wb_wait_for_completion(zram, wb_ctl);
 	if (err)
 		ret = err;
@@ -2932,7 +2930,7 @@ static int zram_add(void)
 
 	init_rwsem(&zram->init_lock);
 #ifdef CONFIG_ZRAM_WRITEBACK
-	zram->wb_batch_size = 1;
+	zram->wb_batch_size = 32;
 #endif
 
 	/* gendisk structure */
