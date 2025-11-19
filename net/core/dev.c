@@ -1163,6 +1163,7 @@ void netdev_copy_name(struct net_device *dev, char *name)
 		strscpy(name, dev->name, IFNAMSIZ);
 	} while (read_seqretry(&netdev_rename_lock, seq));
 }
+EXPORT_IPV6_MOD_GPL(netdev_copy_name);
 
 /**
  *	netdev_get_name - get a netdevice name, knowing its ifindex.
@@ -1854,6 +1855,7 @@ const char *netdev_cmd_to_name(enum netdev_cmd cmd)
 	N(PRE_CHANGEADDR) N(OFFLOAD_XSTATS_ENABLE) N(OFFLOAD_XSTATS_DISABLE)
 	N(OFFLOAD_XSTATS_REPORT_USED) N(OFFLOAD_XSTATS_REPORT_DELTA)
 	N(XDP_FEAT_CHANGE)
+	N(DEBUG_UNREGISTER)
 	}
 #undef N
 	return "UNKNOWN_NETDEV_EVENT";
@@ -2462,9 +2464,9 @@ int dev_forward_skb_nomtu(struct net_device *dev, struct sk_buff *skb)
 	return __dev_forward_skb2(dev, skb, false) ?: netif_rx_internal(skb);
 }
 
-static inline int deliver_skb(struct sk_buff *skb,
-			      struct packet_type *pt_prev,
-			      struct net_device *orig_dev)
+static int deliver_skb(struct sk_buff *skb,
+		       struct packet_type *pt_prev,
+		       struct net_device *orig_dev)
 {
 	if (unlikely(skb_orphan_frags_rx(skb, GFP_ATOMIC)))
 		return -ENOMEM;
@@ -2483,7 +2485,7 @@ static inline void deliver_ptype_list_skb(struct sk_buff *skb,
 	list_for_each_entry_rcu(ptype, ptype_list, list) {
 		if (ptype->type != type)
 			continue;
-		if (pt_prev)
+		if (unlikely(pt_prev))
 			deliver_skb(skb, pt_prev, orig_dev);
 		pt_prev = ptype;
 	}
@@ -2544,7 +2546,7 @@ again:
 		if (skb_loop_sk(ptype, skb))
 			continue;
 
-		if (pt_prev) {
+		if (unlikely(pt_prev)) {
 			deliver_skb(skb2, pt_prev, skb->dev);
 			pt_prev = ptype;
 			continue;
@@ -3373,6 +3375,13 @@ static void __netif_reschedule(struct Qdisc *q)
 
 void __netif_schedule(struct Qdisc *q)
 {
+	/* If q->defer_list is not empty, at least one thread is
+	 * in __dev_xmit_skb() before llist_del_all(&q->defer_list).
+	 * This thread will attempt to run the queue.
+	 */
+	if (!llist_empty(&q->defer_list))
+		return;
+
 	if (!test_and_set_bit(__QDISC_STATE_SCHED, &q->state))
 		__netif_reschedule(q);
 }
@@ -4125,9 +4134,10 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 				 struct net_device *dev,
 				 struct netdev_queue *txq)
 {
+	struct sk_buff *next, *to_free = NULL;
 	spinlock_t *root_lock = qdisc_lock(q);
-	struct sk_buff *to_free = NULL;
-	bool contended;
+	struct llist_node *ll_list, *first_n;
+	unsigned long defer_count = 0;
 	int rc;
 
 	qdisc_calculate_pkt_len(skb, q);
@@ -4167,67 +4177,81 @@ no_lock_out:
 		return rc;
 	}
 
-	if (unlikely(READ_ONCE(q->owner) == smp_processor_id())) {
-		kfree_skb_reason(skb, SKB_DROP_REASON_TC_RECLASSIFY_LOOP);
-		return NET_XMIT_DROP;
-	}
-	/*
-	 * Heuristic to force contended enqueues to serialize on a
-	 * separate lock before trying to get qdisc main lock.
-	 * This permits qdisc->running owner to get the lock more
-	 * often and dequeue packets faster.
-	 * On PREEMPT_RT it is possible to preempt the qdisc owner during xmit
-	 * and then other tasks will only enqueue packets. The packets will be
-	 * sent after the qdisc owner is scheduled again. To prevent this
-	 * scenario the task always serialize on the lock.
+	/* Open code llist_add(&skb->ll_node, &q->defer_list) + queue limit.
+	 * In the try_cmpxchg() loop, we want to increment q->defer_count
+	 * at most once to limit the number of skbs in defer_list.
+	 * We perform the defer_count increment only if the list is not empty,
+	 * because some arches have slow atomic_long_inc_return().
 	 */
-	contended = qdisc_is_running(q) || IS_ENABLED(CONFIG_PREEMPT_RT);
-	if (unlikely(contended))
-		spin_lock(&q->busylock);
+	first_n = READ_ONCE(q->defer_list.first);
+	do {
+		if (first_n && !defer_count) {
+			defer_count = atomic_long_inc_return(&q->defer_count);
+			if (unlikely(defer_count > q->limit)) {
+				kfree_skb_reason(skb, SKB_DROP_REASON_QDISC_DROP);
+				return NET_XMIT_DROP;
+			}
+		}
+		skb->ll_node.next = first_n;
+	} while (!try_cmpxchg(&q->defer_list.first, &first_n, &skb->ll_node));
+
+	/* If defer_list was not empty, we know the cpu which queued
+	 * the first skb will process the whole list for us.
+	 */
+	if (first_n)
+		return NET_XMIT_SUCCESS;
 
 	spin_lock(root_lock);
+
+	ll_list = llist_del_all(&q->defer_list);
+	/* There is a small race because we clear defer_count not atomically
+	 * with the prior llist_del_all(). This means defer_list could grow
+	 * over q->limit.
+	 */
+	atomic_long_set(&q->defer_count, 0);
+
+	ll_list = llist_reverse_order(ll_list);
+
 	if (unlikely(test_bit(__QDISC_STATE_DEACTIVATED, &q->state))) {
-		__qdisc_drop(skb, &to_free);
+		llist_for_each_entry_safe(skb, next, ll_list, ll_node)
+			__qdisc_drop(skb, &to_free);
 		rc = NET_XMIT_DROP;
-	} else if ((q->flags & TCQ_F_CAN_BYPASS) && !qdisc_qlen(q) &&
-		   qdisc_run_begin(q)) {
+		goto unlock;
+	}
+	if ((q->flags & TCQ_F_CAN_BYPASS) && !qdisc_qlen(q) &&
+	    !llist_next(ll_list) && qdisc_run_begin(q)) {
 		/*
 		 * This is a work-conserving queue; there are no old skbs
 		 * waiting to be sent out; and the qdisc is not running -
 		 * xmit the skb directly.
 		 */
 
+		DEBUG_NET_WARN_ON_ONCE(skb != llist_entry(ll_list,
+							  struct sk_buff,
+							  ll_node));
 		qdisc_bstats_update(q, skb);
-
-		if (sch_direct_xmit(skb, q, dev, txq, root_lock, true)) {
-			if (unlikely(contended)) {
-				spin_unlock(&q->busylock);
-				contended = false;
-			}
+		if (sch_direct_xmit(skb, q, dev, txq, root_lock, true))
 			__qdisc_run(q);
-		}
-
 		qdisc_run_end(q);
 		rc = NET_XMIT_SUCCESS;
 	} else {
-		WRITE_ONCE(q->owner, smp_processor_id());
-		rc = dev_qdisc_enqueue(skb, q, &to_free, txq);
-		WRITE_ONCE(q->owner, -1);
-		if (qdisc_run_begin(q)) {
-			if (unlikely(contended)) {
-				spin_unlock(&q->busylock);
-				contended = false;
-			}
-			__qdisc_run(q);
-			qdisc_run_end(q);
+		int count = 0;
+
+		llist_for_each_entry_safe(skb, next, ll_list, ll_node) {
+			prefetch(next);
+			skb_mark_not_on_list(skb);
+			rc = dev_qdisc_enqueue(skb, q, &to_free, txq);
+			count++;
 		}
+		qdisc_run(q);
+		if (count != 1)
+			rc = NET_XMIT_SUCCESS;
 	}
+unlock:
 	spin_unlock(root_lock);
 	if (unlikely(to_free))
 		kfree_skb_list_reason(to_free,
 				      tcf_get_drop_reason(to_free));
-	if (unlikely(contended))
-		spin_unlock(&q->busylock);
 	return rc;
 }
 
@@ -4398,7 +4422,7 @@ sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 		return skb;
 
 	bpf_net_ctx = bpf_net_ctx_set(&__bpf_net_ctx);
-	if (*pt_prev) {
+	if (unlikely(*pt_prev)) {
 		*ret = deliver_skb(skb, *pt_prev, orig_dev);
 		*pt_prev = NULL;
 	}
@@ -4591,6 +4615,32 @@ u16 dev_pick_tx_zero(struct net_device *dev, struct sk_buff *skb,
 }
 EXPORT_SYMBOL(dev_pick_tx_zero);
 
+int sk_tx_queue_get(const struct sock *sk)
+{
+	int resel, val;
+
+	if (!sk)
+		return -1;
+	/* Paired with WRITE_ONCE() in sk_tx_queue_clear()
+	 * and sk_tx_queue_set().
+	 */
+	val = READ_ONCE(sk->sk_tx_queue_mapping);
+
+	if (val == NO_QUEUE_MAPPING)
+		return -1;
+
+	if (!sk_fullsock(sk))
+		return val;
+
+	resel = READ_ONCE(sock_net(sk)->core.sysctl_txq_reselection);
+	if (resel && time_is_before_jiffies(
+			READ_ONCE(sk->sk_tx_queue_mapping_jiffies) + resel))
+		return -1;
+
+	return val;
+}
+EXPORT_SYMBOL(sk_tx_queue_get);
+
 u16 netdev_pick_tx(struct net_device *dev, struct sk_buff *skb,
 		     struct net_device *sb_dev)
 {
@@ -4606,8 +4656,7 @@ u16 netdev_pick_tx(struct net_device *dev, struct sk_buff *skb,
 		if (new_index < 0)
 			new_index = skb_tx_hash(dev, sb_dev, skb);
 
-		if (queue_index != new_index && sk &&
-		    sk_fullsock(sk) &&
+		if (sk && sk_fullsock(sk) &&
 		    rcu_access_pointer(sk->sk_dst_cache))
 			sk_tx_queue_set(sk, new_index);
 
@@ -5202,14 +5251,15 @@ void kick_defer_list_purge(unsigned int cpu)
 int netdev_flow_limit_table_len __read_mostly = (1 << 12);
 #endif
 
-static bool skb_flow_limit(struct sk_buff *skb, unsigned int qlen)
+static bool skb_flow_limit(struct sk_buff *skb, unsigned int qlen,
+			   int max_backlog)
 {
 #ifdef CONFIG_NET_FLOW_LIMIT
-	struct sd_flow_limit *fl;
-	struct softnet_data *sd;
 	unsigned int old_flow, new_flow;
+	const struct softnet_data *sd;
+	struct sd_flow_limit *fl;
 
-	if (qlen < (READ_ONCE(net_hotdata.max_backlog) >> 1))
+	if (likely(qlen < (max_backlog >> 1)))
 		return false;
 
 	sd = this_cpu_ptr(&softnet_data);
@@ -5254,19 +5304,19 @@ static int enqueue_to_backlog(struct sk_buff *skb, int cpu,
 	u32 tail;
 
 	reason = SKB_DROP_REASON_DEV_READY;
-	if (!netif_running(skb->dev))
+	if (unlikely(!netif_running(skb->dev)))
 		goto bad_dev;
 
-	reason = SKB_DROP_REASON_CPU_BACKLOG;
 	sd = &per_cpu(softnet_data, cpu);
 
 	qlen = skb_queue_len_lockless(&sd->input_pkt_queue);
 	max_backlog = READ_ONCE(net_hotdata.max_backlog);
-	if (unlikely(qlen > max_backlog))
+	if (unlikely(qlen > max_backlog) ||
+	    skb_flow_limit(skb, qlen, max_backlog))
 		goto cpu_backlog_drop;
 	backlog_lock_irq_save(sd, &flags);
 	qlen = skb_queue_len(&sd->input_pkt_queue);
-	if (qlen <= max_backlog && !skb_flow_limit(skb, qlen)) {
+	if (likely(qlen <= max_backlog)) {
 		if (!qlen) {
 			/* Schedule NAPI for backlog device. We can use
 			 * non atomic operation as we own the queue lock.
@@ -5287,6 +5337,7 @@ static int enqueue_to_backlog(struct sk_buff *skb, int cpu,
 	backlog_unlock_irq_restore(sd, &flags);
 
 cpu_backlog_drop:
+	reason = SKB_DROP_REASON_CPU_BACKLOG;
 	numa_drop_add(&sd->drop_counters, 1);
 bad_dev:
 	dev_core_stats_rx_dropped_inc(skb->dev);
@@ -5833,7 +5884,7 @@ static inline int nf_ingress(struct sk_buff *skb, struct packet_type **pt_prev,
 	if (nf_hook_ingress_active(skb)) {
 		int ingress_retval;
 
-		if (*pt_prev) {
+		if (unlikely(*pt_prev)) {
 			*ret = deliver_skb(skb, *pt_prev, orig_dev);
 			*pt_prev = NULL;
 		}
@@ -5910,13 +5961,13 @@ another_round:
 
 	list_for_each_entry_rcu(ptype, &dev_net_rcu(skb->dev)->ptype_all,
 				list) {
-		if (pt_prev)
+		if (unlikely(pt_prev))
 			ret = deliver_skb(skb, pt_prev, orig_dev);
 		pt_prev = ptype;
 	}
 
 	list_for_each_entry_rcu(ptype, &skb->dev->ptype_all, list) {
-		if (pt_prev)
+		if (unlikely(pt_prev))
 			ret = deliver_skb(skb, pt_prev, orig_dev);
 		pt_prev = ptype;
 	}
@@ -5947,7 +5998,7 @@ skip_classify:
 	}
 
 	if (skb_vlan_tag_present(skb)) {
-		if (pt_prev) {
+		if (unlikely(pt_prev)) {
 			ret = deliver_skb(skb, pt_prev, orig_dev);
 			pt_prev = NULL;
 		}
@@ -5959,7 +6010,7 @@ skip_classify:
 
 	rx_handler = rcu_dereference(skb->dev->rx_handler);
 	if (rx_handler) {
-		if (pt_prev) {
+		if (unlikely(pt_prev)) {
 			ret = deliver_skb(skb, pt_prev, orig_dev);
 			pt_prev = NULL;
 		}
@@ -6732,6 +6783,7 @@ static void skb_defer_free_flush(void)
 		free_list = llist_del_all(&sdn->defer_list);
 
 		llist_for_each_entry_safe(skb, next, free_list, ll_node) {
+			prefetch(next);
 			napi_consume_skb(skb, 1);
 		}
 	}
@@ -7039,7 +7091,8 @@ static void napi_stop_kthread(struct napi_struct *napi)
 		 */
 		if ((val & NAPIF_STATE_SCHED_THREADED) ||
 		    !(val & NAPIF_STATE_SCHED)) {
-			new = val & (~NAPIF_STATE_THREADED);
+			new = val & (~(NAPIF_STATE_THREADED |
+				       NAPIF_STATE_THREADED_BUSY_POLL));
 		} else {
 			msleep(20);
 			continue;
@@ -7061,6 +7114,16 @@ static void napi_stop_kthread(struct napi_struct *napi)
 
 	kthread_stop(napi->thread);
 	napi->thread = NULL;
+}
+
+static void napi_set_threaded_state(struct napi_struct *napi,
+				    enum netdev_napi_threaded threaded_mode)
+{
+	bool threaded = threaded_mode != NETDEV_NAPI_THREADED_DISABLED;
+	bool busy_poll = threaded_mode == NETDEV_NAPI_THREADED_BUSY_POLL;
+
+	assign_bit(NAPI_STATE_THREADED, &napi->state, threaded);
+	assign_bit(NAPI_STATE_THREADED_BUSY_POLL, &napi->state, busy_poll);
 }
 
 int napi_set_threaded(struct napi_struct *napi,
@@ -7089,7 +7152,7 @@ int napi_set_threaded(struct napi_struct *napi,
 	} else {
 		/* Make sure kthread is created before THREADED bit is set. */
 		smp_mb__before_atomic();
-		assign_bit(NAPI_STATE_THREADED, &napi->state, threaded);
+		napi_set_threaded_state(napi, threaded);
 	}
 
 	return 0;
@@ -7481,7 +7544,9 @@ void napi_disable_locked(struct napi_struct *n)
 		}
 
 		new = val | NAPIF_STATE_SCHED | NAPIF_STATE_NPSVC;
-		new &= ~(NAPIF_STATE_THREADED | NAPIF_STATE_PREFER_BUSY_POLL);
+		new &= ~(NAPIF_STATE_THREADED |
+			 NAPIF_STATE_THREADED_BUSY_POLL |
+			 NAPIF_STATE_PREFER_BUSY_POLL);
 	} while (!try_cmpxchg(&n->state, &val, new));
 
 	hrtimer_cancel(&n->timer);
@@ -7693,7 +7758,7 @@ static int napi_thread_wait(struct napi_struct *napi)
 	return -1;
 }
 
-static void napi_threaded_poll_loop(struct napi_struct *napi)
+static void napi_threaded_poll_loop(struct napi_struct *napi, bool busy_poll)
 {
 	struct bpf_net_context __bpf_net_ctx, *bpf_net_ctx;
 	struct softnet_data *sd;
@@ -7722,22 +7787,47 @@ static void napi_threaded_poll_loop(struct napi_struct *napi)
 		}
 		skb_defer_free_flush();
 		bpf_net_ctx_clear(bpf_net_ctx);
+
+		/* When busy poll is enabled, the old packets are not flushed in
+		 * napi_complete_done. So flush them here.
+		 */
+		if (busy_poll)
+			gro_flush_normal(&napi->gro, HZ >= 1000);
 		local_bh_enable();
+
+		/* Call cond_resched here to avoid watchdog warnings. */
+		if (repoll || busy_poll) {
+			rcu_softirq_qs_periodic(last_qs);
+			cond_resched();
+		}
 
 		if (!repoll)
 			break;
-
-		rcu_softirq_qs_periodic(last_qs);
-		cond_resched();
 	}
 }
 
 static int napi_threaded_poll(void *data)
 {
 	struct napi_struct *napi = data;
+	bool want_busy_poll;
+	bool in_busy_poll;
+	unsigned long val;
 
-	while (!napi_thread_wait(napi))
-		napi_threaded_poll_loop(napi);
+	while (!napi_thread_wait(napi)) {
+		val = READ_ONCE(napi->state);
+
+		want_busy_poll = val & NAPIF_STATE_THREADED_BUSY_POLL;
+		in_busy_poll = val & NAPIF_STATE_IN_BUSY_POLL;
+
+		if (unlikely(val & NAPIF_STATE_DISABLE))
+			want_busy_poll = false;
+
+		if (want_busy_poll != in_busy_poll)
+			assign_bit(NAPI_STATE_IN_BUSY_POLL, &napi->state,
+				   want_busy_poll);
+
+		napi_threaded_poll_loop(napi, want_busy_poll);
+	}
 
 	return 0;
 }
@@ -9885,7 +9975,7 @@ DECLARE_RWSEM(dev_addr_sem);
 /* "sa" is a true struct sockaddr with limited "sa_data" member. */
 int netif_get_mac_address(struct sockaddr *sa, struct net *net, char *dev_name)
 {
-	size_t size = sizeof(sa->sa_data_min);
+	size_t size = sizeof(sa->sa_data);
 	struct net_device *dev;
 	int ret = 0;
 
@@ -11429,6 +11519,14 @@ int netdev_refcnt_read(const struct net_device *dev)
 }
 EXPORT_SYMBOL(netdev_refcnt_read);
 
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+static void dump_netdev_trace_buffer(const struct net_device *dev);
+static void erase_netdev_trace_buffer(const struct net_device *dev);
+#else
+static inline void dump_netdev_trace_buffer(const struct net_device *dev) { }
+static inline void erase_netdev_trace_buffer(const struct net_device *dev) { }
+#endif
+
 int netdev_unregister_timeout_secs __read_mostly = 10;
 
 #define WAIT_REFS_MIN_MSECS 1
@@ -11502,11 +11600,16 @@ static struct net_device *netdev_wait_allrefs_any(struct list_head *list)
 
 		if (time_after(jiffies, warning_time +
 			       READ_ONCE(netdev_unregister_timeout_secs) * HZ)) {
+			rtnl_lock();
 			list_for_each_entry(dev, list, todo_list) {
 				pr_emerg("unregister_netdevice: waiting for %s to become free. Usage count = %d\n",
 					 dev->name, netdev_refcnt_read(dev));
 				ref_tracker_dir_print(&dev->refcnt_tracker, 10);
+				call_netdevice_notifiers(NETDEV_DEBUG_UNREGISTER, dev);
+				dump_netdev_trace_buffer(dev);
 			}
+			__rtnl_unlock();
+			rcu_barrier();
 
 			warning_time = jiffies;
 		}
@@ -11904,6 +12007,9 @@ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 
 	dev->priv_len = sizeof_priv;
 
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+	INIT_LIST_HEAD(&dev->netdev_trace_buffer_list);
+#endif
 	ref_tracker_dir_init(&dev->refcnt_tracker, 128, "netdev");
 #ifdef CONFIG_PCPU_DEV_REFCNT
 	dev->pcpu_refcnt = alloc_percpu(int);
@@ -12075,6 +12181,8 @@ void free_netdev(struct net_device *dev)
 	netdev_free_phy_link_topology(dev);
 
 	mutex_destroy(&dev->lock);
+
+	erase_netdev_trace_buffer(dev);
 
 	/*  Compatibility with error handling in drivers */
 	if (dev->reg_state == NETREG_UNINITIALIZED ||
@@ -12646,6 +12754,94 @@ netdev_features_t netdev_increment_features(netdev_features_t all,
 }
 EXPORT_SYMBOL(netdev_increment_features);
 
+/**
+ *	netdev_compute_master_upper_features - compute feature from lowers
+ *	@dev: the upper device
+ *	@update_header: whether to update upper device's header_len/headroom/tailroom
+ *
+ *	Recompute the upper device's feature based on all lower devices.
+ */
+void netdev_compute_master_upper_features(struct net_device *dev, bool update_header)
+{
+	unsigned int dst_release_flag = IFF_XMIT_DST_RELEASE | IFF_XMIT_DST_RELEASE_PERM;
+	netdev_features_t gso_partial_features = MASTER_UPPER_DEV_GSO_PARTIAL_FEATURES;
+	netdev_features_t xfrm_features = MASTER_UPPER_DEV_XFRM_FEATURES;
+	netdev_features_t mpls_features = MASTER_UPPER_DEV_MPLS_FEATURES;
+	netdev_features_t vlan_features = MASTER_UPPER_DEV_VLAN_FEATURES;
+	netdev_features_t enc_features = MASTER_UPPER_DEV_ENC_FEATURES;
+	unsigned short max_header_len = ETH_HLEN;
+	unsigned int tso_max_size = TSO_MAX_SIZE;
+	unsigned short max_headroom = 0;
+	unsigned short max_tailroom = 0;
+	u16 tso_max_segs = TSO_MAX_SEGS;
+	struct net_device *lower_dev;
+	struct list_head *iter;
+
+	mpls_features = netdev_base_features(mpls_features);
+	vlan_features = netdev_base_features(vlan_features);
+	enc_features = netdev_base_features(enc_features);
+
+	netdev_for_each_lower_dev(dev, lower_dev, iter) {
+		gso_partial_features = netdev_increment_features(gso_partial_features,
+								 lower_dev->gso_partial_features,
+								 MASTER_UPPER_DEV_GSO_PARTIAL_FEATURES);
+
+		vlan_features = netdev_increment_features(vlan_features,
+							  lower_dev->vlan_features,
+							  MASTER_UPPER_DEV_VLAN_FEATURES);
+
+		enc_features = netdev_increment_features(enc_features,
+							 lower_dev->hw_enc_features,
+							 MASTER_UPPER_DEV_ENC_FEATURES);
+
+		if (IS_ENABLED(CONFIG_XFRM_OFFLOAD))
+			xfrm_features = netdev_increment_features(xfrm_features,
+								  lower_dev->hw_enc_features,
+								  MASTER_UPPER_DEV_XFRM_FEATURES);
+
+		mpls_features = netdev_increment_features(mpls_features,
+							  lower_dev->mpls_features,
+							  MASTER_UPPER_DEV_MPLS_FEATURES);
+
+		dst_release_flag &= lower_dev->priv_flags;
+
+		if (update_header) {
+			max_header_len = max(max_header_len, lower_dev->hard_header_len);
+			max_headroom = max(max_headroom, lower_dev->needed_headroom);
+			max_tailroom = max(max_tailroom, lower_dev->needed_tailroom);
+		}
+
+		tso_max_size = min(tso_max_size, lower_dev->tso_max_size);
+		tso_max_segs = min(tso_max_segs, lower_dev->tso_max_segs);
+	}
+
+	dev->gso_partial_features = gso_partial_features;
+	dev->vlan_features = vlan_features;
+	dev->hw_enc_features = enc_features | NETIF_F_GSO_ENCAP_ALL |
+			       NETIF_F_HW_VLAN_CTAG_TX |
+			       NETIF_F_HW_VLAN_STAG_TX;
+	if (IS_ENABLED(CONFIG_XFRM_OFFLOAD))
+		dev->hw_enc_features |= xfrm_features;
+	dev->mpls_features = mpls_features;
+
+	dev->priv_flags &= ~IFF_XMIT_DST_RELEASE;
+	if ((dev->priv_flags & IFF_XMIT_DST_RELEASE_PERM) &&
+	    dst_release_flag == (IFF_XMIT_DST_RELEASE | IFF_XMIT_DST_RELEASE_PERM))
+		dev->priv_flags |= IFF_XMIT_DST_RELEASE;
+
+	if (update_header) {
+		dev->hard_header_len = max_header_len;
+		dev->needed_headroom = max_headroom;
+		dev->needed_tailroom = max_tailroom;
+	}
+
+	netif_set_tso_max_segs(dev, tso_max_segs);
+	netif_set_tso_max_size(dev, tso_max_size);
+
+	netdev_change_features(dev);
+}
+EXPORT_SYMBOL(netdev_compute_master_upper_features);
+
 static struct hlist_head * __net_init netdev_create_hash(void)
 {
 	int i;
@@ -12959,7 +13155,7 @@ static void run_backlog_napi(unsigned int cpu)
 {
 	struct softnet_data *sd = per_cpu_ptr(&softnet_data, cpu);
 
-	napi_threaded_poll_loop(&sd->backlog);
+	napi_threaded_poll_loop(&sd->backlog, false);
 }
 
 static void backlog_napi_setup(unsigned int cpu)
@@ -13090,3 +13286,180 @@ out:
 }
 
 subsys_initcall(net_dev_init);
+
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+
+#define NETDEV_TRACE_BUFFER_SIZE 32768
+static struct netdev_trace_buffer {
+	struct list_head list;
+	int prev_count;
+	atomic_t count;
+	int nr_entries;
+	unsigned long entries[20];
+} netdev_trace_buffer[NETDEV_TRACE_BUFFER_SIZE];
+static LIST_HEAD(netdev_trace_buffer_list);
+static DEFINE_SPINLOCK(netdev_trace_buffer_lock);
+static bool netdev_trace_buffer_exhausted;
+
+static int netdev_trace_buffer_init(void)
+{
+	int i;
+
+	for (i = 0; i < NETDEV_TRACE_BUFFER_SIZE; i++)
+		list_add_tail(&netdev_trace_buffer[i].list, &netdev_trace_buffer_list);
+	return 0;
+}
+pure_initcall(netdev_trace_buffer_init);
+
+static void dump_netdev_trace_buffer(const struct net_device *dev)
+{
+	struct netdev_trace_buffer *ptr;
+	int count, balance = 0, pos = 0;
+
+	list_for_each_entry_rcu(ptr, &dev->netdev_trace_buffer_list, list,
+				/* list elements can't go away. */ 1) {
+		pos++;
+		count = atomic_read(&ptr->count);
+		balance += count;
+		if (ptr->prev_count == count)
+			continue;
+		ptr->prev_count = count;
+		pr_info("Call trace for %s[%d] %+d at\n", dev->name, pos, count);
+		stack_trace_print(ptr->entries, ptr->nr_entries, 4);
+		cond_resched();
+	}
+	if (!netdev_trace_buffer_exhausted)
+		pr_info("balance as of %s[%d] is %d\n", dev->name, pos, balance);
+}
+
+static void erase_netdev_trace_buffer(const struct net_device *dev)
+{
+	struct netdev_trace_buffer *ptr;
+	unsigned long flags;
+
+	spin_lock_irqsave(&netdev_trace_buffer_lock, flags);
+	while (!list_empty(&dev->netdev_trace_buffer_list)) {
+		ptr = list_first_entry(&dev->netdev_trace_buffer_list, typeof(*ptr), list);
+		list_del(&ptr->list);
+		list_add_tail(&ptr->list, &netdev_trace_buffer_list);
+	}
+	spin_unlock_irqrestore(&netdev_trace_buffer_lock, flags);
+}
+
+#ifdef CONFIG_KALLSYMS
+static noinline unsigned long __find_trim(unsigned long *entries, int nr_entries, const char *name)
+{
+	int i;
+	char buffer[KSYM_SYMBOL_LEN];
+	const int len = strlen(name);
+
+	for (i = 0; i < nr_entries; i++) {
+		snprintf(buffer, sizeof(buffer), "%pS", (void *)entries[i]);
+		if (!strncmp(buffer, name, len) && buffer[len] == '+')
+			return entries[i];
+	}
+	return 0;
+}
+
+static unsigned long caller_handle_softirqs;
+static unsigned long caller_process_one_work;
+static unsigned long caller_ksys_unshare;
+static unsigned long caller___sys_bind;
+static unsigned long caller___sock_sendmsg;
+
+static int __init net_check_symbols(void)
+{
+	if (!kallsyms_lookup_name("handle_softirqs"))
+		caller_handle_softirqs = -1;
+	if (!kallsyms_lookup_name("process_one_work"))
+		caller_process_one_work = -1;
+	if (!kallsyms_lookup_name("ksys_unshare"))
+		caller_ksys_unshare = -1;
+	if (!kallsyms_lookup_name("__sys_bind"))
+		caller___sys_bind = -1;
+	if (!kallsyms_lookup_name("sock_sendmsg_nosec") &&
+	    !kallsyms_lookup_name("__sock_sendmsg"))
+		caller___sock_sendmsg = -1;
+	return 0;
+}
+late_initcall(net_check_symbols);
+#endif
+
+int trim_netdev_trace(unsigned long *entries, int nr_entries)
+{
+#ifdef CONFIG_KALLSYMS
+	int i;
+
+	if (in_softirq()) {
+		if (unlikely(!caller_handle_softirqs))
+			caller_handle_softirqs = __find_trim(entries, nr_entries,
+							     "handle_softirqs");
+		for (i = 0; i < nr_entries; i++)
+			if (entries[i] == caller_handle_softirqs)
+				return i + 1;
+	} else if (current->flags & PF_WQ_WORKER) {
+		if (unlikely(!caller_process_one_work))
+			caller_process_one_work = __find_trim(entries, nr_entries,
+							      "process_one_work");
+		for (i = 0; i < nr_entries; i++)
+			if (entries[i] == caller_process_one_work)
+				return i + 1;
+	} else {
+		if (unlikely(!caller_ksys_unshare))
+			caller_ksys_unshare = __find_trim(entries, nr_entries, "ksys_unshare");
+		if (unlikely(!caller___sys_bind))
+			caller___sys_bind = __find_trim(entries, nr_entries, "__sys_bind");
+		if (unlikely(!caller___sock_sendmsg)) {
+			caller___sock_sendmsg = __find_trim(entries, nr_entries,
+							    "sock_sendmsg_nosec");
+			if (!caller___sock_sendmsg)
+				caller___sock_sendmsg = __find_trim(entries, nr_entries,
+								    "__sock_sendmsg");
+		}
+		for (i = 0; i < nr_entries; i++)
+			if (entries[i] == caller_ksys_unshare ||
+			    entries[i] == caller___sys_bind ||
+			    entries[i] == caller___sock_sendmsg)
+				return i + 1;
+	}
+#endif
+	return nr_entries;
+}
+EXPORT_SYMBOL(trim_netdev_trace);
+
+void save_netdev_trace_buffer(struct net_device *dev, int delta)
+{
+	struct netdev_trace_buffer *ptr;
+	unsigned long entries[ARRAY_SIZE(ptr->entries)];
+	unsigned long nr_entries;
+	unsigned long flags;
+
+	if (in_nmi())
+		return;
+	nr_entries = stack_trace_save(entries, ARRAY_SIZE(ptr->entries), 1);
+	nr_entries = trim_netdev_trace(entries, nr_entries);
+	list_for_each_entry_rcu(ptr, &dev->netdev_trace_buffer_list, list,
+				/* list elements can't go away. */ 1) {
+		if (ptr->nr_entries == nr_entries &&
+		    !memcmp(ptr->entries, entries, nr_entries * sizeof(unsigned long))) {
+			atomic_add(delta, &ptr->count);
+			return;
+		}
+	}
+	spin_lock_irqsave(&netdev_trace_buffer_lock, flags);
+	if (!list_empty(&netdev_trace_buffer_list)) {
+		ptr = list_first_entry(&netdev_trace_buffer_list, typeof(*ptr), list);
+		list_del(&ptr->list);
+		ptr->prev_count = 0;
+		atomic_set(&ptr->count, delta);
+		ptr->nr_entries = nr_entries;
+		memmove(ptr->entries, entries, nr_entries * sizeof(unsigned long));
+		list_add_tail_rcu(&ptr->list, &dev->netdev_trace_buffer_list);
+	} else {
+		netdev_trace_buffer_exhausted = true;
+	}
+	spin_unlock_irqrestore(&netdev_trace_buffer_lock, flags);
+}
+EXPORT_SYMBOL(save_netdev_trace_buffer);
+
+#endif
