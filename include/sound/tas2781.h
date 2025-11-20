@@ -122,6 +122,7 @@ enum audio_device {
 	TAS2781,
 	TAS5802,
 	TAS5815,
+	TAS5822,
 	TAS5825,
 	TAS5827,
 	TAS5828,
@@ -197,7 +198,6 @@ struct tasdevice_priv {
 	struct acoustic_data acou_data;
 #endif
 	struct tasdevice_fw *fmw;
-	struct gpio_desc *speaker_id;
 	struct gpio_desc *reset;
 	struct mutex codec_lock;
 	struct regmap *regmap;
@@ -215,6 +215,7 @@ struct tasdevice_priv {
 	unsigned int magic_num;
 	unsigned int chip_id;
 	unsigned int sysclk;
+	int speaker_id;
 
 	int irq;
 	int cur_prog;
