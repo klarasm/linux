@@ -529,14 +529,6 @@ enum {
 
 #define VM_STARTGAP_FLAGS (VM_GROWSDOWN | VM_SHADOW_STACK)
 
-
-
-#ifdef CONFIG_STACK_GROWSUP
-#define VM_STACK_EARLY	VMA_BIT(VMA_STACK_EARLY_BIT)
-#else
-#define VM_STACK_EARLY	VM_NONE
-#endif
-
 #ifdef CONFIG_MSEAL_SYSTEM_MAPPINGS
 #define VM_SEALED_SYSMAP	VM_SEALED
 #else
@@ -607,10 +599,9 @@ enum {
  * VMA flags we ignore for the purposes of merge, i.e. one VMA possessing one
  * of these flags and the other not does not preclude a merge.
  *
- * VM_STICKY - If one VMA has flags which must be 'sticky', that is ones
- *             which should propagate to all VMAs, but the other does not,
- *             the merge should still proceed with the merge logic applying
- *             sticky flags to the final VMA.
+ *    VM_STICKY - When merging VMAs, VMA flags must match, unless they are
+ *                'sticky'. If any sticky flags exist in either VMA, we simply
+ *                set all of them on the merged VMA.
  */
 #define VM_IGNORE_MERGE VM_STICKY
 
@@ -919,6 +910,7 @@ static inline void vma_init(struct vm_area_struct *vma, struct mm_struct *mm)
 static inline void vm_flags_init(struct vm_area_struct *vma,
 				 vm_flags_t flags)
 {
+	VM_WARN_ON_ONCE(!pgtable_supports_soft_dirty() && (flags & VM_SOFTDIRTY));
 	vma_flags_clear_all(&vma->flags);
 	vma_flags_overwrite_word(&vma->flags, flags);
 }
@@ -931,6 +923,7 @@ static inline void vm_flags_init(struct vm_area_struct *vma,
 static inline void vm_flags_reset(struct vm_area_struct *vma,
 				  vm_flags_t flags)
 {
+	VM_WARN_ON_ONCE(!pgtable_supports_soft_dirty() && (flags & VM_SOFTDIRTY));
 	vma_assert_write_locked(vma);
 	vm_flags_init(vma, flags);
 }
@@ -950,6 +943,7 @@ static inline void vm_flags_reset_once(struct vm_area_struct *vma,
 static inline void vm_flags_set(struct vm_area_struct *vma,
 				vm_flags_t flags)
 {
+	VM_WARN_ON_ONCE(!pgtable_supports_soft_dirty() && (flags & VM_SOFTDIRTY));
 	vma_start_write(vma);
 	vma_flags_set_word(&vma->flags, flags);
 }
