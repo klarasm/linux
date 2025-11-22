@@ -1,0 +1,72 @@
+/* SPDX-License-Identifier: MIT */
+/* Copyright © 2025 Intel Corporation x*/
+
+#ifndef __DISPLAY_PARENT_INTERFACE_H__
+#define __DISPLAY_PARENT_INTERFACE_H__
+
+#include <linux/types.h>
+
+struct dma_fence;
+struct drm_device;
+struct ref_tracker;
+
+struct intel_display_rpm_interface {
+	struct ref_tracker *(*get)(const struct drm_device *drm);
+	struct ref_tracker *(*get_raw)(const struct drm_device *drm);
+	struct ref_tracker *(*get_if_in_use)(const struct drm_device *drm);
+	struct ref_tracker *(*get_noresume)(const struct drm_device *drm);
+
+	void (*put)(const struct drm_device *drm, struct ref_tracker *wakeref);
+	void (*put_raw)(const struct drm_device *drm, struct ref_tracker *wakeref);
+	void (*put_unchecked)(const struct drm_device *drm);
+
+	bool (*suspended)(const struct drm_device *drm);
+	void (*assert_held)(const struct drm_device *drm);
+	void (*assert_block)(const struct drm_device *drm);
+	void (*assert_unblock)(const struct drm_device *drm);
+};
+
+struct intel_display_irq_interface {
+	bool (*enabled)(struct drm_device *drm);
+	void (*synchronize)(struct drm_device *drm);
+};
+
+struct intel_display_rps_interface {
+	void (*boost_if_not_started)(struct dma_fence *fence);
+	void (*mark_interactive)(struct drm_device *drm, bool interactive);
+	void (*ilk_irq_handler)(struct drm_device *drm);
+};
+
+/**
+ * struct intel_display_parent_interface - services parent driver provides to display
+ *
+ * The parent, or core, driver provides a pointer to this structure to display
+ * driver when calling intel_display_device_probe(). The display driver uses it
+ * to access services provided by the parent driver. The structure may contain
+ * sub-struct pointers to group function pointers by functionality.
+ *
+ * All function and sub-struct pointers must be initialized and callable unless
+ * explicitly marked as "optional" below. The display driver will only NULL
+ * check the optional pointers.
+ */
+struct intel_display_parent_interface {
+	/** @rpm: Runtime PM functions */
+	const struct intel_display_rpm_interface *rpm;
+
+	/** @irq: IRQ interface */
+	const struct intel_display_irq_interface *irq;
+
+	/** @rpm: RPS interface. Optional. */
+	const struct intel_display_rps_interface *rps;
+
+	/** @vgpu_active: Is vGPU active? Optional. */
+	bool (*vgpu_active)(struct drm_device *drm);
+
+	/** @has_fenced_regions: Support legacy fencing? Optional. */
+	bool (*has_fenced_regions)(struct drm_device *drm);
+
+	/** @fence_priority_display: Set display priority. Optional. */
+	void (*fence_priority_display)(struct dma_fence *fence);
+};
+
+#endif

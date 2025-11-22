@@ -6,6 +6,7 @@
 #include <linux/string_helpers.h>
 
 #include <drm/drm_managed.h>
+#include <drm/drm_print.h>
 
 #include "../display/intel_display_core.h" /* FIXME */
 
@@ -266,97 +267,175 @@ static int intel_dimm_num_devices(const struct dram_dimm_info *dimm)
 }
 
 /* Returns total Gb for the whole DIMM */
-static int skl_get_dimm_size(u16 val)
+static int skl_get_dimm_s_size(u32 val)
 {
-	return (val & SKL_DRAM_SIZE_MASK) * 8;
+	return REG_FIELD_GET(SKL_DIMM_S_SIZE_MASK, val) * 8;
 }
 
-static int skl_get_dimm_width(u16 val)
+static int skl_get_dimm_l_size(u32 val)
 {
-	if (skl_get_dimm_size(val) == 0)
+	return REG_FIELD_GET(SKL_DIMM_L_SIZE_MASK, val) * 8;
+}
+
+static int skl_get_dimm_s_width(u32 val)
+{
+	if (skl_get_dimm_s_size(val) == 0)
 		return 0;
 
-	switch (val & SKL_DRAM_WIDTH_MASK) {
-	case SKL_DRAM_WIDTH_X8:
-	case SKL_DRAM_WIDTH_X16:
-	case SKL_DRAM_WIDTH_X32:
-		val = (val & SKL_DRAM_WIDTH_MASK) >> SKL_DRAM_WIDTH_SHIFT;
-		return 8 << val;
+	switch (val & SKL_DIMM_S_WIDTH_MASK) {
+	case SKL_DIMM_S_WIDTH_X8:
+	case SKL_DIMM_S_WIDTH_X16:
+	case SKL_DIMM_S_WIDTH_X32:
+		return 8 << REG_FIELD_GET(SKL_DIMM_S_WIDTH_MASK, val);
 	default:
 		MISSING_CASE(val);
 		return 0;
 	}
 }
 
-static int skl_get_dimm_ranks(u16 val)
+static int skl_get_dimm_l_width(u32 val)
 {
-	if (skl_get_dimm_size(val) == 0)
+	if (skl_get_dimm_l_size(val) == 0)
 		return 0;
 
-	val = (val & SKL_DRAM_RANK_MASK) >> SKL_DRAM_RANK_SHIFT;
+	switch (val & SKL_DIMM_L_WIDTH_MASK) {
+	case SKL_DIMM_L_WIDTH_X8:
+	case SKL_DIMM_L_WIDTH_X16:
+	case SKL_DIMM_L_WIDTH_X32:
+		return 8 << REG_FIELD_GET(SKL_DIMM_L_WIDTH_MASK, val);
+	default:
+		MISSING_CASE(val);
+		return 0;
+	}
+}
 
-	return val + 1;
+static int skl_get_dimm_s_ranks(u32 val)
+{
+	if (skl_get_dimm_s_size(val) == 0)
+		return 0;
+
+	return REG_FIELD_GET(SKL_DIMM_S_RANK_MASK, val) + 1;
+}
+
+static int skl_get_dimm_l_ranks(u32 val)
+{
+	if (skl_get_dimm_l_size(val) == 0)
+		return 0;
+
+	return REG_FIELD_GET(SKL_DIMM_L_RANK_MASK, val) + 1;
 }
 
 /* Returns total Gb for the whole DIMM */
-static int icl_get_dimm_size(u16 val)
+static int icl_get_dimm_s_size(u32 val)
 {
-	return (val & ICL_DRAM_SIZE_MASK) * 8 / 2;
+	return REG_FIELD_GET(ICL_DIMM_S_SIZE_MASK, val) * 8 / 2;
 }
 
-static int icl_get_dimm_width(u16 val)
+static int icl_get_dimm_l_size(u32 val)
 {
-	if (icl_get_dimm_size(val) == 0)
+	return REG_FIELD_GET(ICL_DIMM_L_SIZE_MASK, val) * 8 / 2;
+}
+
+static int icl_get_dimm_s_width(u32 val)
+{
+	if (icl_get_dimm_s_size(val) == 0)
 		return 0;
 
-	switch (val & ICL_DRAM_WIDTH_MASK) {
-	case ICL_DRAM_WIDTH_X8:
-	case ICL_DRAM_WIDTH_X16:
-	case ICL_DRAM_WIDTH_X32:
-		val = (val & ICL_DRAM_WIDTH_MASK) >> ICL_DRAM_WIDTH_SHIFT;
-		return 8 << val;
+	switch (val & ICL_DIMM_S_WIDTH_MASK) {
+	case ICL_DIMM_S_WIDTH_X8:
+	case ICL_DIMM_S_WIDTH_X16:
+	case ICL_DIMM_S_WIDTH_X32:
+		return 8 << REG_FIELD_GET(ICL_DIMM_S_WIDTH_MASK, val);
 	default:
 		MISSING_CASE(val);
 		return 0;
 	}
 }
 
-static int icl_get_dimm_ranks(u16 val)
+static int icl_get_dimm_l_width(u32 val)
 {
-	if (icl_get_dimm_size(val) == 0)
+	if (icl_get_dimm_l_size(val) == 0)
 		return 0;
 
-	val = (val & ICL_DRAM_RANK_MASK) >> ICL_DRAM_RANK_SHIFT;
+	switch (val & ICL_DIMM_L_WIDTH_MASK) {
+	case ICL_DIMM_L_WIDTH_X8:
+	case ICL_DIMM_L_WIDTH_X16:
+	case ICL_DIMM_L_WIDTH_X32:
+		return 8 << REG_FIELD_GET(ICL_DIMM_L_WIDTH_MASK, val);
+	default:
+		MISSING_CASE(val);
+		return 0;
+	}
+}
 
-	return val + 1;
+static int icl_get_dimm_s_ranks(u32 val)
+{
+	if (icl_get_dimm_s_size(val) == 0)
+		return 0;
+
+	return REG_FIELD_GET(ICL_DIMM_S_RANK_MASK, val) + 1;
+}
+
+static int icl_get_dimm_l_ranks(u32 val)
+{
+	if (icl_get_dimm_l_size(val) == 0)
+		return 0;
+
+	return REG_FIELD_GET(ICL_DIMM_L_RANK_MASK, val) + 1;
 }
 
 static bool
 skl_is_16gb_dimm(const struct dram_dimm_info *dimm)
 {
 	/* Convert total Gb to Gb per DRAM device */
-	return dimm->size / (intel_dimm_num_devices(dimm) ?: 1) == 16;
+	return dimm->size / (intel_dimm_num_devices(dimm) ?: 1) >= 16;
 }
 
 static void
-skl_dram_get_dimm_info(struct drm_i915_private *i915,
-		       struct dram_dimm_info *dimm,
-		       int channel, char dimm_name, u16 val)
+skl_dram_print_dimm_info(struct drm_i915_private *i915,
+			 struct dram_dimm_info *dimm,
+			 int channel, char dimm_name)
 {
-	if (GRAPHICS_VER(i915) >= 11) {
-		dimm->size = icl_get_dimm_size(val);
-		dimm->width = icl_get_dimm_width(val);
-		dimm->ranks = icl_get_dimm_ranks(val);
-	} else {
-		dimm->size = skl_get_dimm_size(val);
-		dimm->width = skl_get_dimm_width(val);
-		dimm->ranks = skl_get_dimm_ranks(val);
-	}
-
 	drm_dbg_kms(&i915->drm,
-		    "CH%u DIMM %c size: %u Gb, width: X%u, ranks: %u, 16Gb DIMMs: %s\n",
+		    "CH%u DIMM %c size: %u Gb, width: X%u, ranks: %u, 16Gb+ DIMMs: %s\n",
 		    channel, dimm_name, dimm->size, dimm->width, dimm->ranks,
 		    str_yes_no(skl_is_16gb_dimm(dimm)));
+}
+
+static void
+skl_dram_get_dimm_l_info(struct drm_i915_private *i915,
+			 struct dram_dimm_info *dimm,
+			 int channel, u32 val)
+{
+	if (GRAPHICS_VER(i915) >= 11) {
+		dimm->size = icl_get_dimm_l_size(val);
+		dimm->width = icl_get_dimm_l_width(val);
+		dimm->ranks = icl_get_dimm_l_ranks(val);
+	} else {
+		dimm->size = skl_get_dimm_l_size(val);
+		dimm->width = skl_get_dimm_l_width(val);
+		dimm->ranks = skl_get_dimm_l_ranks(val);
+	}
+
+	skl_dram_print_dimm_info(i915, dimm, channel, 'L');
+}
+
+static void
+skl_dram_get_dimm_s_info(struct drm_i915_private *i915,
+			 struct dram_dimm_info *dimm,
+			 int channel, u32 val)
+{
+	if (GRAPHICS_VER(i915) >= 11) {
+		dimm->size = icl_get_dimm_s_size(val);
+		dimm->width = icl_get_dimm_s_width(val);
+		dimm->ranks = icl_get_dimm_s_ranks(val);
+	} else {
+		dimm->size = skl_get_dimm_s_size(val);
+		dimm->width = skl_get_dimm_s_width(val);
+		dimm->ranks = skl_get_dimm_s_ranks(val);
+	}
+
+	skl_dram_print_dimm_info(i915, dimm, channel, 'S');
 }
 
 static int
@@ -364,10 +443,8 @@ skl_dram_get_channel_info(struct drm_i915_private *i915,
 			  struct dram_channel_info *ch,
 			  int channel, u32 val)
 {
-	skl_dram_get_dimm_info(i915, &ch->dimm_l,
-			       channel, 'L', val & 0xffff);
-	skl_dram_get_dimm_info(i915, &ch->dimm_s,
-			       channel, 'S', val >> 16);
+	skl_dram_get_dimm_l_info(i915, &ch->dimm_l, channel, val);
+	skl_dram_get_dimm_s_info(i915, &ch->dimm_s, channel, val);
 
 	if (ch->dimm_l.size == 0 && ch->dimm_s.size == 0) {
 		drm_dbg_kms(&i915->drm, "CH%u not populated\n", channel);
@@ -384,7 +461,7 @@ skl_dram_get_channel_info(struct drm_i915_private *i915,
 	ch->is_16gb_dimm = skl_is_16gb_dimm(&ch->dimm_l) ||
 		skl_is_16gb_dimm(&ch->dimm_s);
 
-	drm_dbg_kms(&i915->drm, "CH%u ranks: %u, 16Gb DIMMs: %s\n",
+	drm_dbg_kms(&i915->drm, "CH%u ranks: %u, 16Gb+ DIMMs: %s\n",
 		    channel, ch->ranks, str_yes_no(ch->is_16gb_dimm));
 
 	return 0;
@@ -406,7 +483,7 @@ skl_dram_get_channels_info(struct drm_i915_private *i915, struct dram_info *dram
 	u32 val;
 	int ret;
 
-	/* Assume 16Gb DIMMs are present until proven otherwise */
+	/* Assume 16Gb+ DIMMs are present until proven otherwise */
 	dram_info->has_16gb_dimms = true;
 
 	val = intel_uncore_read(&i915->uncore,
@@ -438,7 +515,7 @@ skl_dram_get_channels_info(struct drm_i915_private *i915, struct dram_info *dram
 	drm_dbg_kms(&i915->drm, "Memory configuration is symmetric? %s\n",
 		    str_yes_no(dram_info->symmetric_memory));
 
-	drm_dbg_kms(&i915->drm, "16Gb DIMMs: %s\n",
+	drm_dbg_kms(&i915->drm, "16Gb+ DIMMs: %s\n",
 		    str_yes_no(dram_info->has_16gb_dimms));
 
 	return 0;
@@ -685,6 +762,7 @@ static int gen12_get_dram_info(struct drm_i915_private *i915, struct dram_info *
 
 static int xelpdp_get_dram_info(struct drm_i915_private *i915, struct dram_info *dram_info)
 {
+	struct intel_display *display = i915->display;
 	u32 val = intel_uncore_read(&i915->uncore, MTL_MEM_SS_INFO_GLOBAL);
 
 	switch (REG_FIELD_GET(MTL_DDR_TYPE_MASK, val)) {
@@ -722,6 +800,9 @@ static int xelpdp_get_dram_info(struct drm_i915_private *i915, struct dram_info 
 	dram_info->num_channels = REG_FIELD_GET(MTL_N_OF_POPULATED_CH_MASK, val);
 	dram_info->num_qgv_points = REG_FIELD_GET(MTL_N_OF_ENABLED_QGV_POINTS_MASK, val);
 	/* PSF GV points not supported in D14+ */
+
+	if (DISPLAY_VER(display) >= 35)
+		dram_info->ecc_impacting_de_bw = REG_FIELD_GET(XE3P_ECC_IMPACTING_DE, val);
 
 	return 0;
 }
