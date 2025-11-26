@@ -22,23 +22,6 @@
 #include <linux/nsfs.h>
 #include "kselftest_harness.h"
 
-/* Fixture for tests that create child processes */
-FIXTURE(nsid) {
-	pid_t child_pid;
-};
-
-FIXTURE_SETUP(nsid) {
-	self->child_pid = 0;
-}
-
-FIXTURE_TEARDOWN(nsid) {
-	/* Clean up any child process that may still be running */
-	if (self->child_pid > 0) {
-		kill(self->child_pid, SIGKILL);
-		waitpid(self->child_pid, NULL, 0);
-	}
-}
-
 TEST(nsid_mntns_basic)
 {
 	__u64 mnt_ns_id = 0;
