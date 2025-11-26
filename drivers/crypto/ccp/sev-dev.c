@@ -259,27 +259,20 @@ static int sev_cmd_buffer_len(int cmd)
 
 static struct file *open_file_as_root(const char *filename, int flags, umode_t mode)
 {
-	struct file *fp;
-	struct path root;
-	struct cred *cred;
-	const struct cred *old_cred;
+	struct path root __free(path_put) = {};
 
 	task_lock(&init_task);
 	get_fs_root(init_task.fs, &root);
 	task_unlock(&init_task);
 
-	cred = prepare_creds();
+	CLASS(prepare_creds, cred)();
 	if (!cred)
 		return ERR_PTR(-ENOMEM);
+
 	cred->fsuid = GLOBAL_ROOT_UID;
-	old_cred = override_creds(cred);
 
-	fp = file_open_root(&root, filename, flags, mode);
-	path_put(&root);
-
-	put_cred(revert_creds(old_cred));
-
-	return fp;
+	scoped_with_creds(cred)
+		return file_open_root(&root, filename, flags, mode);
 }
 
 static int sev_read_init_ex_file(void)
@@ -2776,6 +2769,43 @@ void sev_platform_shutdown(void)
 	sev_firmware_shutdown(psp_master->sev_data);
 }
 EXPORT_SYMBOL_GPL(sev_platform_shutdown);
+
+u64 sev_get_snp_policy_bits(void)
+{
+	struct psp_device *psp = psp_master;
+	struct sev_device *sev;
+	u64 policy_bits;
+
+	if (!cc_platform_has(CC_ATTR_HOST_SEV_SNP))
+		return 0;
+
+	if (!psp || !psp->sev_data)
+		return 0;
+
+	sev = psp->sev_data;
+
+	policy_bits = SNP_POLICY_MASK_BASE;
+
+	if (sev->snp_plat_status.feature_info) {
+		if (sev->snp_feat_info_0.ecx & SNP_RAPL_DISABLE_SUPPORTED)
+			policy_bits |= SNP_POLICY_MASK_RAPL_DIS;
+
+		if (sev->snp_feat_info_0.ecx & SNP_CIPHER_TEXT_HIDING_SUPPORTED)
+			policy_bits |= SNP_POLICY_MASK_CIPHERTEXT_HIDING_DRAM;
+
+		if (sev->snp_feat_info_0.ecx & SNP_AES_256_XTS_POLICY_SUPPORTED)
+			policy_bits |= SNP_POLICY_MASK_MEM_AES_256_XTS;
+
+		if (sev->snp_feat_info_0.ecx & SNP_CXL_ALLOW_POLICY_SUPPORTED)
+			policy_bits |= SNP_POLICY_MASK_CXL_ALLOW;
+
+		if (sev_version_greater_or_equal(1, 58))
+			policy_bits |= SNP_POLICY_MASK_PAGE_SWAP_DISABLE;
+	}
+
+	return policy_bits;
+}
+EXPORT_SYMBOL_GPL(sev_get_snp_policy_bits);
 
 void sev_dev_destroy(struct psp_device *psp)
 {
