@@ -524,7 +524,7 @@ static int r4k_vpn_cmp(const void *a, const void *b)
  */
 static void r4k_tlb_uniquify(void)
 {
-	unsigned long tlb_vpns[1 << MIPS_CONF1_TLBS_SIZE];
+	unsigned long tlb_vpns[256];
 	int tlbsize = current_cpu_data.tlbsize;
 	int start = num_wired_entries();
 	unsigned long vpn_mask;
