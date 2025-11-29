@@ -80,6 +80,12 @@ config HAVE_DYNAMIC_FTRACE_NO_PATCHABLE
 	  If the architecture generates __patchable_function_entries sections
 	  but does not want them included in the ftrace locations.
 
+config HAVE_DYNAMIC_FTRACE_WITH_JMP
+	bool
+	help
+	  If the architecture supports to replace the __fentry__ with a
+	  "jmp" instruction.
+
 config HAVE_SYSCALL_TRACEPOINTS
 	bool
 	help
@@ -330,6 +336,12 @@ config DYNAMIC_FTRACE_WITH_ARGS
 	depends on DYNAMIC_FTRACE
 	depends on HAVE_DYNAMIC_FTRACE_WITH_ARGS
 
+config DYNAMIC_FTRACE_WITH_JMP
+	def_bool y
+	depends on DYNAMIC_FTRACE
+	depends on DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+	depends on HAVE_DYNAMIC_FTRACE_WITH_JMP
+
 config FPROBE
 	bool "Kernel Function Probe (fprobe)"
 	depends on HAVE_FUNCTION_GRAPH_FREGS && HAVE_FTRACE_GRAPH_FUNC
@@ -574,6 +586,20 @@ config FTRACE_SYSCALLS
 	select KALLSYMS
 	help
 	  Basic tracer to catch the syscall entry and exit events.
+
+config TRACE_SYSCALL_BUF_SIZE_DEFAULT
+	int "System call user read max size"
+	range 0 165
+	default 63
+	depends on FTRACE_SYSCALLS
+	help
+	 Some system call trace events will record the data from a user
+	 space address that one of the parameters point to. The amount of
+	 data per event is limited. That limit is set by this config and
+	 this config also affects how much user space data perf can read.
+
+	 For a tracing instance, this size may be changed by writing into
+	 its syscall_user_buf_size file.
 
 config TRACER_SNAPSHOT
 	bool "Create a snapshot trace buffer"
