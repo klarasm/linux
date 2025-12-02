@@ -386,28 +386,52 @@ static void __lru_cache_activate_folio(struct folio *folio)
 
 #ifdef CONFIG_LRU_GEN
 
-static void lru_gen_inc_refs(struct folio *folio)
+static void folio_inc_lru_refs(struct folio *folio)
 {
 	unsigned long new_flags, old_flags = READ_ONCE(folio->flags.f);
+	int new_gen, old_gen, max_gen, min_gen;
+	int type = folio_is_file_lru(folio);
+	struct lru_gen_folio *lrugen;
+	int refs;
 
 	if (folio_test_unevictable(folio))
 		return;
 
 	/* see the comment on LRU_REFS_FLAGS */
-	if (!folio_test_referenced(folio)) {
-		set_mask_bits(&folio->flags.f, LRU_REFS_MASK, BIT(PG_referenced));
-		return;
-	}
-
 	do {
-		if ((old_flags & LRU_REFS_MASK) == LRU_REFS_MASK) {
-			if (!folio_test_workingset(folio))
-				folio_set_workingset(folio);
-			return;
+		old_gen = lru_gen_from_flags(old_flags);
+		refs = lru_refs_from_flags(old_flags);
+
+		new_flags = old_flags;
+		new_gen = old_gen;
+		if (refs == LRU_REFS_MAX) {
+			/* Promote to next gen if lru_refs is full */
+			if (old_gen >= 0) {
+				lrugen = &folio_lruvec(folio)->lrugen;
+				max_gen = lru_gen_from_seq(READ_ONCE(lrugen->max_seq));
+				if (old_gen != max_gen)
+					new_gen = (old_gen + 1UL) % MAX_NR_GENS;
+			}
+		} else if (refs >= LRU_REFS_REFERENCED) {
+			/* Promote workingset folio to second oldest gen */
+			if (old_gen >= 0) {
+				lrugen = &folio_lruvec(folio)->lrugen;
+				min_gen = lru_gen_from_seq(READ_ONCE(lrugen->min_seq[type]));
+				if (old_gen == min_gen)
+					new_gen = (old_gen + 1UL) % MAX_NR_GENS;
+			}
 		}
 
-		new_flags = old_flags + BIT(LRU_REFS_PGOFF);
+		if (new_gen == old_gen) {
+			lru_refs_set_flags(&new_flags, min(refs + 1, LRU_REFS_MAX));
+		} else {
+			lru_gen_set_flags(&new_flags, new_gen);
+			lru_refs_set_flags(&new_flags, LRU_REFS_WORKINGSET);
+		}
 	} while (!try_cmpxchg(&folio->flags.f, &old_flags, new_flags));
+
+	if (new_gen != old_gen)
+		lru_gen_update_size(folio_lruvec(folio), folio, old_gen, new_gen);
 }
 
 static bool lru_gen_clear_refs(struct folio *folio)
@@ -419,7 +443,7 @@ static bool lru_gen_clear_refs(struct folio *folio)
 	if (gen < 0)
 		return true;
 
-	set_mask_bits(&folio->flags.f, LRU_REFS_FLAGS | BIT(PG_workingset), 0);
+	folio_set_lru_refs(folio, 0);
 
 	lrugen = &folio_lruvec(folio)->lrugen;
 	/* whether can do without shuffling under the LRU lock */
@@ -428,7 +452,7 @@ static bool lru_gen_clear_refs(struct folio *folio)
 
 #else /* !CONFIG_LRU_GEN */
 
-static void lru_gen_inc_refs(struct folio *folio)
+static void folio_inc_lru_refs(struct folio *folio)
 {
 }
 
@@ -450,19 +474,19 @@ static bool lru_gen_clear_refs(struct folio *folio)
  * * active,unreferenced	->	active,referenced
  *
  * When a newly allocated folio is not yet visible, so safe for non-atomic ops,
- * __folio_set_referenced() may be substituted for folio_mark_accessed().
+ * __folio_init_referenced() may be substituted for folio_mark_accessed().
  */
 void folio_mark_accessed(struct folio *folio)
 {
 	if (folio_test_dropbehind(folio))
 		return;
 	if (lru_gen_enabled()) {
-		lru_gen_inc_refs(folio);
+		folio_inc_lru_refs(folio);
 		return;
 	}
 
-	if (!folio_test_referenced(folio)) {
-		folio_set_referenced(folio);
+	if (!folio_is_referenced_by_bit(folio)) {
+		folio_mark_referenced_by_bit(folio);
 	} else if (folio_test_unevictable(folio)) {
 		/*
 		 * Unevictable pages are on the "LRU_UNEVICTABLE" list. But,
@@ -480,8 +504,7 @@ void folio_mark_accessed(struct folio *folio)
 			folio_activate(folio);
 		else
 			__lru_cache_activate_folio(folio);
-		folio_clear_referenced(folio);
-		workingset_activation(folio);
+		folio_clear_referenced_by_bit(folio);
 	}
 	if (folio_test_idle(folio))
 		folio_clear_idle(folio);
@@ -565,7 +588,7 @@ static void lru_deactivate_file(struct lruvec *lruvec, struct folio *folio)
 
 	lruvec_del_folio(lruvec, folio);
 	folio_clear_active(folio);
-	folio_clear_referenced(folio);
+	folio_clear_referenced_by_bit(folio);
 
 	if (folio_test_writeback(folio) || folio_test_dirty(folio)) {
 		/*
@@ -601,7 +624,7 @@ static void lru_deactivate(struct lruvec *lruvec, struct folio *folio)
 
 	lruvec_del_folio(lruvec, folio);
 	folio_clear_active(folio);
-	folio_clear_referenced(folio);
+	folio_clear_referenced_by_bit(folio);
 	lruvec_add_folio(lruvec, folio);
 
 	__count_vm_events(PGDEACTIVATE, nr_pages);
@@ -621,7 +644,7 @@ static void lru_lazyfree(struct lruvec *lruvec, struct folio *folio)
 	if (lru_gen_enabled())
 		lru_gen_clear_refs(folio);
 	else
-		folio_clear_referenced(folio);
+		folio_clear_referenced_by_bit(folio);
 	/*
 	 * Lazyfree folios are clean anonymous folios.  They have
 	 * the swapbacked flag cleared, to distinguish them from normal
