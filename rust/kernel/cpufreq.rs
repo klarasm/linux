@@ -893,9 +893,9 @@ pub trait Driver {
 ///     fn probe(
 ///         pdev: &platform::Device<Core>,
 ///         _id_info: Option<&Self::IdInfo>,
-///     ) -> Result<Pin<KBox<Self>>> {
+///     ) -> impl PinInit<Self, Error> {
 ///         cpufreq::Registration::<SampleDriver>::new_foreign_owned(pdev.as_ref())?;
-///         Ok(KBox::new(Self {}, GFP_KERNEL)?.into())
+///         Ok(Self {})
 ///     }
 /// }
 /// ```
@@ -1015,6 +1015,8 @@ impl<T: Driver> Registration<T> {
         ..pin_init::zeroed()
     };
 
+    // Always inline to optimize out error path of `build_assert`.
+    #[inline(always)]
     const fn copy_name(name: &'static CStr) -> [c_char; CPUFREQ_NAME_LEN] {
         let src = name.to_bytes_with_nul();
         let mut dst = [0; CPUFREQ_NAME_LEN];

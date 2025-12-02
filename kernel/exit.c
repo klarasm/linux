@@ -251,13 +251,11 @@ repeat:
 	memset(&post, 0, sizeof(post));
 
 	/* don't need to get the RCU readlock here - the process is dead and
-	 * can't be modifying its own credentials. But shut RCU-lockdep up */
-	rcu_read_lock();
+	 * can't be modifying its own credentials. */
 	dec_rlimit_ucounts(task_ucounts(p), UCOUNT_RLIMIT_NPROC, 1);
-	rcu_read_unlock();
 
 	pidfs_exit(p);
-	cgroup_release(p);
+	cgroup_task_release(p);
 
 	/* Retrieve @thread_pid before __unhash_process() may set it to NULL. */
 	thread_pid = task_pid(p);
@@ -974,7 +972,7 @@ void __noreturn do_exit(long code)
 	exit_thread(tsk);
 
 	sched_autogroup_exit_task(tsk);
-	cgroup_exit(tsk);
+	cgroup_task_exit(tsk);
 
 	/*
 	 * FIXME: do that only when needed, using sched_exit tracepoint
