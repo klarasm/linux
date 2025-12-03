@@ -91,9 +91,9 @@ struct guc_update_exec_queue_policy {
 #define   GUC_LOG_NOTIFY_ON_HALF_FULL	BIT(1)
 #define   GUC_LOG_CAPTURE_ALLOC_UNITS	BIT(2)
 #define   GUC_LOG_LOG_ALLOC_UNITS	BIT(3)
-#define   GUC_LOG_CRASH			REG_GENMASK(5, 4)
-#define   GUC_LOG_DEBUG			REG_GENMASK(9, 6)
-#define   GUC_LOG_CAPTURE		REG_GENMASK(11, 10)
+#define   GUC_LOG_CRASH_DUMP		REG_GENMASK(5, 4)
+#define   GUC_LOG_EVENT_DATA		REG_GENMASK(9, 6)
+#define   GUC_LOG_STATE_CAPTURE		REG_GENMASK(11, 10)
 #define   GUC_LOG_BUF_ADDR		REG_GENMASK(31, 12)
 
 #define GUC_CTL_WA			1
@@ -113,6 +113,7 @@ struct guc_update_exec_queue_policy {
 #define   GUC_CTL_ENABLE_SLPC		BIT(2)
 #define   GUC_CTL_ENABLE_LITE_RESTORE	BIT(4)
 #define   GUC_CTL_ENABLE_PSMI_LOGGING	BIT(7)
+#define   GUC_CTL_MAIN_GAMCTRL_QUEUES	BIT(9)
 #define   GUC_CTL_DISABLE_SCHEDULER	BIT(14)
 
 #define GUC_CTL_DEBUG			3
