@@ -10,6 +10,10 @@
 #include <linux/pci-p2pdma.h>
 #include <linux/pm_runtime.h>
 
+#ifdef CONFIG_MEMORY_FAILURE
+#include <linux/memory-failure.h>
+#endif
+
 /*
  * The device memory usable to the workloads running in the VM is cached
  * and showcased as a 64b device BAR (comprising of BAR4 and BAR5 region)
@@ -49,6 +53,9 @@ struct mem_region {
 		void *memaddr;
 		void __iomem *ioaddr;
 	};                      /* Base virtual address of the region */
+#ifdef CONFIG_MEMORY_FAILURE
+	struct pfn_address_space pfn_address_space;
+#endif
 };
 
 struct nvgrace_gpu_pci_core_device {
@@ -63,6 +70,28 @@ struct nvgrace_gpu_pci_core_device {
 	/* GPU has just been reset */
 	bool reset_done;
 };
+
+#ifdef CONFIG_MEMORY_FAILURE
+
+static int
+nvgrace_gpu_vfio_pci_register_pfn_range(struct mem_region *region,
+					struct vm_area_struct *vma)
+{
+	unsigned long nr_pages;
+	int ret = 0;
+
+	nr_pages = region->memlength >> PAGE_SHIFT;
+
+	region->pfn_address_space.node.start = vma->vm_pgoff;
+	region->pfn_address_space.node.last = vma->vm_pgoff + nr_pages - 1;
+	region->pfn_address_space.mapping = vma->vm_file->f_mapping;
+
+	ret = register_pfn_address_space(&region->pfn_address_space);
+
+	return ret;
+}
+
+#endif
 
 static void nvgrace_gpu_init_fake_bar_emu_regs(struct vfio_device *core_vdev)
 {
@@ -143,6 +172,13 @@ static void nvgrace_gpu_close_device(struct vfio_device *core_vdev)
 	}
 
 	mutex_destroy(&nvdev->remap_lock);
+
+#ifdef CONFIG_MEMORY_FAILURE
+	if (nvdev->resmem.memlength)
+		unregister_pfn_address_space(&nvdev->resmem.pfn_address_space);
+
+	unregister_pfn_address_space(&nvdev->usemem.pfn_address_space);
+#endif
 
 	vfio_pci_core_close_device(core_vdev);
 }
@@ -256,6 +292,7 @@ static int nvgrace_gpu_mmap(struct vfio_device *core_vdev,
 	struct mem_region *memregion;
 	u64 req_len, pgoff, end;
 	unsigned int index;
+	int ret = 0;
 
 	index = vma->vm_pgoff >> (VFIO_PCI_OFFSET_SHIFT - PAGE_SHIFT);
 
@@ -303,7 +340,14 @@ static int nvgrace_gpu_mmap(struct vfio_device *core_vdev,
 	vma->vm_ops = &nvgrace_gpu_vfio_pci_mmap_ops;
 	vma->vm_private_data = nvdev;
 
-	return 0;
+#ifdef CONFIG_MEMORY_FAILURE
+	if (nvdev->resmem.memlength && index == VFIO_PCI_BAR2_REGION_INDEX)
+		ret = nvgrace_gpu_vfio_pci_register_pfn_range(&nvdev->resmem, vma);
+	else if (index == VFIO_PCI_BAR4_REGION_INDEX)
+		ret = nvgrace_gpu_vfio_pci_register_pfn_range(&nvdev->usemem, vma);
+#endif
+
+	return ret;
 }
 
 static int nvgrace_gpu_ioctl_get_region_info(struct vfio_device *core_vdev,

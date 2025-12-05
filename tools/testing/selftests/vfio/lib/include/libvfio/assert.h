@@ -6,7 +6,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 
-#include "../../../../kselftest.h"
+#include "kselftest.h"
 
 #define VFIO_LOG_AND_EXIT(...) do {		\
 	fprintf(stderr, "  " __VA_ARGS__);	\
