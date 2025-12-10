@@ -376,6 +376,11 @@ enum {
 	 * has similar constraints to shadow stacks.
 	 */
 	DECLARE_VMA_BIT_ALIAS(SHADOW_STACK, HIGH_ARCH_6),
+#elif defined(CONFIG_RISCV_USER_CFI)
+	/*
+	 * Following x86 and picking up the same bitpos.
+	 */
+	DECLARE_VMA_BIT_ALIAS(SHADOW_STACK, HIGH_ARCH_5),
 #endif
 	DECLARE_VMA_BIT_ALIAS(SAO, ARCH_1),		/* Strong Access Ordering (powerpc) */
 	DECLARE_VMA_BIT_ALIAS(GROWSUP, ARCH_1),		/* parisc */
@@ -395,7 +400,8 @@ enum {
 #undef DECLARE_VMA_BIT
 #undef DECLARE_VMA_BIT_ALIAS
 
-#define INIT_VM_FLAG(name) BIT((__force int) VMA_ ## name ## _BIT)
+#define INIT_VM_FLAG(name) (1UL << (__force int)(VMA_ ## name ## _BIT))
+
 #define VM_READ		INIT_VM_FLAG(READ)
 #define VM_WRITE	INIT_VM_FLAG(WRITE)
 #define VM_EXEC		INIT_VM_FLAG(EXEC)
@@ -438,7 +444,7 @@ enum {
 #define VM_NOHUGEPAGE	INIT_VM_FLAG(NOHUGEPAGE)
 #define VM_MERGEABLE	INIT_VM_FLAG(MERGEABLE)
 #define VM_STACK	INIT_VM_FLAG(STACK)
-#ifdef CONFIG_STACK_GROWS_UP
+#ifdef CONFIG_STACK_GROWSUP
 #define VM_STACK_EARLY	INIT_VM_FLAG(STACK_EARLY)
 #else
 #define VM_STACK_EARLY	VM_NONE
