@@ -2806,17 +2806,6 @@ static bool gup_fast_folio_allowed(struct folio *folio, unsigned int flags)
 	return !reject_file_backed || shmem_mapping(mapping);
 }
 
-static void __maybe_unused gup_fast_undo_dev_pagemap(int *nr, int nr_start,
-		unsigned int flags, struct page **pages)
-{
-	while ((*nr) - nr_start) {
-		struct folio *folio = page_folio(pages[--(*nr)]);
-
-		folio_clear_referenced(folio);
-		gup_put_folio(folio, 1, flags);
-	}
-}
-
 #ifdef CONFIG_ARCH_HAS_PTE_SPECIAL
 /*
  * GUP-fast relies on pte change detection to avoid concurrent pgtable
@@ -2902,7 +2891,7 @@ static int gup_fast_pte_range(pmd_t pmd, pmd_t *pmdp, unsigned long addr,
 			gup_put_folio(folio, 1, flags);
 			goto pte_unmap;
 		}
-		folio_set_referenced(folio);
+		folio_mark_referenced(folio);
 		pages[*nr] = page;
 		(*nr)++;
 	} while (ptep++, addr += PAGE_SIZE, addr != end);
@@ -2971,7 +2960,7 @@ static int gup_fast_pmd_leaf(pmd_t orig, pmd_t *pmdp, unsigned long addr,
 	*nr += refs;
 	for (; refs; refs--)
 		*(pages++) = page++;
-	folio_set_referenced(folio);
+	folio_mark_referenced(folio);
 	return 1;
 }
 
@@ -3015,7 +3004,7 @@ static int gup_fast_pud_leaf(pud_t orig, pud_t *pudp, unsigned long addr,
 	*nr += refs;
 	for (; refs; refs--)
 		*(pages++) = page++;
-	folio_set_referenced(folio);
+	folio_mark_referenced(folio);
 	return 1;
 }
 
