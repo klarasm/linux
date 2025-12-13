@@ -63,7 +63,7 @@
  * might lose their PG_swapbacked flag when they simply can be dropped (e.g. as
  * a result of MADV_FREE).
  *
- * PG_referenced, PG_reclaim are used for page reclaim for anonymous and
+ * PG_reclaim are used for page reclaim for anonymous and
  * file-backed pagecache (see mm/vmscan.c).
  *
  * PG_arch_1 is an architecture specific page state bit.  The generic code
@@ -93,14 +93,12 @@
 enum pageflags {
 	PG_locked,		/* Page is locked. Don't touch. */
 	PG_writeback,		/* Page is under writeback */
-	PG_referenced,
 	PG_uptodate,
 	PG_dirty,
 	PG_lru,
+	PG_active,
 	PG_head,		/* Must be in bit 6 */
 	PG_waiters,		/* Page has waiters, check its waitqueue. Must be bit #7 and in the same byte as "PG_locked" */
-	PG_active,
-	PG_workingset,
 	PG_owner_priv_1,	/* Owner use. If pagecache, fs may use */
 	PG_owner_2,		/* Owner use. If pagecache, fs may use */
 	PG_arch_1,
@@ -190,7 +188,7 @@ enum pageflags {
 
 	/* At least one page in this folio has the hwpoison flag set */
 	PG_has_hwpoisoned = PG_active,
-	PG_large_rmappable = PG_workingset, /* anon or file-backed */
+	PG_large_rmappable = PG_swapbacked, /* anon or file-backed */
 	PG_partially_mapped = PG_reclaim, /* was identified to be partially mapped */
 };
 
@@ -550,9 +548,6 @@ static inline int TestClearPage##uname(struct page *page) { return 0; }
 
 __PAGEFLAG(Locked, locked, PF_NO_TAIL)
 FOLIO_FLAG(waiters, FOLIO_HEAD_PAGE)
-FOLIO_FLAG(referenced, FOLIO_HEAD_PAGE)
-	FOLIO_TEST_CLEAR_FLAG(referenced, FOLIO_HEAD_PAGE)
-	__FOLIO_SET_FLAG(referenced, FOLIO_HEAD_PAGE)
 PAGEFLAG(Dirty, dirty, PF_HEAD) TESTSCFLAG(Dirty, dirty, PF_HEAD)
 	__CLEARPAGEFLAG(Dirty, dirty, PF_HEAD)
 PAGEFLAG(LRU, lru, PF_HEAD) __CLEARPAGEFLAG(LRU, lru, PF_HEAD)
@@ -560,8 +555,6 @@ PAGEFLAG(LRU, lru, PF_HEAD) __CLEARPAGEFLAG(LRU, lru, PF_HEAD)
 FOLIO_FLAG(active, FOLIO_HEAD_PAGE)
 	__FOLIO_CLEAR_FLAG(active, FOLIO_HEAD_PAGE)
 	FOLIO_TEST_CLEAR_FLAG(active, FOLIO_HEAD_PAGE)
-PAGEFLAG(Workingset, workingset, PF_HEAD)
-	TESTCLEARFLAG(Workingset, workingset, PF_HEAD)
 PAGEFLAG(Checked, checked, PF_NO_COMPOUND)	   /* Used by some filesystems */
 
 /* Xen */
