@@ -1407,6 +1407,13 @@ struct task_struct {
 	struct rseq_data		rseq;
 	struct sched_mm_cid		mm_cid;
 
+#ifdef CONFIG_SCHED_CACHE
+	struct callback_head		cache_work;
+	/*the p is currently refcounted in a rq's preferred llc stats*/
+	bool				sched_llc_active;
+	int				preferred_llc;
+#endif
+
 	struct tlbflush_unmap_batch	tlb_ubc;
 
 	/* Cache last used pipe for splice(): */
@@ -2479,5 +2486,14 @@ extern void migrate_enable(void);
 #endif /* MODULE */
 
 DEFINE_LOCK_GUARD_0(migrate, migrate_disable(), migrate_enable())
+
+#ifdef CONFIG_SCHED_CACHE
+DECLARE_STATIC_KEY_FALSE(sched_cache_on);
+
+static inline bool sched_cache_enabled(void)
+{
+	return static_branch_unlikely(&sched_cache_on);
+}
+#endif
 
 #endif
