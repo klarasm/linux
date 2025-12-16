@@ -177,7 +177,6 @@ prototypes::
 	int (*freeze_fs) (struct super_block *);
 	int (*unfreeze_fs) (struct super_block *);
 	int (*statfs) (struct dentry *, struct kstatfs *);
-	int (*remount_fs) (struct super_block *, int *, char *);
 	void (*umount_begin) (struct super_block *);
 	int (*show_options)(struct seq_file *, struct dentry *);
 	ssize_t (*quota_read)(struct super_block *, int, char *, size_t, loff_t);
@@ -201,7 +200,6 @@ sync_fs:		read
 freeze_fs:		write
 unfreeze_fs:		write
 statfs:			maybe(read)	(see below)
-remount_fs:		write
 umount_begin:		no
 show_options:		no		(namespace_sem)
 quota_read:		no		(see below)
@@ -226,8 +224,6 @@ file_system_type
 
 prototypes::
 
-	struct dentry *(*mount) (struct file_system_type *, int,
-		       const char *, void *);
 	void (*kill_sb) (struct super_block *);
 
 locking rules:
@@ -235,12 +231,8 @@ locking rules:
 =======		=========
 ops		may block
 =======		=========
-mount		yes
 kill_sb		yes
 =======		=========
-
-->mount() returns ERR_PTR or the root dentry; its superblock should be locked
-on return.
 
 ->kill_sb() takes a write-locked superblock, does all shutdown work on it,
 unlocks and drops the reference.
@@ -416,6 +408,7 @@ lm_change		yes		no			no
 lm_breaker_owns_lease:	yes     	no			no
 lm_lock_expirable	yes		no			no
 lm_expire_lock		no		no			yes
+lm_open_conflict	yes		no			no
 ======================	=============	=================	=========
 
 buffer_head

@@ -40,6 +40,8 @@ int idr_alloc_u32(struct idr *idr, void *ptr, u32 *nextid,
 
 	if (WARN_ON_ONCE(!(idr->idr_rt.xa_flags & ROOT_IS_IDR)))
 		idr->idr_rt.xa_flags |= IDR_RT_MARKER;
+	if (max < base)
+		return -ENOSPC;
 
 	id = (id < base) ? 0 : id - base;
 	radix_tree_iter_init(&iter, id);
@@ -622,7 +624,6 @@ void ida_destroy(struct ida *ida)
 EXPORT_SYMBOL(ida_destroy);
 
 #ifndef __KERNEL__
-extern void xa_dump_index(unsigned long index, unsigned int shift);
 #define IDA_CHUNK_SHIFT		ilog2(IDA_BITMAP_BITS)
 
 static void ida_dump_entry(void *entry, unsigned long index)

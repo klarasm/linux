@@ -4040,6 +4040,7 @@ static int shmem_rename2(struct mnt_idmap *idmap,
 	int they_are_dirs = S_ISDIR(inode->i_mode);
 	bool had_offset = false;
 	int error;
+	int had_offset = false;
 
 	if (flags & ~(RENAME_NOREPLACE | RENAME_EXCHANGE | RENAME_WHITEOUT))
 		return -EINVAL;
