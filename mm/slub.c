@@ -5052,7 +5052,11 @@ __pcs_replace_empty_main(struct kmem_cache *s, struct slub_percpu_sheaves *pcs, 
 	 */
 
 	if (pcs->main->size == 0) {
-		barn_put_empty_sheaf(barn, pcs->main);
+		if (!pcs->spare) {
+			pcs->spare = pcs->main;
+		} else {
+			barn_put_empty_sheaf(barn, pcs->main);
+		}
 		pcs->main = full;
 		return pcs;
 	}
@@ -6538,6 +6542,8 @@ static void defer_free(struct kmem_cache *s, void *head)
 	struct defer_free *df;
 
 	guard(preempt)();
+
+	head = kasan_reset_tag(head);
 
 	df = this_cpu_ptr(&defer_free_objects);
 	if (llist_add(head + s->offset, &df->objects))
