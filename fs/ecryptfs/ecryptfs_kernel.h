@@ -21,6 +21,7 @@
 #include <linux/kernel.h>
 #include <linux/fs.h>
 #include <linux/fs_stack.h>
+#include <linux/hex.h>
 #include <linux/namei.h>
 #include <linux/scatterlist.h>
 #include <linux/hash.h>
@@ -542,7 +543,6 @@ int ecryptfs_decode_and_decrypt_filename(char **decrypted_name,
 					 size_t *decrypted_name_size,
 					 struct super_block *sb,
 					 const char *name, size_t name_size);
-int ecryptfs_fill_zeros(struct file *file, loff_t new_length);
 int ecryptfs_encrypt_and_encode_filename(
 	char **encoded_name,
 	size_t *encoded_name_size,
