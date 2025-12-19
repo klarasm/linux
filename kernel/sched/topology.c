@@ -17,6 +17,178 @@ void sched_domains_mutex_unlock(void)
 	mutex_unlock(&sched_domains_mutex);
 }
 
+/* the number of max LLCs being detected */
+static int new_max_llcs;
+/* the current number of max LLCs */
+int max_llcs;
+
+#ifdef CONFIG_SCHED_CACHE
+
+static bool sched_cache_present;
+
+unsigned int llc_enabled = 1;
+DEFINE_STATIC_KEY_FALSE(sched_cache_on);
+
+/*
+ * Enable/disable cache aware scheduling according to
+ * user input and the presence of hardware support.
+ */
+static void _sched_cache_set(bool enable, bool locked)
+{
+	if (enable) {
+		if (locked)
+			static_branch_enable_cpuslocked(&sched_cache_on);
+		else
+			static_branch_enable(&sched_cache_on);
+	} else {
+		if (locked)
+			static_branch_disable_cpuslocked(&sched_cache_on);
+		else
+			static_branch_disable(&sched_cache_on);
+	}
+}
+
+void sched_cache_set(bool locked)
+{
+	/* hardware does not support */
+	if (!sched_cache_present) {
+		if (static_branch_likely(&sched_cache_on))
+			_sched_cache_set(false, locked);
+
+		return;
+	}
+
+	/* user wants it or not ?*/
+	if (llc_enabled) {
+		if (!static_branch_likely(&sched_cache_on))
+			_sched_cache_set(true, locked);
+
+	} else {
+		if (static_branch_likely(&sched_cache_on))
+			_sched_cache_set(false, locked);
+	}
+}
+
+static unsigned int *alloc_new_pref_llcs(unsigned int *old, unsigned int **gc)
+{
+	unsigned int *new = NULL;
+
+	new = kcalloc(new_max_llcs, sizeof(unsigned int),
+		      GFP_KERNEL | __GFP_NOWARN);
+
+	if (!new) {
+		*gc = NULL;
+	} else {
+		/*
+		 * Place old entry in garbage collector
+		 * for later disposal.
+		 */
+		*gc = old;
+	}
+	return new;
+}
+
+static void populate_new_pref_llcs(unsigned int *old, unsigned int *new)
+{
+	int i;
+
+	if (!old)
+		return;
+
+	for (i = 0; i < max_llcs; i++)
+		new[i] = old[i];
+}
+
+static int resize_llc_pref(bool has_multi_llcs)
+{
+	unsigned int *__percpu *tmp_llc_pref;
+	int i, ret = 0;
+
+	if (new_max_llcs <= max_llcs)
+		return 0;
+
+	/*
+	 * Allocate temp percpu pointer for old llc_pref,
+	 * which will be released after switching to the
+	 * new buffer.
+	 */
+	tmp_llc_pref = alloc_percpu_noprof(unsigned int *);
+	if (!tmp_llc_pref) {
+		sched_cache_present = false;
+		ret = -ENOMEM;
+
+		goto out;
+	}
+
+	for_each_present_cpu(i)
+		*per_cpu_ptr(tmp_llc_pref, i) = NULL;
+
+	/*
+	 * Resize the per rq nr_pref_llc buffer and
+	 * switch to this new buffer.
+	 */
+	for_each_present_cpu(i) {
+		struct rq_flags rf;
+		unsigned int *new;
+		struct rq *rq;
+
+		rq = cpu_rq(i);
+		new = alloc_new_pref_llcs(rq->nr_pref_llc, per_cpu_ptr(tmp_llc_pref, i));
+		if (!new) {
+			ret = -ENOMEM;
+			sched_cache_present = false;
+
+			goto release_old;
+		}
+
+		/*
+		 * Locking rq ensures that rq->nr_pref_llc values
+		 * don't change with new task enqueue/dequeue
+		 * when we repopulate the newly enlarged array.
+		 */
+		rq_lock_irqsave(rq, &rf);
+		populate_new_pref_llcs(rq->nr_pref_llc, new);
+		rq->nr_pref_llc = new;
+		rq_unlock_irqrestore(rq, &rf);
+	}
+
+	if (has_multi_llcs) {
+		sched_cache_present = true;
+		pr_info_once("Cache aware load balance is enabled on the platform.\n");
+	}
+
+release_old:
+	/*
+	 * Load balance is done under rcu_lock.
+	 * Wait for load balance before and during resizing to
+	 * be done. They may refer to old nr_pref_llc[]
+	 * that hasn't been resized.
+	 */
+	synchronize_rcu();
+	for_each_present_cpu(i)
+		kfree(*per_cpu_ptr(tmp_llc_pref, i));
+
+	free_percpu(tmp_llc_pref);
+
+	/* succeed and update */
+	if (!ret)
+		max_llcs = new_max_llcs;
+
+out:
+	sched_cache_set(true);
+	return ret;
+}
+
+#else
+
+static int resize_llc_pref(bool has_multi_llcs)
+{
+	max_llcs = new_max_llcs;
+	return 0;
+}
+
+#endif
+
 /* Protected by sched_domains_mutex: */
 static cpumask_var_t sched_domains_tmpmask;
 static cpumask_var_t sched_domains_tmpmask2;
@@ -668,6 +840,55 @@ DEFINE_PER_CPU(struct sched_domain __rcu *, sd_asym_cpucapacity);
 DEFINE_STATIC_KEY_FALSE(sched_asym_cpucapacity);
 DEFINE_STATIC_KEY_FALSE(sched_cluster_active);
 
+/*
+ * Assign continuous llc id for the CPU, and return
+ * the assigned llc id.
+ */
+static int update_llc_id(struct sched_domain *sd,
+			 int cpu)
+{
+	int id = per_cpu(sd_llc_id, cpu), i;
+
+	if (id >= 0)
+		return id;
+
+	if (sd) {
+		/* Look for any assigned id and reuse it.*/
+		for_each_cpu(i, sched_domain_span(sd)) {
+			id = per_cpu(sd_llc_id, i);
+
+			if (id >= 0) {
+				per_cpu(sd_llc_id, cpu) = id;
+				return id;
+			}
+		}
+	}
+
+	/*
+	 * When 1. there is no id assigned to this LLC domain,
+	 * or 2. the sd is NULL, we reach here.
+	 * Consider the following scenario,
+	 * CPU0~CPU95 are in the node0, CPU96~CPU191 are
+	 * in the node1. During bootup, maxcpus=96 is
+	 * appended.
+	 * case 1: When running cpu_attach_domain(CPU24)
+	 * during boot up, CPU24 is the first CPU in its
+	 * non-NULL LLC domain. However,
+	 * its corresponding llc id has not been assigned yet.
+	 *
+	 * case 2: After boot up, the CPU100 is brought up
+	 * via sysfs manually. As a result, CPU100 has only a
+	 * Numa domain attached, because CPU100 is the only CPU
+	 * of a sched domain, all its bottom domains are degenerated.
+	 * The LLC domain pointer sd is NULL for CPU100.
+	 *
+	 * For both cases, we want to increase the number of LLCs.
+	 */
+	per_cpu(sd_llc_id, cpu) = new_max_llcs++;
+
+	return per_cpu(sd_llc_id, cpu);
+}
+
 static void update_top_cache_domain(int cpu)
 {
 	struct sched_domain_shared *sds = NULL;
@@ -677,14 +898,13 @@ static void update_top_cache_domain(int cpu)
 
 	sd = highest_flag_domain(cpu, SD_SHARE_LLC);
 	if (sd) {
-		id = cpumask_first(sched_domain_span(sd));
 		size = cpumask_weight(sched_domain_span(sd));
 		sds = sd->shared;
 	}
 
 	rcu_assign_pointer(per_cpu(sd_llc, cpu), sd);
 	per_cpu(sd_llc_size, cpu) = size;
-	per_cpu(sd_llc_id, cpu) = id;
+	id = update_llc_id(sd, cpu);
 	rcu_assign_pointer(per_cpu(sd_llc_shared, cpu), sds);
 
 	sd = lowest_flag_domain(cpu, SD_CLUSTER);
@@ -2551,12 +2771,19 @@ static int
 build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *attr)
 {
 	enum s_alloc alloc_state = sa_none;
+	bool has_multi_llcs = false;
 	struct sched_domain *sd;
 	struct s_data d;
 	struct rq *rq = NULL;
 	int i, ret = -ENOMEM;
 	bool has_asym = false;
 	bool has_cluster = false;
+
+	/* first scan of LLCs */
+	if (!max_llcs) {
+		for_each_possible_cpu(i)
+			per_cpu(sd_llc_id, i) = -1;
+	}
 
 	if (WARN_ON(cpumask_empty(cpu_map)))
 		goto error;
@@ -2637,10 +2864,12 @@ build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *att
 				 * between LLCs and memory channels.
 				 */
 				nr_llcs = sd->span_weight / child->span_weight;
-				if (nr_llcs == 1)
+				if (nr_llcs == 1) {
 					imb = sd->span_weight >> 3;
-				else
+				} else {
 					imb = nr_llcs;
+					has_multi_llcs = true;
+				}
 				imb = max(1U, imb);
 				sd->imb_numa_nr = imb;
 
@@ -2687,6 +2916,8 @@ build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *att
 
 	if (has_cluster)
 		static_branch_inc_cpuslocked(&sched_cluster_active);
+
+	resize_llc_pref(has_multi_llcs);
 
 	if (rq && sched_debug_verbose)
 		pr_info("root domain span: %*pbl\n", cpumask_pr_args(cpu_map));

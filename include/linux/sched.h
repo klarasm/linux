@@ -1404,6 +1404,13 @@ struct task_struct {
 	unsigned long			numa_pages_migrated;
 #endif /* CONFIG_NUMA_BALANCING */
 
+#ifdef CONFIG_SCHED_CACHE
+	struct callback_head		cache_work;
+	/*the p is currently refcounted in a rq's preferred llc stats*/
+	bool				sched_llc_active;
+	int				preferred_llc;
+#endif
+
 	struct rseq_data		rseq;
 	struct sched_mm_cid		mm_cid;
 
@@ -2479,5 +2486,14 @@ extern void migrate_enable(void);
 #endif /* MODULE */
 
 DEFINE_LOCK_GUARD_0(migrate, migrate_disable(), migrate_enable())
+
+#ifdef CONFIG_SCHED_CACHE
+DECLARE_STATIC_KEY_FALSE(sched_cache_on);
+
+static inline bool sched_cache_enabled(void)
+{
+	return static_branch_unlikely(&sched_cache_on);
+}
+#endif
 
 #endif
