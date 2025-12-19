@@ -157,20 +157,24 @@ struct liveupdate_flb_ops {
 
 /*
  * struct luo_flb_private_state - Private FLB state structures.
- * @count: The number of preserved files currently depending on this FLB.
- *         This is used to trigger the preserve/unpreserve/finish ops on the
- *         first/last file.
- * @data:  The opaque u64 handle returned by .preserve() or passed to
- *         .retrieve().
- * @obj:   The live kernel object returned by .preserve() or .retrieve().
- * @lock:  A mutex that protects all fields within this structure, providing
- *         the synchronization service for the FLB's ops.
+ * @count:     The number of preserved files currently depending on this FLB.
+ *             This is used to trigger the preserve/unpreserve/finish ops on the
+ *             first/last file.
+ * @data:      The opaque u64 handle returned by .preserve() or passed to
+ *             .retrieve().
+ * @obj:       The live kernel object returned by .preserve() or .retrieve().
+ * @lock:      A mutex that protects all fields within this structure, providing
+ *             the synchronization service for the FLB's ops.
+ * @finished:  True once the FLB's finish() callback has run.
+ * @retrieved: True once the FLB's retrieve() callback has run.
  */
 struct luo_flb_private_state {
 	long count;
 	u64 data;
 	void *obj;
 	struct mutex lock;
+	bool finished;
+	bool retrieved;
 };
 
 /*

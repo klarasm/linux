@@ -45,7 +45,7 @@
 #include <linux/kexec_handover.h>
 #include <linux/kho/abi/luo.h>
 #include <linux/libfdt.h>
-#include <linux/list.h>
+#include <linux/list_private.h>
 #include <linux/liveupdate.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -155,7 +155,10 @@ static int luo_flb_retrieve_one(struct liveupdate_flb *flb)
 
 	guard(mutex)(&private->incoming.lock);
 
-	if (private->incoming.obj)
+	if (private->incoming.finished)
+		return -ENODATA;
+
+	if (private->incoming.retrieved)
 		return 0;
 
 	if (!fh->active)
@@ -181,9 +184,7 @@ static int luo_flb_retrieve_one(struct liveupdate_flb *flb)
 		return err;
 
 	private->incoming.obj = args.obj;
-
-	if (WARN_ON_ONCE(!private->incoming.obj))
-		return -EIO;
+	private->incoming.retrieved = true;
 
 	return 0;
 }
@@ -199,7 +200,7 @@ static void luo_flb_file_finish_one(struct liveupdate_flb *flb)
 	if (!count) {
 		struct liveupdate_flb_op_args args = {0};
 
-		if (!private->incoming.obj) {
+		if (!private->incoming.retrieved) {
 			int err = luo_flb_retrieve_one(flb);
 
 			if (WARN_ON(err))
@@ -213,6 +214,7 @@ static void luo_flb_file_finish_one(struct liveupdate_flb *flb)
 
 			private->incoming.data = 0;
 			private->incoming.obj = NULL;
+			private->incoming.finished = true;
 		}
 	}
 }
@@ -376,7 +378,7 @@ int liveupdate_register_flb(struct liveupdate_file_handler *fh,
 		}
 
 		/* Check that compatible string is unique in global list */
-		luo_list_for_each_private(gflb, &luo_flb_global.list, private.list) {
+		list_private_for_each_entry(gflb, &luo_flb_global.list, private.list) {
 			if (!strcmp(gflb->compatible, flb->compatible))
 				goto err_resume;
 		}
@@ -533,10 +535,6 @@ int liveupdate_flb_get_outgoing(struct liveupdate_flb *flb, void **objp)
 	if (!liveupdate_enabled())
 		return -EOPNOTSUPP;
 
-	/* Sanity check that object exists */
-	if (WARN_ON_ONCE(!private->outgoing.obj))
-		return -ENOENT;
-
 	guard(mutex)(&private->outgoing.lock);
 	*objp = private->outgoing.obj;
 
@@ -640,7 +638,7 @@ void luo_flb_serialize(void)
 	struct liveupdate_flb *gflb;
 	int i = 0;
 
-	luo_list_for_each_private(gflb, &luo_flb_global.list, private.list) {
+	list_private_for_each_entry(gflb, &luo_flb_global.list, private.list) {
 		struct luo_flb_private *private = luo_flb_get_private(gflb);
 
 		if (private->outgoing.count > 0) {
