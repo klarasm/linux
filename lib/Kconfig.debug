@@ -1817,6 +1817,14 @@ config DEBUG_CLOSURES
 	  interface to list them, which makes it possible to see asynchronous
 	  operations that get stuck.
 
+config DEBUG_XARRAY
+	bool "Debug XArray"
+	depends on DEBUG_KERNEL
+	help
+	  Enable XArray debugging information and extra validation.
+
+	  If unsure, say N.
+
 config DEBUG_MAPLE_TREE
 	bool "Debug maple trees"
 	depends on DEBUG_KERNEL
@@ -2554,14 +2562,6 @@ config TEST_PARMAN
 	help
 	  Enable this option to test priority array manager on boot
 	  (or module load).
-
-	  If unsure, say N.
-
-config TEST_IRQ_TIMINGS
-	bool "IRQ timings selftest"
-	depends on IRQ_TIMINGS
-	help
-	  Enable this option to test the irq timings code on boot.
 
 	  If unsure, say N.
 

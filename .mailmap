@@ -12,6 +12,7 @@
 #
 Aaron Durbin <adurbin@google.com>
 Abel Vesa <abelvesa@kernel.org> <abel.vesa@nxp.com>
+Abel Vesa <abelvesa@kernel.org> <abel.vesa@linaro.org>
 Abel Vesa <abelvesa@kernel.org> <abelvesa@gmail.com>
 Abhijeet Dharmapurikar <quic_adharmap@quicinc.com> <adharmap@codeaurora.org>
 Abhinav Kumar <quic_abhinavk@quicinc.com> <abhinavk@codeaurora.org>
@@ -482,6 +483,7 @@ Lorenzo Pieralisi <lpieralisi@kernel.org> <lorenzo.pieralisi@arm.com>
 Lorenzo Stoakes <lorenzo.stoakes@oracle.com> <lstoakes@gmail.com>
 Luca Ceresoli <luca.ceresoli@bootlin.com> <luca@lucaceresoli.net>
 Luca Weiss <luca@lucaweiss.eu> <luca@z3ntu.xyz>
+Lucas De Marchi <demarchi@kernel.org> <lucas.demarchi@intel.com>
 Lukasz Luba <lukasz.luba@arm.com> <l.luba@partner.samsung.com>
 Luo Jie <quic_luoj@quicinc.com> <luoj@codeaurora.org>
 Lance Yang <lance.yang@linux.dev> <ioworker0@gmail.com>
