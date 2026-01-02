@@ -334,12 +334,13 @@ static __cold struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 	init_waitqueue_head(&ctx->poll_wq);
 	spin_lock_init(&ctx->completion_lock);
 	raw_spin_lock_init(&ctx->timeout_lock);
-	INIT_WQ_LIST(&ctx->iopoll_list);
+	INIT_LIST_HEAD(&ctx->iopoll_list);
 	INIT_LIST_HEAD(&ctx->defer_list);
 	INIT_LIST_HEAD(&ctx->timeout_list);
 	INIT_LIST_HEAD(&ctx->ltimeout_list);
 	init_llist_head(&ctx->work_llist);
 	INIT_LIST_HEAD(&ctx->tctx_list);
+	mutex_init(&ctx->tctx_lock);
 	ctx->submit_state.free_list.next = NULL;
 	INIT_HLIST_HEAD(&ctx->waitid_list);
 	xa_init_flags(&ctx->zcrx_ctxs, XA_FLAGS_ALLOC);
@@ -864,7 +865,7 @@ static __cold bool io_cqe_overflow_locked(struct io_ring_ctx *ctx,
 {
 	struct io_overflow_cqe *ocqe;
 
-	ocqe = io_alloc_ocqe(ctx, cqe, big_cqe, GFP_ATOMIC);
+	ocqe = io_alloc_ocqe(ctx, cqe, big_cqe, GFP_NOWAIT);
 	return io_cqring_add_overflow(ctx, ocqe);
 }
 
@@ -1561,7 +1562,7 @@ __cold void io_iopoll_try_reap_events(struct io_ring_ctx *ctx)
 		return;
 
 	mutex_lock(&ctx->uring_lock);
-	while (!wq_list_empty(&ctx->iopoll_list)) {
+	while (!list_empty(&ctx->iopoll_list)) {
 		/* let it sleep and repeat later if can't complete a request */
 		if (io_do_iopoll(ctx, true) == 0)
 			break;
@@ -1626,21 +1627,18 @@ static int io_iopoll_check(struct io_ring_ctx *ctx, unsigned int min_events)
 		 * forever, while the workqueue is stuck trying to acquire the
 		 * very same mutex.
 		 */
-		if (wq_list_empty(&ctx->iopoll_list) ||
-		    io_task_work_pending(ctx)) {
+		if (list_empty(&ctx->iopoll_list) || io_task_work_pending(ctx)) {
 			u32 tail = ctx->cached_cq_tail;
 
 			(void) io_run_local_work_locked(ctx, min_events);
 
-			if (task_work_pending(current) ||
-			    wq_list_empty(&ctx->iopoll_list)) {
+			if (task_work_pending(current) || list_empty(&ctx->iopoll_list)) {
 				mutex_unlock(&ctx->uring_lock);
 				io_run_task_work();
 				mutex_lock(&ctx->uring_lock);
 			}
 			/* some requests don't go through iopoll_list */
-			if (tail != ctx->cached_cq_tail ||
-			    wq_list_empty(&ctx->iopoll_list))
+			if (tail != ctx->cached_cq_tail || list_empty(&ctx->iopoll_list))
 				break;
 		}
 		ret = io_do_iopoll(ctx, !min_events);
@@ -1683,25 +1681,17 @@ static void io_iopoll_req_issued(struct io_kiocb *req, unsigned int issue_flags)
 	 * how we do polling eventually, not spinning if we're on potentially
 	 * different devices.
 	 */
-	if (wq_list_empty(&ctx->iopoll_list)) {
+	if (list_empty(&ctx->iopoll_list)) {
 		ctx->poll_multi_queue = false;
 	} else if (!ctx->poll_multi_queue) {
 		struct io_kiocb *list_req;
 
-		list_req = container_of(ctx->iopoll_list.first, struct io_kiocb,
-					comp_list);
+		list_req = list_first_entry(&ctx->iopoll_list, struct io_kiocb, iopoll_node);
 		if (list_req->file != req->file)
 			ctx->poll_multi_queue = true;
 	}
 
-	/*
-	 * For fast devices, IO may have already completed. If it has, add
-	 * it to the front so we find it first.
-	 */
-	if (READ_ONCE(req->iopoll_completed))
-		wq_list_add_head(&req->comp_list, &ctx->iopoll_list);
-	else
-		wq_list_add_tail(&req->comp_list, &ctx->iopoll_list);
+	list_add_tail(&req->iopoll_node, &ctx->iopoll_list);
 
 	if (unlikely(needs_lock)) {
 		/*
@@ -3045,6 +3035,7 @@ static __cold void io_ring_exit_work(struct work_struct *work)
 	exit.ctx = ctx;
 
 	mutex_lock(&ctx->uring_lock);
+	mutex_lock(&ctx->tctx_lock);
 	while (!list_empty(&ctx->tctx_list)) {
 		WARN_ON_ONCE(time_after(jiffies, timeout));
 
@@ -3056,6 +3047,7 @@ static __cold void io_ring_exit_work(struct work_struct *work)
 		if (WARN_ON_ONCE(ret))
 			continue;
 
+		mutex_unlock(&ctx->tctx_lock);
 		mutex_unlock(&ctx->uring_lock);
 		/*
 		 * See comment above for
@@ -3064,7 +3056,9 @@ static __cold void io_ring_exit_work(struct work_struct *work)
 		 */
 		wait_for_completion_interruptible(&exit.completion);
 		mutex_lock(&ctx->uring_lock);
+		mutex_lock(&ctx->tctx_lock);
 	}
+	mutex_unlock(&ctx->tctx_lock);
 	mutex_unlock(&ctx->uring_lock);
 	spin_lock(&ctx->completion_lock);
 	spin_unlock(&ctx->completion_lock);
