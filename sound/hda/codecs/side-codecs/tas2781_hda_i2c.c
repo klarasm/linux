@@ -111,8 +111,10 @@ static int tas2781_read_acpi(struct tasdevice_priv *p, const char *hid)
 	sub = acpi_get_subsystem_id(ACPI_HANDLE(physdev));
 	if (IS_ERR(sub)) {
 		/* No subsys id in older tas2563 projects. */
-		if (!strncmp(hid, "INT8866", sizeof("INT8866")))
+		if (!strncmp(hid, "INT8866", sizeof("INT8866"))) {
+			p->speaker_id = -1;
 			goto end_2563;
+		}
 		dev_err(p->dev, "Failed to get SUBSYS ID.\n");
 		ret = PTR_ERR(sub);
 		goto err;
@@ -500,8 +502,8 @@ static void tasdev_fw_ready(const struct firmware *fmw, void *context)
 	struct hda_codec *codec = tas_priv->codec;
 	int ret;
 
-	pm_runtime_get_sync(tas_priv->dev);
-	mutex_lock(&tas_priv->codec_lock);
+	guard(pm_runtime_active_auto)(tas_priv->dev);
+	guard(mutex)(&tas_priv->codec_lock);
 
 	ret = tasdevice_rca_parser(tas_priv, fmw);
 	if (ret)
@@ -537,9 +539,7 @@ static void tasdev_fw_ready(const struct firmware *fmw, void *context)
 	}
 
 out:
-	mutex_unlock(&tas_hda->priv->codec_lock);
 	release_firmware(fmw);
-	pm_runtime_put_autosuspend(tas_hda->dev);
 }
 
 static int tas2781_hda_bind(struct device *dev, struct device *master,
@@ -571,7 +571,7 @@ static int tas2781_hda_bind(struct device *dev, struct device *master,
 		break;
 	}
 
-	pm_runtime_get_sync(dev);
+	guard(pm_runtime_active_auto)(dev);
 
 	comp->dev = dev;
 
@@ -580,8 +580,6 @@ static int tas2781_hda_bind(struct device *dev, struct device *master,
 	ret = tascodec_init(tas_hda->priv, codec, THIS_MODULE, tasdev_fw_ready);
 	if (!ret)
 		comp->playback_hook = tas2781_hda_playback_hook;
-
-	pm_runtime_put_autosuspend(dev);
 
 	return ret;
 }

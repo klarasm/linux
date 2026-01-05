@@ -1828,9 +1828,6 @@ static inline void rcu_copy_process(struct task_struct *p)
 #endif /* #ifdef CONFIG_TASKS_RCU */
 #ifdef CONFIG_TASKS_TRACE_RCU
 	p->trc_reader_nesting = 0;
-	p->trc_reader_special.s = 0;
-	INIT_LIST_HEAD(&p->trc_holdout_list);
-	INIT_LIST_HEAD(&p->trc_blkd_node);
 #endif /* #ifdef CONFIG_TASKS_TRACE_RCU */
 }
 
@@ -2071,7 +2068,7 @@ __latent_entropy struct task_struct *copy_process(
 
 	p->set_child_tid = (clone_flags & CLONE_CHILD_SETTID) ? args->child_tid : NULL;
 	/*
-	 * Clear TID on mm_release()?
+	 * TID is cleared in mm_release() when the task exits
 	 */
 	p->clear_child_tid = (clone_flags & CLONE_CHILD_CLEARTID) ? args->child_tid : NULL;
 

@@ -1549,6 +1549,7 @@ struct snd_soc_acpi_mach *hda_machine_select(struct snd_sof_dev *sdev)
 	 * name string if quirk flag is set.
 	 */
 	if (mach) {
+		const struct sof_intel_dsp_desc *chip = get_chip_info(sdev->pdata);
 		bool tplg_fixup = false;
 		bool dmic_fixup = false;
 
@@ -1598,6 +1599,18 @@ struct snd_soc_acpi_mach *hda_machine_select(struct snd_sof_dev *sdev)
 			sof_pdata->tplg_filename = tplg_filename;
 		}
 
+		if (tplg_fixup && mach->mach_params.bt_link_mask &&
+		    chip->hw_ip_version >= SOF_INTEL_ACE_4_0) {
+			int bt_port = fls(mach->mach_params.bt_link_mask) - 1;
+
+			tplg_filename = devm_kasprintf(sdev->dev, GFP_KERNEL, "%s-ssp%d-bt",
+						       sof_pdata->tplg_filename, bt_port);
+			if (!tplg_filename)
+				return NULL;
+
+			sof_pdata->tplg_filename = tplg_filename;
+		}
+
 		if (mach->link_mask) {
 			mach->mach_params.links = mach->links;
 			mach->mach_params.link_mask = mach->link_mask;
@@ -1609,9 +1622,7 @@ struct snd_soc_acpi_mach *hda_machine_select(struct snd_sof_dev *sdev)
 		if (tplg_fixup &&
 		    mach->tplg_quirk_mask & SND_SOC_ACPI_TPLG_INTEL_SSP_NUMBER &&
 		    mach->mach_params.i2s_link_mask) {
-			const struct sof_intel_dsp_desc *chip = get_chip_info(sdev->pdata);
 			int ssp_num;
-			int mclk_mask;
 
 			if (hweight_long(mach->mach_params.i2s_link_mask) > 1 &&
 			    !(mach->tplg_quirk_mask & SND_SOC_ACPI_TPLG_INTEL_SSP_MSB))
@@ -1636,19 +1647,28 @@ struct snd_soc_acpi_mach *hda_machine_select(struct snd_sof_dev *sdev)
 
 			sof_pdata->tplg_filename = tplg_filename;
 
-			mclk_mask = check_nhlt_ssp_mclk_mask(sdev, ssp_num);
+			if (sof_pdata->ipc_type == SOF_IPC_TYPE_3) {
+				int mclk_mask = check_nhlt_ssp_mclk_mask(sdev,
+									 ssp_num);
 
-			if (mclk_mask < 0) {
-				dev_err(sdev->dev, "Invalid MCLK configuration\n");
-				return NULL;
-			}
+				if (mclk_mask < 0) {
+					dev_err(sdev->dev,
+						"Invalid MCLK configuration for SSP%d\n",
+						ssp_num);
+					return NULL;
+				}
 
-			dev_dbg(sdev->dev, "MCLK mask %#x found in NHLT\n", mclk_mask);
-
-			if (mclk_mask) {
-				dev_info(sdev->dev, "Overriding topology with MCLK mask %#x from NHLT\n", mclk_mask);
-				sdev->mclk_id_override = true;
-				sdev->mclk_id_quirk = (mclk_mask & BIT(0)) ? 0 : 1;
+				if (mclk_mask) {
+					sdev->mclk_id_override = true;
+					sdev->mclk_id_quirk = (mclk_mask & BIT(0)) ? 0 : 1;
+					dev_info(sdev->dev,
+						 "SSP%d to use MCLK id %d (mask: %#x)\n",
+						 ssp_num, sdev->mclk_id_quirk, mclk_mask);
+				} else {
+					dev_dbg(sdev->dev,
+						"MCLK mask is empty for SSP%d in NHLT\n",
+						ssp_num);
+				}
 			}
 		}
 

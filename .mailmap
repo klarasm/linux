@@ -12,6 +12,7 @@
 #
 Aaron Durbin <adurbin@google.com>
 Abel Vesa <abelvesa@kernel.org> <abel.vesa@nxp.com>
+Abel Vesa <abelvesa@kernel.org> <abel.vesa@linaro.org>
 Abel Vesa <abelvesa@kernel.org> <abelvesa@gmail.com>
 Abhijeet Dharmapurikar <quic_adharmap@quicinc.com> <adharmap@codeaurora.org>
 Abhinav Kumar <quic_abhinavk@quicinc.com> <abhinavk@codeaurora.org>
@@ -416,6 +417,7 @@ Juha Yrjola <at solidboot.com>
 Juha Yrjola <juha.yrjola@nokia.com>
 Juha Yrjola <juha.yrjola@solidboot.com>
 Julien Thierry <julien.thierry.kdev@gmail.com> <julien.thierry@arm.com>
+Justin Iurman <justin.iurman@gmail.com> <justin.iurman@uliege.be>
 Iskren Chernev <me@iskren.info> <iskren.chernev@gmail.com>
 Kalle Valo <kvalo@kernel.org> <kvalo@codeaurora.org>
 Kalle Valo <kvalo@kernel.org> <quic_kvalo@quicinc.com>
@@ -472,6 +474,10 @@ Linas Vepstas <linas@austin.ibm.com>
 Linus Lüssing <linus.luessing@c0d3.blue> <linus.luessing@ascom.ch>
 Linus Lüssing <linus.luessing@c0d3.blue> <linus.luessing@web.de>
 Linus Lüssing <linus.luessing@c0d3.blue> <ll@simonwunderlich.de>
+Linus Walleij <linusw@kernel.org> <linus.walleij@ericsson.com>
+Linus Walleij <linusw@kernel.org> <linus.walleij@stericsson.com>
+Linus Walleij <linusw@kernel.org> <linus.walleij@linaro.org>
+Linus Walleij <linusw@kernel.org> <triad@df.lth.se>
 <linux-hardening@vger.kernel.org> <kernel-hardening@lists.openwall.com>
 Li Yang <leoyang.li@nxp.com> <leoli@freescale.com>
 Li Yang <leoyang.li@nxp.com> <leo@zh-kernel.org>
@@ -482,6 +488,7 @@ Lorenzo Pieralisi <lpieralisi@kernel.org> <lorenzo.pieralisi@arm.com>
 Lorenzo Stoakes <lorenzo.stoakes@oracle.com> <lstoakes@gmail.com>
 Luca Ceresoli <luca.ceresoli@bootlin.com> <luca@lucaceresoli.net>
 Luca Weiss <luca@lucaweiss.eu> <luca@z3ntu.xyz>
+Lucas De Marchi <demarchi@kernel.org> <lucas.demarchi@intel.com>
 Lukasz Luba <lukasz.luba@arm.com> <l.luba@partner.samsung.com>
 Luo Jie <quic_luoj@quicinc.com> <luoj@codeaurora.org>
 Lance Yang <lance.yang@linux.dev> <ioworker0@gmail.com>
@@ -789,6 +796,7 @@ Sven Eckelmann <sven@narfation.org> <sven.eckelmann@open-mesh.com>
 Sven Eckelmann <sven@narfation.org> <sven.eckelmann@openmesh.com>
 Sven Eckelmann <sven@narfation.org> <sven@open-mesh.com>
 Sven Peter <sven@kernel.org> <sven@svenpeter.dev>
+Szymon Wilczek <swilczek.lx@gmail.com> <szymonwilczek@gmx.com>
 Takashi YOSHII <takashi.yoshii.zj@renesas.com>
 Tamizh Chelvam Raja <quic_tamizhr@quicinc.com> <tamizhr@codeaurora.org>
 Taniya Das <quic_tdas@quicinc.com> <tdas@codeaurora.org>
