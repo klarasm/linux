@@ -245,7 +245,9 @@ TRACE_EVENT(mm_shrink_slab_start,
 		__entry->priority = priority;
 		__entry->nid = sc->nid;
 		__entry->pid = current->pid;
+#ifdef CONFIG_MEMCG
 		__entry->memcg_id = sc->memcg ? cgroup_id(sc->memcg->css.cgroup) : 0;
+#endif
 	),
 
 	TP_printk("%pS %p: nid: %d pid: %d memcg_id: %u objects to shrink %ld gfp_flags %s cache items %ld delta %lld total_scan %ld priority %d %s",
@@ -290,7 +292,9 @@ TRACE_EVENT(mm_shrink_slab_end,
 		__entry->nid = sc->nid;
 		__entry->retval = shrinker_retval;
 		__entry->pid = current->pid;
+#ifdef CONFIG_MEMCG
 		__entry->memcg_id = cgroup_id(sc->memcg->css.cgroup);
+#endif
 	),
 
 	TP_printk("%pS %p: nid: %d pid: %d memcg_id: %u unused scan count %ld new scan count %ld total_scan %ld last shrinker return val %d %s",
