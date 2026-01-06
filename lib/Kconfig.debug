@@ -1269,7 +1269,7 @@ config BOOTPARAM_HUNG_TASK_PANIC
 	  high-availability systems that have uptime guarantees and
 	  where a hung tasks must be resolved ASAP.
 
-	  Say N if unsure.
+	  Say 0 if unsure.
 
 config DETECT_HUNG_TASK_BLOCKER
 	bool "Dump Hung Tasks Blocker"
@@ -3411,6 +3411,19 @@ config PRIME_NUMBERS_KUNIT_TEST
 
 	  Enabling this option will include tests that compare the prime number
 	  generator functions against a brute force implementation.
+
+	  If unsure, say N
+
+config GLOB_KUNIT_TEST
+	tristate "Glob matching test" if !KUNIT_ALL_TESTS
+	depends on KUNIT
+	default KUNIT_ALL_TESTS
+	select GLOB
+	help
+	  Enable this option to test the glob functions at runtime.
+
+	  This test suite verifies the correctness of glob_match() across various
+	  scenarios, including edge cases.
 
 	  If unsure, say N
 
