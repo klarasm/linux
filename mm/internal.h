@@ -171,7 +171,7 @@ static inline int mmap_file(struct file *file, struct vm_area_struct *vma)
 
 	/*
 	 * OK, we tried to call the file hook for mmap(), but an error
-	 * arose. The mapping is in an inconsistent state and we most not invoke
+	 * arose. The mapping is in an inconsistent state and we must not invoke
 	 * any further hooks on it.
 	 */
 	vma->vm_ops = &vma_dummy_vm_ops;
@@ -742,8 +742,7 @@ static inline void clear_zone_contiguous(struct zone *zone)
 extern int __isolate_free_page(struct page *page, unsigned int order);
 extern void __putback_isolated_page(struct page *page, unsigned int order,
 				    int mt);
-extern void memblock_free_pages(struct page *page, unsigned long pfn,
-					unsigned int order);
+extern void memblock_free_pages(unsigned long pfn, unsigned int order);
 extern void __free_pages_core(struct page *page, unsigned int order,
 		enum meminit_context context);
 
