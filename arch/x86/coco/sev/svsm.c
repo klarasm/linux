@@ -4,7 +4,9 @@
  */
 
 #include <linux/types.h>
+#include <linux/percpu.h>
 
+#include <asm/msr.h>
 #include <asm/sev.h>
 
 #include "internal.h"
