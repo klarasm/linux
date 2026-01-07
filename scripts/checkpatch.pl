@@ -863,7 +863,9 @@ our %deprecated_apis = (
 	#These should be enough to drive away new IDR users
 	"DEFINE_IDR"				=> "DEFINE_XARRAY",
 	"idr_init"				=> "xa_init",
-	"idr_init_base"				=> "xa_init_flags"
+	"idr_init_base"				=> "xa_init_flags",
+	"rcu_read_lock_trace"			=> "rcu_read_lock_tasks_trace",
+	"rcu_read_unlock_trace"			=> "rcu_read_unlock_tasks_trace",
 );
 
 #Create a search pattern for all these strings to speed up a loop below
@@ -1100,7 +1102,9 @@ our $declaration_macros = qr{(?x:
 	(?:$Storage\s+)?(?:[A-Z_][A-Z0-9]*_){0,2}(?:DEFINE|DECLARE)(?:_[A-Z0-9]+){1,6}\s*\(|
 	(?:$Storage\s+)?[HLP]?LIST_HEAD\s*\(|
 	(?:SKCIPHER_REQUEST|SHASH_DESC|AHASH_REQUEST)_ON_STACK\s*\(|
-	(?:$Storage\s+)?(?:XA_STATE|XA_STATE_ORDER)\s*\(
+	(?:$Storage\s+)?(?:XA_STATE|XA_STATE_ORDER)\s*\(|
+	__cacheline_group_(?:begin|end)(?:_aligned)?\s*\(|
+	__dma_from_device_group_(?:begin|end)\s*\(
 )};
 
 our %allow_repeated_words = (
@@ -6731,6 +6735,13 @@ sub process {
 				WARN("DATA_RACE",
 				     "data_race without comment\n" . $herecurr);
 			}
+		}
+
+# check for context_unsafe without a comment.
+		if ($line =~ /\bcontext_unsafe\b/ &&
+		    !ctx_has_comment($first_line, $linenr)) {
+			WARN("CONTEXT_UNSAFE",
+			     "context_unsafe without comment\n" . $herecurr);
 		}
 
 # check of hardware specific defines

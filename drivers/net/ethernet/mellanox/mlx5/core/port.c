@@ -393,9 +393,11 @@ static int mlx5_query_mcia(struct mlx5_core_dev *dev,
 	if (err)
 		return err;
 
-	*status = MLX5_GET(mcia_reg, out, status);
-	if (*status)
+	if (MLX5_GET(mcia_reg, out, status)) {
+		if (status)
+			*status = MLX5_GET(mcia_reg, out, status);
 		return -EIO;
+	}
 
 	ptr = MLX5_ADDR_OF(mcia_reg, out, dword_0);
 	memcpy(data, ptr, size);
@@ -429,7 +431,8 @@ int mlx5_query_module_eeprom(struct mlx5_core_dev *dev,
 		mlx5_qsfp_eeprom_params_set(&query.i2c_address, &query.page, &offset);
 		break;
 	default:
-		mlx5_core_err(dev, "Module ID not recognized: 0x%x\n", module_id);
+		mlx5_core_dbg(dev, "Module ID not recognized: 0x%x\n",
+			      module_id);
 		return -EINVAL;
 	}
 
@@ -1198,6 +1201,30 @@ u32 mlx5_port_info2linkmodes(struct mlx5_core_dev *mdev,
 		}
 	}
 	return link_modes;
+}
+
+int mlx5_port_oper_linkspeed(struct mlx5_core_dev *mdev, u32 *speed)
+{
+	const struct mlx5_link_info *table;
+	struct mlx5_port_eth_proto eproto;
+	u32 oper_speed = 0;
+	u32 max_size;
+	bool ext;
+	int err;
+	int i;
+
+	ext = mlx5_ptys_ext_supported(mdev);
+	err = mlx5_port_query_eth_proto(mdev, 1, ext, &eproto);
+	if (err)
+		return err;
+
+	mlx5e_port_get_link_mode_info_arr(mdev, &table, &max_size, false);
+	for (i = 0; i < max_size; ++i)
+		if (eproto.oper & MLX5E_PROT_MASK(i))
+			oper_speed = max(oper_speed, table[i].speed);
+
+	*speed = oper_speed;
+	return 0;
 }
 
 int mlx5_port_max_linkspeed(struct mlx5_core_dev *mdev, u32 *speed)
