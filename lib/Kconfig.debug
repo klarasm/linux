@@ -3442,9 +3442,9 @@ config PRIME_NUMBERS_KUNIT_TEST
 
 config GLOB_KUNIT_TEST
 	tristate "Glob matching test" if !KUNIT_ALL_TESTS
+	depends on GLOB
 	depends on KUNIT
 	default KUNIT_ALL_TESTS
-	select GLOB
 	help
 	  Enable this option to test the glob functions at runtime.
 

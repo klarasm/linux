@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: MIT OR GPL-2.0
 /*
  * Test cases for glob functions.
  */
@@ -7,12 +7,15 @@
 #include <linux/glob.h>
 #include <linux/module.h>
 
+/**
+ * struct glob_test_case - Test case for glob matching.
+ * @pat: Pattern to match.
+ * @str: String to match against.
+ * @expected: Expected glob_match result, true if matched.
+ */
 struct glob_test_case {
-	// Pattern to match.
 	const char *pat;
-	// String to match against.
 	const char *str;
-	// Expected glob_match result, true is matched.
 	bool expected;
 };
 
@@ -101,10 +104,10 @@ static void glob_test_match(struct kunit *test)
 	const struct glob_test_case *params = test->param_value;
 
 	KUNIT_EXPECT_EQ_MSG(test,
-		glob_match(params->pat, params->str),
-		params->expected,
-		"Pattern: \"%s\", String: \"%s\", Expected: %d",
-		params->pat, params->str, params->expected);
+			    glob_match(params->pat, params->str),
+			    params->expected,
+			    "Pattern: \"%s\", String: \"%s\", Expected: %d",
+			    params->pat, params->str, params->expected);
 }
 
 static struct kunit_case glob_kunit_test_cases[] = {
