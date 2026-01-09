@@ -811,9 +811,6 @@ void blk_mq_free_request(struct request *rq)
 
 	blk_mq_finish_request(rq);
 
-	if (unlikely(laptop_mode && !blk_rq_is_passthrough(rq)))
-		laptop_io_completion(q->disk->bdi);
-
 	rq_qos_done(q, rq);
 
 	WRITE_ONCE(rq->state, MQ_RQ_IDLE);
@@ -4257,12 +4254,16 @@ static void blk_mq_map_swqueue(struct request_queue *q)
 
 		/*
 		 * Rule out isolated CPUs from hctx->cpumask to avoid
-		 * running block kworker on isolated CPUs
+		 * running block kworker on isolated CPUs.
+		 * FIXME: cpuset should propagate further changes to isolated CPUs
+		 * here.
 		 */
+		rcu_read_lock();
 		for_each_cpu(cpu, hctx->cpumask) {
 			if (cpu_is_isolated(cpu))
 				cpumask_clear_cpu(cpu, hctx->cpumask);
 		}
+		rcu_read_unlock();
 
 		/*
 		 * Initialize batch roundrobin counts
@@ -4553,8 +4554,7 @@ static void __blk_mq_realloc_hw_ctxs(struct blk_mq_tag_set *set,
 		 * Make sure reading the old queue_hw_ctx from other
 		 * context concurrently won't trigger uaf.
 		 */
-		synchronize_rcu_expedited();
-		kfree(hctxs);
+		kfree_rcu_mightsleep(hctxs);
 		hctxs = new_hctxs;
 	}
 

@@ -2,7 +2,6 @@
 #ifndef _LINUX_TYPES_H
 #define _LINUX_TYPES_H
 
-#define __EXPORTED_HEADERS__
 #include <uapi/linux/types.h>
 
 #ifndef __ASSEMBLY__
@@ -170,6 +169,11 @@ typedef u64 phys_addr_t;
 #else
 typedef u32 phys_addr_t;
 #endif
+
+struct phys_vec {
+	phys_addr_t	paddr;
+	size_t		len;
+};
 
 typedef phys_addr_t resource_size_t;
 

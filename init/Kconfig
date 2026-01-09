@@ -171,7 +171,7 @@ config RUSTC_HAS_FILE_AS_C_STR
 
 config PAHOLE_VERSION
 	int
-	default $(shell,$(srctree)/scripts/pahole-version.sh $(PAHOLE))
+	default "$(PAHOLE_VERSION)"
 
 config CONSTRUCTORS
 	bool
@@ -247,7 +247,7 @@ config WERROR
 
 config UAPI_HEADER_TEST
 	bool "Compile test UAPI headers"
-	depends on HEADERS_INSTALL && CC_CAN_LINK
+	depends on HEADERS_INSTALL
 	help
 	  Compile test headers exported to user-space to ensure they are
 	  self-contained, i.e. compilable as standalone units.
@@ -1254,6 +1254,7 @@ config CPUSETS
 	bool "Cpuset controller"
 	depends on SMP
 	select UNION_FIND
+	select CPU_ISOLATION
 	help
 	  This option will let you create and manage CPUSETs which
 	  allow dynamically partitioning a system into sets of CPUs and
@@ -2060,6 +2061,10 @@ config HAVE_PERF_EVENTS
 config GUEST_PERF_EVENTS
 	bool
 	depends on HAVE_PERF_EVENTS
+
+config PERF_GUEST_MEDIATED_PMU
+	bool
+	depends on GUEST_PERF_EVENTS
 
 config PERF_USE_VMALLOC
 	bool
