@@ -1031,7 +1031,7 @@ static struct platform_driver k1_ccu_driver = {
 		.name		= "spacemit,k1-ccu",
 		.of_match_table = of_k1_ccu_match,
 	},
-	.probe	= k1_ccu_probe,
+	.probe	= spacemit_ccu_probe,
 };
 module_platform_driver(k1_ccu_driver);
 
