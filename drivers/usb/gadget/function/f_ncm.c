@@ -19,6 +19,7 @@
 #include <linux/etherdevice.h>
 #include <linux/crc32.h>
 #include <linux/string_choices.h>
+#include <linux/hex.h>
 
 #include <linux/usb/cdc.h>
 #include <linux/usb/gadget.h>
