@@ -7,6 +7,7 @@
 #ifdef __KERNEL__
 
 #include <asm/page_types.h>
+#include <asm/kasan.h>
 
 #ifdef CONFIG_X86_64
 #include <asm/page_64.h>
@@ -59,6 +60,13 @@ static inline void copy_user_page(void *to, void *from, unsigned long vaddr,
  * virt_to_page(kaddr) returns a valid pointer if and only if
  * virt_addr_valid(kaddr) returns true.
  */
+
+#ifdef CONFIG_KASAN_SW_TAGS
+#define page_to_virt(x) ({							\
+	void *__addr = __va(page_to_pfn((struct page *)x) << PAGE_SHIFT);	\
+	__tag_set(__addr, page_kasan_tag(x));					\
+})
+#endif
 #define virt_to_page(kaddr)	pfn_to_page(__pa(kaddr) >> PAGE_SHIFT)
 extern bool __virt_addr_valid(unsigned long kaddr);
 #define virt_addr_valid(kaddr)	__virt_addr_valid((unsigned long) (kaddr))
@@ -68,9 +76,22 @@ static __always_inline void *pfn_to_kaddr(unsigned long pfn)
 	return __va(pfn << PAGE_SHIFT);
 }
 
+#ifdef CONFIG_KASAN_SW_TAGS
+#define CANONICAL_MASK(vaddr_bits) (BIT_ULL(63) | BIT_ULL((vaddr_bits) - 1))
+#else
+#define CANONICAL_MASK(vaddr_bits) GENMASK_ULL(63, vaddr_bits)
+#endif
+
+/*
+ * To make an address canonical either set or clear the bits defined by the
+ * CANONICAL_MASK(). Clear the bits for userspace addresses if the top address
+ * bit is a zero. Set the bits for kernel addresses if the top address bit is a
+ * one.
+ */
 static __always_inline u64 __canonical_address(u64 vaddr, u8 vaddr_bits)
 {
-	return ((s64)vaddr << (64 - vaddr_bits)) >> (64 - vaddr_bits);
+	return (vaddr & BIT_ULL(63)) ? vaddr | CANONICAL_MASK(vaddr_bits) :
+				       vaddr & ~CANONICAL_MASK(vaddr_bits);
 }
 
 static __always_inline u64 __is_canonical_address(u64 vaddr, u8 vaddr_bits)

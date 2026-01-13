@@ -57,8 +57,8 @@
 #endif
 
 struct percpu_counter_tree_level_item {
-	atomic_t count;			/*
-					 * Count the number of carry fort this tree item.
+	atomic_long_t count;		/*
+					 * Count the number of carry for this tree item.
 					 * The carry counter is kept at the order of the
 					 * carry accounted for at this tree level.
 					 */
@@ -69,17 +69,17 @@ struct percpu_counter_tree_level_item {
 
 struct percpu_counter_tree {
 	/* Fast-path fields. */
-	unsigned int __percpu *level0;	/* Pointer to per-CPU split counters (tree level 0). */
-	unsigned int level0_bit_mask;	/* Bit mask to apply to detect carry propagation from tree level 0. */
+	unsigned long __percpu *level0;	/* Pointer to per-CPU split counters (tree level 0). */
+	unsigned long level0_bit_mask;	/* Bit mask to apply to detect carry propagation from tree level 0. */
 	union {
-		unsigned int *i;	/* Approximate sum for single-CPU topology. */
-		atomic_t *a;		/* Approximate sum for SMP topology.  */
+		unsigned long *i;	/* Approximate sum for single-CPU topology. */
+		atomic_long_t *a;	/* Approximate sum for SMP topology.  */
 	} approx_sum;
-	int bias;			/* Bias to apply to counter precise and approximate values. */
+	long bias;			/* Bias to apply to counter precise and approximate values. */
 
 	/* Slow-path fields. */
 	struct percpu_counter_tree_level_item *items;	/* Array of tree items for levels 1 to N. */
-	unsigned int batch_size;	/*
+	unsigned long batch_size;	/*
 					 * The batch size is the increment step at level 0 which
 					 * triggers a carry propagation. The batch size is required
 					 * to be greater than 1, and a power of 2.
@@ -94,27 +94,27 @@ struct percpu_counter_tree {
 	 * compared to the "over" accuracy range.
 	 */
 	struct {
-		unsigned int under;
-		unsigned int over;
+		unsigned long under;
+		unsigned long over;
 	} approx_accuracy_range;
 };
 
 size_t percpu_counter_tree_items_size(void);
 int percpu_counter_tree_init_many(struct percpu_counter_tree *counters, struct percpu_counter_tree_level_item *items,
-				  unsigned int nr_counters, unsigned int batch_size, gfp_t gfp_flags);
+				  unsigned int nr_counters, unsigned long batch_size, gfp_t gfp_flags);
 int percpu_counter_tree_init(struct percpu_counter_tree *counter, struct percpu_counter_tree_level_item *items,
-			     unsigned int batch_size, gfp_t gfp_flags);
+			     unsigned long batch_size, gfp_t gfp_flags);
 void percpu_counter_tree_destroy_many(struct percpu_counter_tree *counter, unsigned int nr_counters);
 void percpu_counter_tree_destroy(struct percpu_counter_tree *counter);
-void percpu_counter_tree_add(struct percpu_counter_tree *counter, int inc);
-int percpu_counter_tree_precise_sum(struct percpu_counter_tree *counter);
+void percpu_counter_tree_add(struct percpu_counter_tree *counter, long inc);
+long percpu_counter_tree_precise_sum(struct percpu_counter_tree *counter);
 int percpu_counter_tree_approximate_compare(struct percpu_counter_tree *a, struct percpu_counter_tree *b);
-int percpu_counter_tree_approximate_compare_value(struct percpu_counter_tree *counter, int v);
+int percpu_counter_tree_approximate_compare_value(struct percpu_counter_tree *counter, long v);
 int percpu_counter_tree_precise_compare(struct percpu_counter_tree *a, struct percpu_counter_tree *b);
-int percpu_counter_tree_precise_compare_value(struct percpu_counter_tree *counter, int v);
-void percpu_counter_tree_set(struct percpu_counter_tree *counter, int v);
+int percpu_counter_tree_precise_compare_value(struct percpu_counter_tree *counter, long v);
+void percpu_counter_tree_set(struct percpu_counter_tree *counter, long v);
 void percpu_counter_tree_approximate_accuracy_range(struct percpu_counter_tree *counter,
-						    unsigned int *under, unsigned int *over);
+						    unsigned long *under, unsigned long *over);
 int percpu_counter_tree_subsystem_init(void);
 
 /**
@@ -128,15 +128,15 @@ int percpu_counter_tree_subsystem_init(void);
  * Return: The current approximate counter sum.
  */
 static inline
-int percpu_counter_tree_approximate_sum(struct percpu_counter_tree *counter)
+long percpu_counter_tree_approximate_sum(struct percpu_counter_tree *counter)
 {
-	unsigned int v;
+	unsigned long v;
 
 	if (!counter->level0_bit_mask)
 		v = READ_ONCE(*counter->approx_sum.i);
 	else
-		v = atomic_read(counter->approx_sum.a);
-	return (int) (v + (unsigned int)READ_ONCE(counter->bias));
+		v = atomic_long_read(counter->approx_sum.a);
+	return (long) (v + (unsigned long)READ_ONCE(counter->bias));
 }
 
 #else	/* !CONFIG_SMP */
@@ -146,7 +146,7 @@ int percpu_counter_tree_approximate_sum(struct percpu_counter_tree *counter)
 struct percpu_counter_tree_level_item;
 
 struct percpu_counter_tree {
-	atomic_t count;
+	atomic_long_t count;
 };
 
 static inline
@@ -157,16 +157,16 @@ size_t percpu_counter_tree_items_size(void)
 
 static inline
 int percpu_counter_tree_init_many(struct percpu_counter_tree *counters, struct percpu_counter_tree_level_item *items,
-				  unsigned int nr_counters, unsigned int batch_size, gfp_t gfp_flags)
+				  unsigned int nr_counters, unsigned long batch_size, gfp_t gfp_flags)
 {
 	for (unsigned int i = 0; i < nr_counters; i++)
-		atomic_set(&counters[i].count, 0);
+		atomic_long_set(&counters[i].count, 0);
 	return 0;
 }
 
 static inline
 int percpu_counter_tree_init(struct percpu_counter_tree *counter, struct percpu_counter_tree_level_item *items,
-			     unsigned int batch_size, gfp_t gfp_flags)
+			     unsigned long batch_size, gfp_t gfp_flags)
 {
 	return percpu_counter_tree_init_many(counter, items, 1, batch_size, gfp_flags);
 }
@@ -182,16 +182,16 @@ void percpu_counter_tree_destroy(struct percpu_counter_tree *counter)
 }
 
 static inline
-int percpu_counter_tree_precise_sum(struct percpu_counter_tree *counter)
+long percpu_counter_tree_precise_sum(struct percpu_counter_tree *counter)
 {
-	return atomic_read(&counter->count);
+	return atomic_long_read(&counter->count);
 }
 
 static inline
 int percpu_counter_tree_precise_compare(struct percpu_counter_tree *a, struct percpu_counter_tree *b)
 {
-	int count_a = percpu_counter_tree_precise_sum(a),
-	    count_b = percpu_counter_tree_precise_sum(b);
+	long count_a = percpu_counter_tree_precise_sum(a),
+	     count_b = percpu_counter_tree_precise_sum(b);
 
 	if (count_a == count_b)
 		return 0;
@@ -201,9 +201,9 @@ int percpu_counter_tree_precise_compare(struct percpu_counter_tree *a, struct pe
 }
 
 static inline
-int percpu_counter_tree_precise_compare_value(struct percpu_counter_tree *counter, int v)
+int percpu_counter_tree_precise_compare_value(struct percpu_counter_tree *counter, long v)
 {
-	int count = percpu_counter_tree_precise_sum(counter);
+	long count = percpu_counter_tree_precise_sum(counter);
 
 	if (count == v)
 		return 0;
@@ -219,33 +219,33 @@ int percpu_counter_tree_approximate_compare(struct percpu_counter_tree *a, struc
 }
 
 static inline
-int percpu_counter_tree_approximate_compare_value(struct percpu_counter_tree *counter, int v)
+int percpu_counter_tree_approximate_compare_value(struct percpu_counter_tree *counter, long v)
 {
 	return percpu_counter_tree_precise_compare_value(counter, v);
 }
 
 static inline
-void percpu_counter_tree_set(struct percpu_counter_tree *counter, int v)
+void percpu_counter_tree_set(struct percpu_counter_tree *counter, long v)
 {
-	atomic_set(&counter->count, v);
+	atomic_long_set(&counter->count, v);
 }
 
 static inline
 void percpu_counter_tree_approximate_accuracy_range(struct percpu_counter_tree *counter,
-						    unsigned int *under, unsigned int *over)
+						    unsigned long *under, unsigned long *over)
 {
 	*under = 0;
 	*over = 0;
 }
 
 static inline
-void percpu_counter_tree_add(struct percpu_counter_tree *counter, int inc)
+void percpu_counter_tree_add(struct percpu_counter_tree *counter, long inc)
 {
-	atomic_add(inc, &counter->count);
+	atomic_long_add(inc, &counter->count);
 }
 
 static inline
-int percpu_counter_tree_approximate_sum(struct percpu_counter_tree *counter)
+long percpu_counter_tree_approximate_sum(struct percpu_counter_tree *counter)
 {
 	return percpu_counter_tree_precise_sum(counter);
 }
@@ -268,9 +268,9 @@ int percpu_counter_tree_subsystem_init(void)
  * Return: The current positive approximate counter sum.
  */
 static inline
-int percpu_counter_tree_approximate_sum_positive(struct percpu_counter_tree *counter)
+long percpu_counter_tree_approximate_sum_positive(struct percpu_counter_tree *counter)
 {
-	int v = percpu_counter_tree_approximate_sum(counter);
+	long v = percpu_counter_tree_approximate_sum(counter);
 	return v > 0 ? v : 0;
 }
 
@@ -284,10 +284,61 @@ int percpu_counter_tree_approximate_sum_positive(struct percpu_counter_tree *cou
  * Return: The current positive precise counter sum.
  */
 static inline
-int percpu_counter_tree_precise_sum_positive(struct percpu_counter_tree *counter)
+long percpu_counter_tree_precise_sum_positive(struct percpu_counter_tree *counter)
 {
-	int v = percpu_counter_tree_precise_sum(counter);
+	long v = percpu_counter_tree_precise_sum(counter);
 	return v > 0 ? v : 0;
+}
+
+/**
+ * percpu_counter_tree_approximate_min_max_range() - Return the approximation min and max precise values.
+ * @approx_sum: Approximated sum.
+ * @under: Tree accuracy range (under).
+ * @over: Tree accuracy range (over).
+ * @precise_min: Minimum possible value for precise sum (output).
+ * @precise_max: Maximum possible value for precise sum (output).
+ *
+ * Calculate the minimum and maximum precise values for a given
+ * approximation and (under, over) accuracy range.
+ *
+ * The range of the approximation as a function of the precise sum is expressed as:
+ *
+ *   approx_sum >= precise_sum - approx_accuracy_range.under
+ *   approx_sum <= precise_sum + approx_accuracy_range.over
+ *
+ * Therefore, the range of the precise sum as a function of the approximation is expressed as:
+ *
+ *   precise_sum <= approx_sum + approx_accuracy_range.under
+ *   precise_sum >= approx_sum - approx_accuracy_range.over
+ */
+static inline
+void percpu_counter_tree_approximate_min_max_range(long approx_sum, unsigned long under, unsigned long over,
+						   long *precise_min, long *precise_max)
+{
+	*precise_min = approx_sum - over;
+	*precise_max = approx_sum + under;
+}
+
+/**
+ * percpu_counter_tree_approximate_min_max() - Return the tree approximation, min and max possible precise values.
+ * @counter: The counter to sum.
+ * @approx_sum: Approximate sum (output).
+ * @precise_min: Minimum possible value for precise sum (output).
+ * @precise_max: Maximum possible value for precise sum (output).
+ *
+ * Return the approximate sum, minimum and maximum precise values for
+ * a counter.
+ */
+static inline
+void percpu_counter_tree_approximate_min_max(struct percpu_counter_tree *counter,
+					     long *approx_sum, long *precise_min, long *precise_max)
+{
+	unsigned long under, over;
+	long v = percpu_counter_tree_approximate_sum(counter);
+
+	percpu_counter_tree_approximate_accuracy_range(counter, &under, &over);
+	percpu_counter_tree_approximate_min_max_range(v, under, over, precise_min, precise_max);
+	*approx_sum = v;
 }
 
 #endif  /* _PERCPU_COUNTER_TREE_H */

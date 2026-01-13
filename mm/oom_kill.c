@@ -211,7 +211,7 @@ static bool should_dump_unreclaim_slab(void)
  * task consuming the most memory to avoid subsequent oom failures.
  */
 long oom_badness(struct task_struct *p, unsigned long totalpages, bool approximate,
-		 unsigned int *accuracy_under, unsigned int *accuracy_over)
+		 unsigned long *accuracy_under, unsigned long *accuracy_over)
 {
 	long points;
 	long adj;
@@ -322,8 +322,8 @@ static enum oom_constraint constrained_alloc(struct oom_control *oc)
 static int oom_evaluate_task(struct task_struct *task, void *arg)
 {
 	struct oom_control *oc = arg;
-	unsigned int accuracy_under = 0, accuracy_over = 0;
-	long points;
+	unsigned long accuracy_under = 0, accuracy_over = 0;
+	long points, points_min, points_max;
 
 	if (oom_unkillable_task(task))
 		goto next;
@@ -349,29 +349,37 @@ static int oom_evaluate_task(struct task_struct *task, void *arg)
 	 * killed first if it triggers an oom, then select it.
 	 */
 	if (oom_task_origin(task)) {
-		points = LONG_MAX;
+		points_min = LONG_MAX;
 		goto select;
 	}
 
 	points = oom_badness(task, oc->totalpages, true, &accuracy_under, &accuracy_over);
+	if (points != LONG_MIN) {
+		percpu_counter_tree_approximate_min_max_range(points,
+				accuracy_under, accuracy_over,
+				&points_min, &points_max);
+	}
 	if (oc->approximate) {
-		if (points == LONG_MIN || points < oc->chosen_points)
+		/*
+		 * Keep the process which has the highest minimum
+		 * possible points value based on approximation.
+		 */
+		if (points == LONG_MIN || points_min < oc->chosen_points)
 			goto next;
 	} else {
 		/*
-		 * Eliminate processes which are below the chosen
-		 * points accuracy range with an approximation.
+		 * Eliminate processes which are certainly below the
+		 * chosen points minimum possible value with an
+		 * approximation.
 		 */
-		if (points == LONG_MIN || (long)(points + accuracy_over + oc->accuracy_under - oc->chosen_points) < 0)
+		if (points == LONG_MIN || (long)(points_max - oc->chosen_points) < 0)
 			goto next;
 
 		if (oc->nr_precise < max_precise_badness_sums) {
-			accuracy_under = 0;
-			accuracy_over = 0;
 			oc->nr_precise++;
 			/* Precise evaluation. */
-			points = oom_badness(task, oc->totalpages, false, NULL, NULL);
-			if (points == LONG_MIN || (long)(points + oc->accuracy_under - oc->chosen_points) < 0)
+			points_min = points_max = points = oom_badness(task, oc->totalpages, false, NULL, NULL);
+			if (points == LONG_MIN || (long)(points - oc->chosen_points) < 0)
 				goto next;
 		}
 	}
@@ -381,8 +389,7 @@ select:
 		put_task_struct(oc->chosen);
 	get_task_struct(task);
 	oc->chosen = task;
-	oc->chosen_points = points;
-	oc->accuracy_under = accuracy_under;
+	oc->chosen_points = points_min;
 next:
 	return 0;
 abort:
@@ -414,7 +421,6 @@ static void select_bad_process_iter(struct oom_control *oc)
 static void select_bad_process(struct oom_control *oc)
 {
 	oc->chosen_points = LONG_MIN;
-	oc->accuracy_under = 0;
 	oc->nr_precise = 0;
 
 	/* Approximate scan. */

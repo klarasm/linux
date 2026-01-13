@@ -1951,7 +1951,7 @@ static inline u8 page_kasan_tag(const struct page *page)
 
 	if (kasan_enabled()) {
 		tag = (page->flags.f >> KASAN_TAG_PGSHIFT) & KASAN_TAG_MASK;
-		tag ^= 0xff;
+		tag ^= KASAN_TAG_KERNEL;
 	}
 
 	return tag;
@@ -1964,7 +1964,7 @@ static inline void page_kasan_tag_set(struct page *page, u8 tag)
 	if (!kasan_enabled())
 		return;
 
-	tag ^= 0xff;
+	tag ^= KASAN_TAG_KERNEL;
 	old_flags = READ_ONCE(page->flags.f);
 	do {
 		flags = old_flags;
@@ -1983,7 +1983,7 @@ static inline void page_kasan_tag_reset(struct page *page)
 
 static inline u8 page_kasan_tag(const struct page *page)
 {
-	return 0xff;
+	return KASAN_TAG_KERNEL;
 }
 
 static inline void page_kasan_tag_set(struct page *page, u8 tag) { }
@@ -2846,20 +2846,11 @@ static inline bool get_user_page_fast_only(unsigned long addr,
 	return get_user_pages_fast_only(addr, 1, gup_flags, pagep) == 1;
 }
 
-static inline size_t get_rss_stat_items_size(void)
-{
-	return percpu_counter_tree_items_size() * NR_MM_COUNTERS;
-}
-
 static inline struct percpu_counter_tree_level_item *get_rss_stat_items(struct mm_struct *mm)
 {
 	unsigned long ptr = (unsigned long)mm;
 
 	ptr += offsetof(struct mm_struct, flexible_array);
-	/* Skip cpu_bitmap */
-	ptr += cpumask_size();
-	/* Skip mm_cidmask */
-	ptr += mm_cid_size();
 	return (struct percpu_counter_tree_level_item *)ptr;
 }
 
@@ -2867,11 +2858,11 @@ static inline struct percpu_counter_tree_level_item *get_rss_stat_items(struct m
  * per-process(per-mm_struct) statistics.
  */
 static inline unsigned long __get_mm_counter(struct mm_struct *mm, int member, bool approximate,
-					     unsigned int *accuracy_under, unsigned int *accuracy_over)
+					     unsigned long *accuracy_under, unsigned long *accuracy_over)
 {
 	if (approximate) {
 		if (accuracy_under && accuracy_over) {
-			unsigned int under, over;
+			unsigned long under, over;
 
 			percpu_counter_tree_approximate_accuracy_range(&mm->rss_stat[member], &under, &over);
 			*accuracy_under += under;
@@ -2891,7 +2882,7 @@ static inline unsigned long get_mm_counter(struct mm_struct *mm, int member)
 
 static inline unsigned long get_mm_counter_sum(struct mm_struct *mm, int member)
 {
-	return get_mm_counter(mm, member);
+	return __get_mm_counter(mm, member, false, NULL, NULL);
 }
 
 void mm_trace_rss_stat(struct mm_struct *mm, int member);
@@ -2933,7 +2924,7 @@ static inline int mm_counter(struct folio *folio)
 }
 
 static inline unsigned long __get_mm_rss(struct mm_struct *mm, bool approximate,
-					 unsigned int *accuracy_under, unsigned int *accuracy_over)
+					 unsigned long *accuracy_under, unsigned long *accuracy_over)
 {
 	return __get_mm_counter(mm, MM_FILEPAGES, approximate, accuracy_under, accuracy_over) +
 		__get_mm_counter(mm, MM_ANONPAGES, approximate, accuracy_under, accuracy_over) +
@@ -4314,13 +4305,6 @@ unsigned long section_map_size(void);
 struct page * __populate_section_memmap(unsigned long pfn,
 		unsigned long nr_pages, int nid, struct vmem_altmap *altmap,
 		struct dev_pagemap *pgmap);
-pgd_t *vmemmap_pgd_populate(unsigned long addr, int node);
-p4d_t *vmemmap_p4d_populate(pgd_t *pgd, unsigned long addr, int node);
-pud_t *vmemmap_pud_populate(p4d_t *p4d, unsigned long addr, int node);
-pmd_t *vmemmap_pmd_populate(pud_t *pud, unsigned long addr, int node);
-pte_t *vmemmap_pte_populate(pmd_t *pmd, unsigned long addr, int node,
-			    struct vmem_altmap *altmap, unsigned long ptpfn,
-			    unsigned long flags);
 void *vmemmap_alloc_block(unsigned long size, int node);
 struct vmem_altmap;
 void *vmemmap_alloc_block_buf(unsigned long size, int node,
