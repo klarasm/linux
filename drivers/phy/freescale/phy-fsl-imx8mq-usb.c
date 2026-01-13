@@ -17,6 +17,10 @@
 #define PHY_CTRL0_FSEL_MASK		GENMASK(10, 5)
 #define PHY_CTRL0_FSEL_24M		0x2a
 #define PHY_CTRL0_FSEL_100M		0x27
+#define PHY_CTRL0_SSC_RANGE_MASK	GENMASK(23, 21)
+#define PHY_CTRL0_SSC_RANGE_4003PPM	0x2
+#define PHY_CTRL0_SSC_RANGE_4492PPM	0x1
+#define PHY_CTRL0_SSC_RANGE_4980PPM	0x0
 
 #define PHY_CTRL1			0x4
 #define PHY_CTRL1_RESET			BIT(0)
@@ -126,8 +130,6 @@ struct imx8mq_usb_phy {
 static void tca_blk_orientation_set(struct tca_blk *tca,
 				enum typec_orientation orientation);
 
-#ifdef CONFIG_TYPEC
-
 static int tca_blk_typec_switch_set(struct typec_switch_dev *sw,
 				enum typec_orientation orientation)
 {
@@ -174,18 +176,6 @@ static void tca_blk_put_typec_switch(struct typec_switch_dev *sw)
 {
 	typec_switch_unregister(sw);
 }
-
-#else
-
-static struct typec_switch_dev *tca_blk_get_typec_switch(struct platform_device *pdev,
-			struct imx8mq_usb_phy *imx_phy)
-{
-	return NULL;
-}
-
-static void tca_blk_put_typec_switch(struct typec_switch_dev *sw) {}
-
-#endif /* CONFIG_TYPEC */
 
 static void tca_blk_orientation_set(struct tca_blk *tca,
 				enum typec_orientation orientation)
@@ -504,6 +494,7 @@ static void imx8m_phy_tune(struct imx8mq_usb_phy *imx_phy)
 
 	if (imx_phy->pcs_tx_swing_full != PHY_TUNE_DEFAULT) {
 		value = readl(imx_phy->base + PHY_CTRL5);
+		value &= ~PHY_CTRL5_PCS_TX_SWING_FULL_MASK;
 		value |= FIELD_PREP(PHY_CTRL5_PCS_TX_SWING_FULL_MASK,
 				   imx_phy->pcs_tx_swing_full);
 		writel(value, imx_phy->base + PHY_CTRL5);
@@ -600,6 +591,9 @@ static int imx8mp_usb_phy_init(struct phy *phy)
 
 	value = readl(imx_phy->base + PHY_CTRL0);
 	value |= PHY_CTRL0_REF_SSP_EN;
+	value &= ~PHY_CTRL0_SSC_RANGE_MASK;
+	value |= FIELD_PREP(PHY_CTRL0_SSC_RANGE_MASK,
+			    PHY_CTRL0_SSC_RANGE_4003PPM);
 	writel(value, imx_phy->base + PHY_CTRL0);
 
 	value = readl(imx_phy->base + PHY_CTRL2);
