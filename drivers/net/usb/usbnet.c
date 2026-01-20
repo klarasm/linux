@@ -18,6 +18,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/hex.h>
 #include <linux/init.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -1984,6 +1985,7 @@ int usbnet_resume(struct usb_interface *intf)
 			} else {
 				netif_trans_update(dev->net);
 				__skb_queue_tail(&dev->txq, skb);
+				netdev_sent_queue(dev->net, skb->len);
 			}
 		}
 

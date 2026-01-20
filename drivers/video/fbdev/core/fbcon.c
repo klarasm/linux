@@ -1068,7 +1068,8 @@ static void fbcon_init(struct vc_data *vc, bool init)
 		return;
 
 	if (!info->fbcon_par)
-		con2fb_acquire_newinfo(vc, info, vc->vc_num);
+		if (con2fb_acquire_newinfo(vc, info, vc->vc_num))
+			return;
 
 	/* If we are not the first console on this
 	   fb, copy the font from that console */
@@ -2289,28 +2290,6 @@ static bool fbcon_blank(struct vc_data *vc, enum vesa_blank_mode blank,
 	return false;
 }
 
-static void fbcon_debug_enter(struct vc_data *vc)
-{
-	struct fb_info *info = fbcon_info_from_console(vc->vc_num);
-	struct fbcon_par *par = info->fbcon_par;
-
-	par->save_graphics = par->graphics;
-	par->graphics = 0;
-	if (info->fbops->fb_debug_enter)
-		info->fbops->fb_debug_enter(info);
-	fbcon_set_palette(vc, color_table);
-}
-
-static void fbcon_debug_leave(struct vc_data *vc)
-{
-	struct fb_info *info = fbcon_info_from_console(vc->vc_num);
-	struct fbcon_par *par = info->fbcon_par;
-
-	par->graphics = par->save_graphics;
-	if (info->fbops->fb_debug_leave)
-		info->fbops->fb_debug_leave(info);
-}
-
 static int fbcon_get_font(struct vc_data *vc, struct console_font *font, unsigned int vpitch)
 {
 	u8 *fontdata = vc->vc_font.data;
@@ -3214,8 +3193,6 @@ static const struct consw fb_con = {
 	.con_set_palette 	= fbcon_set_palette,
 	.con_invert_region 	= fbcon_invert_region,
 	.con_resize             = fbcon_resize,
-	.con_debug_enter	= fbcon_debug_enter,
-	.con_debug_leave	= fbcon_debug_leave,
 };
 
 static ssize_t rotate_store(struct device *device,

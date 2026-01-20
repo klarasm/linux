@@ -248,6 +248,11 @@ enum pci_dev_flags {
 	PCI_DEV_FLAGS_HAS_MSI_MASKING = (__force pci_dev_flags_t) (1 << 12),
 	/* Device requires write to PCI_MSIX_ENTRY_DATA before any MSIX reads */
 	PCI_DEV_FLAGS_MSIX_TOUCH_ENTRY_DATA_FIRST = (__force pci_dev_flags_t) (1 << 13),
+	/*
+	 * PCIe to PCI bridge does not create RID aliases because the bridge is
+	 * integrated with the downstream devices and doesn't use real PCI.
+	 */
+	PCI_DEV_FLAGS_PCI_BRIDGE_NO_ALIAS = (__force pci_dev_flags_t) (1 << 14),
 };
 
 enum pci_irq_reroute_variant {
@@ -1206,6 +1211,7 @@ struct pci_bus *pci_create_root_bus(struct device *parent, int bus,
 				    struct pci_ops *ops, void *sysdata,
 				    struct list_head *resources);
 int pci_host_probe(struct pci_host_bridge *bridge);
+void pci_probe_flush_workqueue(void);
 int pci_bus_insert_busn_res(struct pci_bus *b, int bus, int busmax);
 int pci_bus_update_busn_res_end(struct pci_bus *b, int busmax);
 void pci_bus_release_busn_res(struct pci_bus *b);
@@ -2078,6 +2084,8 @@ static inline int pci_has_flag(int flag) { return 0; }
 				_PCI_NOP(o, dword, u32 x)
 _PCI_NOP_ALL(read, *)
 _PCI_NOP_ALL(write,)
+
+static inline void pci_probe_flush_workqueue(void) { }
 
 static inline struct pci_dev *pci_get_device(unsigned int vendor,
 					     unsigned int device,

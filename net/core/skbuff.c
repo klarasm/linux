@@ -280,7 +280,7 @@ EXPORT_SYMBOL(__netdev_alloc_frag_align);
  */
 static u32 skbuff_cache_size __read_mostly;
 
-static struct sk_buff *napi_skb_cache_get(bool alloc)
+static inline struct sk_buff *napi_skb_cache_get(bool alloc)
 {
 	struct napi_alloc_cache *nc = this_cpu_ptr(&napi_alloc_cache);
 	struct sk_buff *skb;
@@ -305,6 +305,23 @@ static struct sk_buff *napi_skb_cache_get(bool alloc)
 	kasan_mempool_unpoison_object(skb, skbuff_cache_size);
 
 	return skb;
+}
+
+/*
+ * Only clear those fields we need to clear, not those that we will
+ * actually initialise later. Hence, don't put any more fields after
+ * the tail pointer in struct sk_buff!
+ */
+static inline void skbuff_clear(struct sk_buff *skb)
+{
+	/* Replace memset(skb, 0, offsetof(struct sk_buff, tail))
+	 * with two smaller memset(), with a barrier() between them.
+	 * This forces the compiler to inline both calls.
+	 */
+	BUILD_BUG_ON(offsetof(struct sk_buff, tail) <= 128);
+	memset(skb, 0, 128);
+	barrier();
+	memset((void *)skb + 128, 0, offsetof(struct sk_buff, tail) - 128);
 }
 
 /**
@@ -357,7 +374,7 @@ get:
 		skbs[i] = nc->skb_cache[base + i];
 
 		kasan_mempool_unpoison_object(skbs[i], skbuff_cache_size);
-		memset(skbs[i], 0, offsetof(struct sk_buff, tail));
+		skbuff_clear(skbs[i]);
 	}
 
 	nc->skb_count -= n;
@@ -424,7 +441,7 @@ struct sk_buff *slab_build_skb(void *data)
 	if (unlikely(!skb))
 		return NULL;
 
-	memset(skb, 0, offsetof(struct sk_buff, tail));
+	skbuff_clear(skb);
 	data = __slab_build_skb(data, &size);
 	__finalize_skb_around(skb, data, size);
 
@@ -476,7 +493,7 @@ struct sk_buff *__build_skb(void *data, unsigned int frag_size)
 	if (unlikely(!skb))
 		return NULL;
 
-	memset(skb, 0, offsetof(struct sk_buff, tail));
+	skbuff_clear(skb);
 	__build_skb_around(skb, data, frag_size);
 
 	return skb;
@@ -537,7 +554,7 @@ static struct sk_buff *__napi_build_skb(void *data, unsigned int frag_size)
 	if (unlikely(!skb))
 		return NULL;
 
-	memset(skb, 0, offsetof(struct sk_buff, tail));
+	skbuff_clear(skb);
 	__build_skb_around(skb, data, frag_size);
 
 	return skb;
@@ -696,13 +713,8 @@ fallback:
 	 */
 	prefetchw(data + SKB_WITH_OVERHEAD(size));
 
-	/*
-	 * Only clear those fields we need to clear, not those that we will
-	 * actually initialise below. Hence, don't put any more fields after
-	 * the tail pointer in struct sk_buff!
-	 */
-	memset(skb, 0, offsetof(struct sk_buff, tail));
-	__build_skb_around(skb, data, size);
+	skbuff_clear(skb);
+	__finalize_skb_around(skb, data, size);
 	skb->pfmemalloc = pfmemalloc;
 
 	if (flags & SKB_ALLOC_FCLONE) {
@@ -1312,14 +1324,15 @@ void skb_dump(const char *level, const struct sk_buff *skb, bool full_pkt)
 	has_mac = skb_mac_header_was_set(skb);
 	has_trans = skb_transport_header_was_set(skb);
 
-	printk("%sskb len=%u headroom=%u headlen=%u tailroom=%u\n"
-	       "mac=(%d,%d) mac_len=%u net=(%d,%d) trans=%d\n"
+	printk("%sskb len=%u data_len=%u headroom=%u headlen=%u tailroom=%u\n"
+	       "end-tail=%u mac=(%d,%d) mac_len=%u net=(%d,%d) trans=%d\n"
 	       "shinfo(txflags=%u nr_frags=%u gso(size=%hu type=%u segs=%hu))\n"
 	       "csum(0x%x start=%u offset=%u ip_summed=%u complete_sw=%u valid=%u level=%u)\n"
 	       "hash(0x%x sw=%u l4=%u) proto=0x%04x pkttype=%u iif=%d\n"
 	       "priority=0x%x mark=0x%x alloc_cpu=%u vlan_all=0x%x\n"
 	       "encapsulation=%d inner(proto=0x%04x, mac=%u, net=%u, trans=%u)\n",
-	       level, skb->len, headroom, skb_headlen(skb), tailroom,
+	       level, skb->len, skb->data_len, headroom, skb_headlen(skb),
+	       tailroom, skb->end - skb->tail,
 	       has_mac ? skb->mac_header : -1,
 	       has_mac ? skb_mac_header_len(skb) : -1,
 	       skb->mac_len,

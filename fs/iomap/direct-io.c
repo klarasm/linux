@@ -3,10 +3,12 @@
  * Copyright (C) 2010 Red Hat, Inc.
  * Copyright (c) 2016-2025 Christoph Hellwig.
  */
+#include <linux/blk-crypto.h>
 #include <linux/fscrypt.h>
 #include <linux/pagemap.h>
 #include <linux/iomap.h>
 #include <linux/task_io_accounting_ops.h>
+#include <linux/fserror.h>
 #include "internal.h"
 #include "trace.h"
 
@@ -74,8 +76,15 @@ static void iomap_dio_submit_bio(const struct iomap_iter *iter,
 		dio->dops->submit_io(iter, bio, pos);
 	} else {
 		WARN_ON_ONCE(iter->iomap.flags & IOMAP_F_ANON_WRITE);
-		submit_bio(bio);
+		blk_crypto_submit_bio(bio);
 	}
+}
+
+static inline enum fserror_type iomap_dio_err_type(const struct iomap_dio *dio)
+{
+	if (dio->flags & IOMAP_DIO_WRITE)
+		return FSERR_DIRECTIO_WRITE;
+	return FSERR_DIRECTIO_READ;
 }
 
 ssize_t iomap_dio_complete(struct iomap_dio *dio)
@@ -87,6 +96,10 @@ ssize_t iomap_dio_complete(struct iomap_dio *dio)
 
 	if (dops && dops->end_io)
 		ret = dops->end_io(iocb, dio->size, ret, dio->flags);
+	if (dio->error)
+		fserror_report_io(file_inode(iocb->ki_filp),
+				  iomap_dio_err_type(dio), offset, dio->size,
+				  dio->error, GFP_NOFS);
 
 	if (likely(!ret)) {
 		ret = dio->size;
