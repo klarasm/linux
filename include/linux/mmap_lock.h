@@ -236,6 +236,13 @@ int vma_start_write_killable(struct vm_area_struct *vma)
 	return __vma_start_write(vma, mm_lock_seq, TASK_KILLABLE);
 }
 
+static inline bool vma_is_read_locked(const struct vm_area_struct *vma)
+{
+	const unsigned int refcnt = refcount_read(&vma->vm_refcnt);
+
+	return refcnt > 1 && !is_vma_writer_only(refcnt);
+}
+
 static inline void vma_assert_write_locked(struct vm_area_struct *vma)
 {
 	unsigned int mm_lock_seq;
@@ -243,12 +250,81 @@ static inline void vma_assert_write_locked(struct vm_area_struct *vma)
 	VM_BUG_ON_VMA(!__is_vma_write_locked(vma, &mm_lock_seq), vma);
 }
 
+/**
+ * vma_assert_locked() - Assert that @vma is either read or write locked and
+ * that we have ownership of that lock (if lockdep is enabled).
+ * @vma: The VMA we assert.
+ *
+ * If lockdep is enabled, we ensure ownership of the VMA lock. Otherwise we
+ * assert that we are VMA write-locked, which implicitly asserts that we hold
+ * the mmap write lock.
+ */
 static inline void vma_assert_locked(struct vm_area_struct *vma)
 {
-	unsigned int mm_lock_seq;
+	/*
+	 * VMA locks currently only utilise lockdep for read locks, as
+	 * vma_end_write_all() releases an unknown number of VMA write locks and
+	 * we don't currently walk the maple tree to identify which locks are
+	 * released even under CONFIG_LOCKDEP.
+	 *
+	 * However, VMA write locks are predicated on an mmap write lock, which
+	 * we DO track under lockdep, and which vma_assert_write_locked()
+	 * asserts.
+	 */
+	if (vma_is_read_locked(vma))
+		lockdep_assert(lock_is_held(&vma->vmlock_dep_map));
+	else
+		vma_assert_write_locked(vma);
+}
 
-	VM_BUG_ON_VMA(refcount_read(&vma->vm_refcnt) <= 1 &&
-		      !__is_vma_write_locked(vma, &mm_lock_seq), vma);
+/**
+ * vma_assert_read_locked() - Asserts that @vma is specifically read locked.
+ * @vma: The VMA we assert.
+ */
+static inline void vma_assert_read_locked(struct vm_area_struct *vma)
+{
+	lockdep_assert(lock_is_held(&vma->vmlock_dep_map));
+	VM_BUG_ON_VMA(!vma_is_read_locked(vma), vma);
+}
+
+/**
+ * vma_assert_stabilised() - assert that this VMA cannot be changed from
+ * underneath us either by having a VMA or mmap lock held.
+ * @vma: The VMA whose stability we wish to assess.
+ *
+ * If lockdep is enabled we can precisely ensure stability via either an mmap
+ * lock owned by us or a specific VMA lock.
+ *
+ * With lockdep disabled we may sometimes race with other threads acquiring the
+ * mmap read lock simultaneous with our VMA read lock.
+ */
+static inline void vma_assert_stabilised(struct vm_area_struct *vma)
+{
+	/*
+	 * We have to be careful about VMA read locks and concurrent mmap locks
+	 * by other threads. If we were to assert we own an mmap lock when in
+	 * fact it is another thread's, or if we were to race with it unlocking
+	 * when asserting an mmap lock, we will fail incorrectly.
+	 *
+	 * If we have lockdep, we can treat OUR owning the mmap lock as
+	 * sufficient stabilisation.
+	 *
+	 * If not, this is an approximation and we simply assume the same,
+	 * though sometimes we might be wrong due to races.
+	 */
+	if (IS_ENABLED(CONFIG_LOCKDEP)) {
+		if (lockdep_is_held(&vma->vm_mm->mmap_lock))
+			return;
+	} else {
+		if (rwsem_is_locked(&vma->vm_mm->mmap_lock))
+			return;
+	}
+
+	/*
+	 * OK we must hold a VMA read lock, since a write lock requires mmap
+	 * lock.
+	 */
+	vma_assert_read_locked(vma);
 }
 
 static inline bool vma_is_attached(struct vm_area_struct *vma)
@@ -325,6 +401,12 @@ static inline struct vm_area_struct *lock_vma_under_rcu(struct mm_struct *mm,
 		unsigned long address)
 {
 	return NULL;
+}
+
+static inline void vma_assert_stabilised(struct vm_area_struct *vma)
+{
+	/* If no VMA locks, then either mmap lock suffices to stabilise. */
+	mmap_assert_locked(vma->vm_mm);
 }
 
 static inline void vma_assert_locked(struct vm_area_struct *vma)
