@@ -1176,7 +1176,7 @@ __init void e820__reserve_resources_late(void)
 	u32 idx;
 	struct resource *res;
 
-	for (i = 0, res = e820_res; i < e820_table->nr_entries; i++, res++) {
+	for (idx = 0, res = e820_res; idx < e820_table->nr_entries; idx++, res++) {
 		/* skip added or uninitialized resources */
 		if (res->parent || !res->end)
 			continue;
