@@ -15,6 +15,7 @@
 #include <linux/preempt.h>
 #include <linux/cpumask_types.h>
 
+#include <linux/kernel.h>
 #include <linux/cache.h>
 #include <linux/irqflags_types.h>
 #include <linux/smp_types.h>

@@ -12,6 +12,7 @@
 #ifndef __LINUX_TINY_H
 #define __LINUX_TINY_H
 
+#include <linux/kernel.h>
 #include <asm/param.h> /* for HZ */
 
 struct rcu_gp_oldstate {
