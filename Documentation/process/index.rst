@@ -68,6 +68,8 @@ beyond).
    stable-kernel-rules
    management-style
    researcher-guidelines
+   generated-content
+   coding-assistants
 
 Dealing with bugs
 -----------------
@@ -108,10 +110,3 @@ developers:
 
    kernel-docs
    deprecated
-
-.. only::  subproject and html
-
-   Indices
-   =======
-
-   * :ref:`genindex`

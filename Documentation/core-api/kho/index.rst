@@ -38,6 +38,8 @@ and post-kexec kernels. This ABI is defined by header files in
 .. toctree::
    :maxdepth: 1
 
+   concepts
+   fdt
    abi.rst
 
 .. _kho_scratch:
