@@ -1403,11 +1403,14 @@ static int wcd9390_probe(struct sdw_slave *pdev, const struct sdw_device_id *id)
 	return 0;
 }
 
-static int wcd9390_remove(struct sdw_slave *pdev)
+static void wcd9390_remove(struct sdw_slave *pdev)
 {
 	struct device *dev = &pdev->dev;
 
 	component_del(dev, &wcd_sdw_component_ops);
+
+	if (wcd->regmap)
+		regmap_exit(wcd->regmap);
 
 	return 0;
 }
