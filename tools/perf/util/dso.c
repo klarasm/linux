@@ -32,6 +32,7 @@
 #include "string2.h"
 #include "vdso.h"
 #include "annotate-data.h"
+#include "libdw.h"
 
 static const char * const debuglink_paths[] = {
 	"%.0s%s",
@@ -111,7 +112,7 @@ bool dso__is_object_file(const struct dso *dso)
 
 int dso__read_binary_type_filename(const struct dso *dso,
 				   enum dso_binary_type type,
-				   char *root_dir, char *filename, size_t size)
+				   const char *root_dir, char *filename, size_t size)
 {
 	char build_id_hex[SBUILD_ID_SIZE];
 	int ret = 0;
@@ -539,16 +540,13 @@ static void close_first_dso(void);
 
 static int do_open(char *name) EXCLUSIVE_LOCKS_REQUIRED(_dso__data_open_lock)
 {
-	int fd;
-	char sbuf[STRERR_BUFSIZE];
-
 	do {
-		fd = open(name, O_RDONLY|O_CLOEXEC);
+		int fd = open(name, O_RDONLY|O_CLOEXEC);
+
 		if (fd >= 0)
 			return fd;
 
-		pr_debug("dso open failed: %s\n",
-			 str_error_r(errno, sbuf, sizeof(sbuf)));
+		pr_debug("dso open failed: %m\n");
 		if (!dso__data_open_cnt || errno != EMFILE)
 			break;
 
@@ -563,20 +561,15 @@ char *dso__filename_with_chroot(const struct dso *dso, const char *filename)
 	return filename_with_chroot(nsinfo__pid(dso__nsinfo_const(dso)), filename);
 }
 
-static int __open_dso(struct dso *dso, struct machine *machine)
-	EXCLUSIVE_LOCKS_REQUIRED(_dso__data_open_lock)
+static char *dso__get_filename(struct dso *dso, const char *root_dir,
+			       bool *decomp)
 {
-	int fd = -EINVAL;
-	char *root_dir = (char *)"";
 	char *name = malloc(PATH_MAX);
-	bool decomp = false;
 
-	if (!name)
-		return -ENOMEM;
+	*decomp = false;
 
-	mutex_lock(dso__lock(dso));
-	if (machine)
-		root_dir = machine->root_dir;
+	if (name == NULL)
+		return NULL;
 
 	if (dso__read_binary_type_filename(dso, dso__binary_type(dso),
 					    root_dir, name, PATH_MAX))
@@ -601,20 +594,38 @@ static int __open_dso(struct dso *dso, struct machine *machine)
 		size_t len = sizeof(newpath);
 
 		if (dso__decompress_kmodule_path(dso, name, newpath, len) < 0) {
-			fd = -(*dso__load_errno(dso));
+			errno = *dso__load_errno(dso);
 			goto out;
 		}
 
-		decomp = true;
+		*decomp = true;
 		strcpy(name, newpath);
 	}
+	return name;
 
-	fd = do_open(name);
+out:
+	free(name);
+	return NULL;
+}
+
+static int __open_dso(struct dso *dso, struct machine *machine)
+	EXCLUSIVE_LOCKS_REQUIRED(_dso__data_open_lock)
+{
+	int fd = -EINVAL;
+	char *name;
+	bool decomp = false;
+
+	mutex_lock(dso__lock(dso));
+
+	name = dso__get_filename(dso, machine ? machine->root_dir : "", &decomp);
+	if (name)
+		fd = do_open(name);
+	else
+		fd = -errno;
 
 	if (decomp)
 		unlink(name);
 
-out:
 	mutex_unlock(dso__lock(dso));
 	free(name);
 	return fd;
@@ -1097,7 +1108,6 @@ static int file_size(struct dso *dso, struct machine *machine)
 {
 	int ret = 0;
 	struct stat st;
-	char sbuf[STRERR_BUFSIZE];
 
 	mutex_lock(dso__data_open_lock());
 
@@ -1115,8 +1125,7 @@ static int file_size(struct dso *dso, struct machine *machine)
 
 	if (fstat(dso__data(dso)->fd, &st) < 0) {
 		ret = -errno;
-		pr_err("dso cache fstat failed: %s\n",
-		       str_error_r(errno, sbuf, sizeof(sbuf)));
+		pr_err("dso cache fstat failed: %m\n");
 		dso__data(dso)->status = DSO_DATA_STATUS_ERROR;
 		goto out;
 	}
@@ -1240,17 +1249,28 @@ uint16_t dso__e_machine(struct dso *dso, struct machine *machine)
 	try_to_open_dso(dso, machine);
 	fd = dso__data(dso)->fd;
 	if (fd >= 0) {
-		_Static_assert(offsetof(Elf32_Ehdr, e_machine) == 18, "Unexpected offset");
-		_Static_assert(offsetof(Elf64_Ehdr, e_machine) == 18, "Unexpected offset");
-		if (dso__needs_swap(dso) == DSO_SWAP__UNSET) {
-			unsigned char eidata;
+		unsigned char e_ident[EI_NIDENT];
 
-			if (pread(fd, &eidata, sizeof(eidata), EI_DATA) == sizeof(eidata))
-				dso__swap_init(dso, eidata);
+		_Static_assert(offsetof(Elf32_Ehdr, e_ident) == 0, "Unexpected offset");
+		_Static_assert(offsetof(Elf64_Ehdr, e_ident) == 0, "Unexpected offset");
+		if (pread(fd, &e_ident, sizeof(e_ident), 0) == sizeof(e_ident) &&
+		    memcmp(e_ident, ELFMAG, SELFMAG) == 0 &&
+		    e_ident[EI_CLASS] > ELFCLASSNONE && e_ident[EI_CLASS] < ELFCLASSNUM &&
+		    e_ident[EI_DATA] > ELFDATANONE && e_ident[EI_DATA] < ELFDATANUM &&
+		    e_ident[EI_VERSION] == EV_CURRENT) {
+			_Static_assert(offsetof(Elf32_Ehdr, e_machine) == 18, "Unexpected offset");
+			_Static_assert(offsetof(Elf64_Ehdr, e_machine) == 18, "Unexpected offset");
+
+			if (dso__needs_swap(dso) == DSO_SWAP__UNSET)
+				dso__swap_init(dso, e_ident[EI_DATA]);
+
+			if (dso__needs_swap(dso) != DSO_SWAP__UNSET &&
+			    pread(fd, &e_machine, sizeof(e_machine), 18) == sizeof(e_machine) &&
+			    e_machine < EM_NUM)
+				e_machine = DSO__SWAP(dso, uint16_t, e_machine);
+			else
+				e_machine = EM_NONE;
 		}
-		if (dso__needs_swap(dso) != DSO_SWAP__UNSET &&
-		    pread(fd, &e_machine, sizeof(e_machine), 18) == sizeof(e_machine))
-			e_machine = DSO__SWAP(dso, uint16_t, e_machine);
 	}
 	mutex_unlock(dso__data_open_lock());
 	return e_machine;
@@ -1605,6 +1625,7 @@ void dso__delete(struct dso *dso)
 	auxtrace_cache__free(RC_CHK_ACCESS(dso)->auxtrace_cache);
 	dso_cache__free(dso);
 	dso__free_a2l(dso);
+	dso__free_libdw(dso);
 	dso__free_symsrc_filename(dso);
 	nsinfo__zput(RC_CHK_ACCESS(dso)->nsinfo);
 	mutex_destroy(dso__lock(dso));
@@ -1771,10 +1792,8 @@ int dso__strerror_load(struct dso *dso, char *buf, size_t buflen)
 	BUG_ON(buflen == 0);
 
 	if (errnum >= 0) {
-		const char *err = str_error_r(errnum, buf, buflen);
-
-		if (err != buf)
-			scnprintf(buf, buflen, "%s", err);
+		errno = errnum;
+		scnprintf(buf, buflen, "%m");
 
 		return 0;
 	}
@@ -1909,4 +1928,24 @@ const u8 *dso__read_symbol(struct dso *dso, const char *symfs_filename,
 	}
 	return __dso__read_symbol(dso, symfs_filename, start, len,
 				  out_buf, out_buf_len, is_64bit);
+}
+
+struct debuginfo *dso__debuginfo(struct dso *dso)
+{
+	char *name;
+	bool decomp = false;
+	struct debuginfo *dinfo = NULL;
+
+	mutex_lock(dso__lock(dso));
+
+	name = dso__get_filename(dso, "", &decomp);
+	if (name)
+		dinfo = debuginfo__new(name);
+
+	if (decomp)
+		unlink(name);
+
+	mutex_unlock(dso__lock(dso));
+	free(name);
+	return dinfo;
 }

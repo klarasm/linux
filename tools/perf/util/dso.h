@@ -268,10 +268,8 @@ DECLARE_RC_STRUCT(dso) {
 	const char	 *short_name;
 	const char	 *long_name;
 	void		 *a2l;
+	void		 *libdw;
 	char		 *symsrc_filename;
-#if defined(__powerpc__)
-	void		*dwfl;			/* DWARF debug info */
-#endif
 	struct nsinfo	*nsinfo;
 	struct auxtrace_cache *auxtrace_cache;
 	union { /* Tool specific area */
@@ -333,6 +331,26 @@ static inline void dso__set_a2l(struct dso *dso, void *val)
 {
 	RC_CHK_ACCESS(dso)->a2l = val;
 }
+
+static inline void *dso__libdw(const struct dso *dso)
+{
+	return RC_CHK_ACCESS(dso)->libdw;
+}
+
+static inline void dso__set_libdw(struct dso *dso, void *val)
+{
+	RC_CHK_ACCESS(dso)->libdw = val;
+}
+
+struct Dwfl;
+#ifdef HAVE_LIBDW_SUPPORT
+struct Dwfl *dso__libdw_dwfl(struct dso *dso);
+#else
+static inline struct Dwfl *dso__libdw_dwfl(struct dso *dso __maybe_unused)
+{
+	return NULL;
+}
+#endif
 
 static inline unsigned int dso__a2l_fails(const struct dso *dso)
 {
@@ -766,7 +784,7 @@ int dso__kernel_module_get_build_id(struct dso *dso, const char *root_dir);
 
 char dso__symtab_origin(const struct dso *dso);
 int dso__read_binary_type_filename(const struct dso *dso, enum dso_binary_type type,
-				   char *root_dir, char *filename, size_t size);
+				   const char *root_dir, char *filename, size_t size);
 bool is_kernel_module(const char *pathname, int cpumode);
 bool dso__needs_decompress(struct dso *dso);
 int dso__decompress_kmodule_fd(struct dso *dso, const char *name);
@@ -915,14 +933,7 @@ u64 dso__findnew_global_type(struct dso *dso, u64 addr, u64 offset);
 bool perf_pid_map_tid(const char *dso_name, int *tid);
 bool is_perf_pid_map_name(const char *dso_name);
 
-/*
- * In the future, we may get debuginfo using build-ID (w/o path).
- * Add this helper is for the smooth conversion.
- */
-static inline struct debuginfo *dso__debuginfo(struct dso *dso)
-{
-	return debuginfo__new(dso__long_name(dso));
-}
+struct debuginfo *dso__debuginfo(struct dso *dso);
 
 const u8 *dso__read_symbol(struct dso *dso, const char *symfs_filename,
 			   const struct map *map, const struct symbol *sym,
