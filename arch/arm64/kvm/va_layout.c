@@ -319,7 +319,7 @@ void kvm_pan_patch_el2_entry(struct alt_instr *alt,
 	 * EL2 kernel. Only force it to 0 if we have not configured PAN in
 	 * the kernel (and you know this is really silly).
 	 */
-	if (cpus_have_cap(ARM64_KVM_HVHE) || IS_ENABLED(CONFIG_ARM64_PAN))
+	if (cpus_have_cap(ARM64_KVM_HVHE))
 		*updptr = cpu_to_le32(ENCODE_PSTATE(1, PAN));
 	else
 		*updptr = cpu_to_le32(ENCODE_PSTATE(0, PAN));
