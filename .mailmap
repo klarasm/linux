@@ -376,7 +376,9 @@ Jesper Dangaard Brouer <hawk@kernel.org> <hawk@comx.dk>
 Jesper Dangaard Brouer <hawk@kernel.org> <jbrouer@redhat.com>
 Jesper Dangaard Brouer <hawk@kernel.org> <jdb@comx.dk>
 Jesper Dangaard Brouer <hawk@kernel.org> <netoptimizer@brouer.com>
-Jessica Zhang <quic_jesszhan@quicinc.com> <jesszhan@codeaurora.org>
+Jessica Zhang <jesszhan0024@gmail.com> <jesszhan@codeaurora.org>
+Jessica Zhang <jesszhan0024@gmail.com> <quic_jesszhan@quicinc.com>
+Jessica Zhang <jesszhan0024@gmail.com> <jessica.zhang@oss.qualcomm.com>
 Jilai Wang <quic_jilaiw@quicinc.com> <jilaiw@codeaurora.org>
 Jiri Kosina <jikos@kernel.org> <jikos@jikos.cz>
 Jiri Kosina <jikos@kernel.org> <jkosina@suse.cz>
@@ -489,6 +491,7 @@ Lorenzo Pieralisi <lpieralisi@kernel.org> <lorenzo.pieralisi@arm.com>
 Lorenzo Stoakes <lorenzo.stoakes@oracle.com> <lstoakes@gmail.com>
 Luca Ceresoli <luca.ceresoli@bootlin.com> <luca@lucaceresoli.net>
 Luca Weiss <luca@lucaweiss.eu> <luca@z3ntu.xyz>
+Lucas De Marchi <demarchi@kernel.org> <lucas.demarchi@intel.com>
 Lukasz Luba <lukasz.luba@arm.com> <l.luba@partner.samsung.com>
 Luo Jie <quic_luoj@quicinc.com> <luoj@codeaurora.org>
 Lance Yang <lance.yang@linux.dev> <ioworker0@gmail.com>
@@ -798,6 +801,7 @@ Sven Eckelmann <sven@narfation.org> <sven@open-mesh.com>
 Sven Peter <sven@kernel.org> <sven@svenpeter.dev>
 Szymon Wilczek <swilczek.lx@gmail.com> <szymonwilczek@gmx.com>
 Takashi YOSHII <takashi.yoshii.zj@renesas.com>
+Tamir Duberstein <tamird@kernel.org> <tamird@gmail.com>
 Tamizh Chelvam Raja <quic_tamizhr@quicinc.com> <tamizhr@codeaurora.org>
 Taniya Das <quic_tdas@quicinc.com> <tdas@codeaurora.org>
 Tanzir Hasan <tanzhasanwork@gmail.com> <tanzirh@google.com>
@@ -851,6 +855,7 @@ Valentin Schneider <vschneid@redhat.com> <valentin.schneider@arm.com>
 Veera Sundaram Sankaran <quic_veeras@quicinc.com> <veeras@codeaurora.org>
 Veerabhadrarao Badiganti <quic_vbadigan@quicinc.com> <vbadigan@codeaurora.org>
 Venkateswara Naralasetty <quic_vnaralas@quicinc.com> <vnaralas@codeaurora.org>
+Viacheslav Bocharov <v@baodeep.com> <adeep@lexina.in>
 Vikash Garodia <vikash.garodia@oss.qualcomm.com> <vgarodia@codeaurora.org>
 Vikash Garodia <vikash.garodia@oss.qualcomm.com> <quic_vgarodia@quicinc.com>
 Vincent Mailhol <mailhol@kernel.org> <mailhol.vincent@wanadoo.fr>

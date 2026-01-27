@@ -88,12 +88,19 @@ enum kvm_mem_region_type {
 	NR_MEM_REGIONS,
 };
 
+struct kvm_mmu {
+	bool pgd_created;
+	uint64_t pgd;
+	int pgtable_levels;
+
+	struct kvm_mmu_arch arch;
+};
+
 struct kvm_vm {
 	int mode;
 	unsigned long type;
 	int kvm_fd;
 	int fd;
-	unsigned int pgtable_levels;
 	unsigned int page_size;
 	unsigned int page_shift;
 	unsigned int pa_bits;
@@ -104,12 +111,17 @@ struct kvm_vm {
 	struct sparsebit *vpages_valid;
 	struct sparsebit *vpages_mapped;
 	bool has_irqchip;
-	bool pgd_created;
 	vm_paddr_t ucall_mmio_addr;
-	vm_paddr_t pgd;
 	vm_vaddr_t handlers;
 	uint32_t dirty_ring_size;
 	uint64_t gpa_tag_mask;
+
+	/*
+	 * "mmu" is the guest's stage-1, with a short name because the vast
+	 * majority of tests only care about the stage-1 MMU.
+	 */
+	struct kvm_mmu mmu;
+	struct kvm_mmu stage2_mmu;
 
 	struct kvm_vm_arch arch;
 
@@ -939,7 +951,7 @@ void *vcpu_map_dirty_ring(struct kvm_vcpu *vcpu);
  * VM VCPU Args Set
  *
  * Input Args:
- *   vm - Virtual Machine
+ *   vcpu - vCPU
  *   num - number of arguments
  *   ... - arguments, each of type uint64_t
  *
@@ -1258,8 +1270,13 @@ static inline int __vm_disable_nx_huge_pages(struct kvm_vm *vm)
 	return __vm_enable_cap(vm, KVM_CAP_VM_DISABLE_NX_HUGE_PAGES, 0);
 }
 
+static inline uint64_t vm_page_align(struct kvm_vm *vm, uint64_t v)
+{
+	return (v + vm->page_size - 1) & ~(vm->page_size - 1);
+}
+
 /*
- * Arch hook that is invoked via a constructor, i.e. before exeucting main(),
+ * Arch hook that is invoked via a constructor, i.e. before executing main(),
  * to allow for arch-specific setup that is common to all tests, e.g. computing
  * the default guest "mode".
  */

@@ -1785,6 +1785,7 @@ struct cfg80211_ttlm_params {
  *	present/updated
  * @eml_cap: EML capabilities of this station
  * @link_sta_params: link related params.
+ * @epp_peer: EPP peer indication
  */
 struct station_parameters {
 	struct net_device *vlan;
@@ -1811,6 +1812,7 @@ struct station_parameters {
 	bool eml_cap_present;
 	u16 eml_cap;
 	struct link_station_parameters link_sta_params;
+	bool epp_peer;
 };
 
 /**
@@ -9785,6 +9787,21 @@ int cfg80211_iter_combinations(struct wiphy *wiphy,
 int cfg80211_get_radio_idx_by_chan(struct wiphy *wiphy,
 				   const struct ieee80211_channel *chan);
 
+/**
+ * cfg80211_stop_link - stop AP/P2P_GO link if link_id is non-negative or stops
+ *                      all links on the interface.
+ *
+ * @wiphy: the wiphy
+ * @wdev: wireless device
+ * @link_id: valid link ID in case of MLO AP/P2P_GO Operation or else -1
+ * @gfp: context flags
+ *
+ * If link_id is set during MLO operation, stops only the specified AP/P2P_GO
+ * link and if link_id is set to -1 or last link is stopped, the entire
+ * interface is stopped as if AP was stopped, IBSS/mesh left, STA disconnected.
+ */
+void cfg80211_stop_link(struct wiphy *wiphy, struct wireless_dev *wdev,
+			int link_id, gfp_t gfp);
 
 /**
  * cfg80211_stop_iface - trigger interface disconnection
@@ -9798,8 +9815,11 @@ int cfg80211_get_radio_idx_by_chan(struct wiphy *wiphy,
  *
  * Note: This doesn't need any locks and is asynchronous.
  */
-void cfg80211_stop_iface(struct wiphy *wiphy, struct wireless_dev *wdev,
-			 gfp_t gfp);
+static inline void
+cfg80211_stop_iface(struct wiphy *wiphy, struct wireless_dev *wdev, gfp_t gfp)
+{
+	cfg80211_stop_link(wiphy, wdev, -1, gfp);
+}
 
 /**
  * cfg80211_shutdown_all_interfaces - shut down all interfaces for a wiphy

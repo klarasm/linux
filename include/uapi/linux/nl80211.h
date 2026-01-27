@@ -11,7 +11,7 @@
  * Copyright 2008 Jouni Malinen <jouni.malinen@atheros.com>
  * Copyright 2008 Colin McCabe <colin@cozybit.com>
  * Copyright 2015-2017	Intel Deutschland GmbH
- * Copyright (C) 2018-2025 Intel Corporation
+ * Copyright (C) 2018-2026 Intel Corporation
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -2974,6 +2974,9 @@ enum nl80211_commands {
  *	primary channel is 2 MHz wide, and the control channel designates
  *	the 1 MHz primary subchannel within that 2 MHz primary.
  *
+ * @NL80211_ATTR_EPP_PEER: A flag attribute to indicate if the peer is an EPP
+ *	STA. Used with %NL80211_CMD_NEW_STA and %NL80211_CMD_ADD_LINK_STA
+ *
  * @NUM_NL80211_ATTR: total number of nl80211_attrs available
  * @NL80211_ATTR_MAX: highest attribute number currently defined
  * @__NL80211_ATTR_AFTER_LAST: internal use
@@ -3541,6 +3544,8 @@ enum nl80211_attrs {
 	NL80211_ATTR_NAN_CAPABILITIES,
 
 	NL80211_ATTR_S1G_PRIMARY_2MHZ,
+
+	NL80211_ATTR_EPP_PEER,
 
 	/* add attributes here, update the policy in nl80211.c */
 
@@ -4445,6 +4450,9 @@ enum nl80211_wmm_rule {
  *	channel in current regulatory domain.
  * @NL80211_FREQUENCY_ATTR_NO_16MHZ: 16 MHz operation is not allowed on this
  *	channel in current regulatory domain.
+ * @NL80211_FREQUENCY_ATTR_S1G_NO_PRIMARY: Channel is not permitted for use
+ *	as a primary channel. Does not prevent the channel from existing
+ *	as a non-primary subchannel. Only applicable to S1G channels.
  * @NL80211_FREQUENCY_ATTR_MAX: highest frequency attribute number
  *	currently defined
  * @__NL80211_FREQUENCY_ATTR_AFTER_LAST: internal use
@@ -4493,6 +4501,7 @@ enum nl80211_frequency_attr {
 	NL80211_FREQUENCY_ATTR_NO_4MHZ,
 	NL80211_FREQUENCY_ATTR_NO_8MHZ,
 	NL80211_FREQUENCY_ATTR_NO_16MHZ,
+	NL80211_FREQUENCY_ATTR_S1G_NO_PRIMARY,
 
 	/* keep last */
 	__NL80211_FREQUENCY_ATTR_AFTER_LAST,
@@ -5426,6 +5435,7 @@ enum nl80211_bss_status {
  * @NL80211_AUTHTYPE_FILS_SK: Fast Initial Link Setup shared key
  * @NL80211_AUTHTYPE_FILS_SK_PFS: Fast Initial Link Setup shared key with PFS
  * @NL80211_AUTHTYPE_FILS_PK: Fast Initial Link Setup public key
+ * @NL80211_AUTHTYPE_EPPKE: Enhanced Privacy Protection Key Exchange
  * @__NL80211_AUTHTYPE_NUM: internal
  * @NL80211_AUTHTYPE_MAX: maximum valid auth algorithm
  * @NL80211_AUTHTYPE_AUTOMATIC: determine automatically (if necessary by
@@ -5441,6 +5451,7 @@ enum nl80211_auth_type {
 	NL80211_AUTHTYPE_FILS_SK,
 	NL80211_AUTHTYPE_FILS_SK_PFS,
 	NL80211_AUTHTYPE_FILS_PK,
+	NL80211_AUTHTYPE_EPPKE,
 
 	/* keep last */
 	__NL80211_AUTHTYPE_NUM,
@@ -6745,6 +6756,15 @@ enum nl80211_feature_flags {
  * @NL80211_EXT_FEATURE_BEACON_RATE_EHT: Driver supports beacon rate
  *	configuration (AP/mesh) with EHT rates.
  *
+ * @NL80211_EXT_FEATURE_EPPKE: Driver supports Enhanced Privacy Protection
+ *	Key Exchange (EPPKE) with user space SME (NL80211_CMD_AUTHENTICATE)
+ *	in non-AP STA mode.
+ *
+ * @NL80211_EXT_FEATURE_ASSOC_FRAME_ENCRYPTION: This specifies that the
+ *	driver supports encryption of (Re)Association Request and Response
+ *	frames in both non‑AP STA and AP mode as specified in
+ *	"IEEE P802.11bi/D3.0, 12.16.6".
+ *
  * @NUM_NL80211_EXT_FEATURES: number of extended features.
  * @MAX_NL80211_EXT_FEATURES: highest extended feature index.
  */
@@ -6821,6 +6841,8 @@ enum nl80211_ext_feature_index {
 	NL80211_EXT_FEATURE_DFS_CONCURRENT,
 	NL80211_EXT_FEATURE_SPP_AMSDU_SUPPORT,
 	NL80211_EXT_FEATURE_BEACON_RATE_EHT,
+	NL80211_EXT_FEATURE_EPPKE,
+	NL80211_EXT_FEATURE_ASSOC_FRAME_ENCRYPTION,
 
 	/* add new features before the definition below */
 	NUM_NL80211_EXT_FEATURES,
@@ -7433,6 +7455,8 @@ enum nl80211_nan_band_conf_attributes {
  *	address that can take values from 50-6F-9A-01-00-00 to
  *	50-6F-9A-01-FF-FF. This attribute is optional. If not present,
  *	a random Cluster ID will be chosen.
+ *	This attribute will be ignored in NL80211_CMD_CHANGE_NAN_CONFIG
+ *	since after NAN was started, the cluster ID can no longer change.
  * @NL80211_NAN_CONF_EXTRA_ATTRS: Additional NAN attributes to be
  *	published in the beacons. This is an optional byte array.
  * @NL80211_NAN_CONF_VENDOR_ELEMS: Vendor-specific elements that will
