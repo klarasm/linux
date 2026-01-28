@@ -2755,6 +2755,14 @@ static enum scan_result collapse_single_pmd(unsigned long addr,
 	mmap_read_unlock(mm);
 	*mmap_locked = false;
 	result = collapse_scan_file(mm, addr, file, pgoff, cc);
+
+	if (!cc->is_khugepaged && result == SCAN_PAGE_DIRTY_OR_WRITEBACK &&
+	    mapping_can_writeback(file->f_mapping)) {
+		const loff_t lstart = (loff_t)pgoff << PAGE_SHIFT;
+		const loff_t lend = lstart + HPAGE_PMD_SIZE - 1;
+
+		filemap_write_and_wait_range(file->f_mapping, lstart, lend);
+	}
 	fput(file);
 
 	if (result != SCAN_PTE_MAPPED_HUGEPAGE)
@@ -3176,19 +3184,8 @@ retry:
 			*lock_dropped = true;
 
 		if (result == SCAN_PAGE_DIRTY_OR_WRITEBACK && !triggered_wb) {
-			struct file *file = get_file(vma->vm_file);
-			pgoff_t pgoff = linear_page_index(vma, addr);
-
-			if (mapping_can_writeback(file->f_mapping)) {
-				loff_t lstart = (loff_t)pgoff << PAGE_SHIFT;
-				loff_t lend = lstart + HPAGE_PMD_SIZE - 1;
-
-				filemap_write_and_wait_range(file->f_mapping, lstart, lend);
-				triggered_wb = true;
-				fput(file);
-				goto retry;
-			}
-			fput(file);
+			triggered_wb = true;
+			goto retry;
 		}
 
 		switch (result) {
