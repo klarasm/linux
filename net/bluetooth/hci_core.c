@@ -117,6 +117,7 @@ bool hci_discovery_active(struct hci_dev *hdev)
 		return false;
 	}
 }
+EXPORT_SYMBOL(hci_discovery_active);
 
 void hci_discovery_set_state(struct hci_dev *hdev, int state)
 {
@@ -3916,8 +3917,8 @@ static void hci_isodata_packet(struct hci_dev *hdev, struct sk_buff *skb)
 
 	err = iso_recv(hdev, handle, skb, flags);
 	if (err == -ENOENT)
-		bt_dev_err(hdev, "ISO packet for unknown connection handle %d",
-			   handle);
+		bt_dev_err_ratelimited(hdev, "ISO packet for unknown connection handle %d",
+				       handle);
 	else if (err)
 		bt_dev_dbg(hdev, "ISO packet recv for handle %d failed: %d",
 			   handle, err);
