@@ -246,6 +246,7 @@ static int ntfs_file_mmap_prepare(struct vm_area_desc *desc)
 	struct file *file = desc->file;
 	struct inode *inode = file_inode(file);
 	struct ntfs_inode *ni = ntfs_i(inode);
+	u64 from = ((u64)desc->pgoff << PAGE_SHIFT);
 	const bool rw = vma_desc_test_flags(desc, VMA_WRITE_BIT);
 	int err;
 
