@@ -71,6 +71,7 @@ properties:
       - items:
           - enum:
               - allwinner,sun20i-d1-plic
+              - canaan,k230-plic
               - sophgo,cv1800b-plic
               - sophgo,cv1812h-plic
               - sophgo,sg2002-plic
@@ -108,7 +109,9 @@ properties:
   riscv,ndev:
     $ref: /schemas/types.yaml#/definitions/uint32
     description:
-      Specifies how many external interrupts are supported by this controller.
+      Specifies how many external (device) interrupts are supported by this
+      controller.  Note that source 0 is reserved in PLIC, so the valid
+      interrupt sources are 1 to riscv,ndev inclusive.
 
   clocks: true
 
