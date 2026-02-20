@@ -20,6 +20,8 @@ void sched_domains_mutex_unlock(void)
 /* Protected by sched_domains_mutex: */
 static cpumask_var_t sched_domains_tmpmask;
 static cpumask_var_t sched_domains_tmpmask2;
+static int tl_max_llcs;
+int max_llcs;
 
 static int __init sched_debug_setup(char *str)
 {
@@ -632,6 +634,11 @@ static void destroy_sched_domain(struct sched_domain *sd)
 
 	if (sd->shared && atomic_dec_and_test(&sd->shared->ref))
 		kfree(sd->shared);
+
+#ifdef CONFIG_SCHED_CACHE
+	/* only the bottom sd has pref_llc array */
+	kfree(sd->pf);
+#endif
 	kfree(sd);
 }
 
@@ -663,7 +670,7 @@ static void destroy_sched_domains(struct sched_domain *sd)
  */
 DEFINE_PER_CPU(struct sched_domain __rcu *, sd_llc);
 DEFINE_PER_CPU(int, sd_llc_size);
-DEFINE_PER_CPU(int, sd_llc_id);
+DEFINE_PER_CPU(int, sd_llc_id) = -1;
 DEFINE_PER_CPU(int, sd_share_id);
 DEFINE_PER_CPU(struct sched_domain_shared __rcu *, sd_llc_shared);
 DEFINE_PER_CPU(struct sched_domain __rcu *, sd_numa);
@@ -689,7 +696,6 @@ static void update_top_cache_domain(int cpu)
 
 	rcu_assign_pointer(per_cpu(sd_llc, cpu), sd);
 	per_cpu(sd_llc_size, cpu) = size;
-	per_cpu(sd_llc_id, cpu) = id;
 	rcu_assign_pointer(per_cpu(sd_llc_shared, cpu), sds);
 
 	sd = lowest_flag_domain(cpu, SD_CLUSTER);
@@ -752,10 +758,15 @@ cpu_attach_domain(struct sched_domain *sd, struct root_domain *rd, int cpu)
 	if (sd && sd_degenerate(sd)) {
 		tmp = sd;
 		sd = sd->parent;
-		destroy_sched_domain(tmp);
+
 		if (sd) {
 			struct sched_group *sg = sd->groups;
 
+#ifdef CONFIG_SCHED_CACHE
+			/* move pf to parent as child is being destroyed */
+			sd->pf = tmp->pf;
+			tmp->pf = NULL;
+#endif
 			/*
 			 * sched groups hold the flags of the child sched
 			 * domain for convenience. Clear such flags since
@@ -767,6 +778,8 @@ cpu_attach_domain(struct sched_domain *sd, struct root_domain *rd, int cpu)
 
 			sd->child = NULL;
 		}
+
+		destroy_sched_domain(tmp);
 	}
 
 	sched_domain_debug(sd, cpu);
@@ -791,6 +804,110 @@ enum s_alloc {
 	sa_sd_storage,
 	sa_none,
 };
+
+#ifdef CONFIG_SCHED_CACHE
+/* hardware support for cache aware scheduling */
+DEFINE_STATIC_KEY_FALSE(sched_cache_present);
+/*
+ * Indicator of whether cache aware scheduling
+ * is active, used by the scheduler.
+ */
+DEFINE_STATIC_KEY_FALSE(sched_cache_active);
+/* user wants cache aware scheduling [0 or 1] */
+int sysctl_sched_cache_user = 1;
+
+static bool alloc_sd_pref(const struct cpumask *cpu_map,
+			  struct s_data *d)
+{
+	struct sched_domain *sd;
+	unsigned int *pf;
+	int i;
+
+	for_each_cpu(i, cpu_map) {
+		sd = *per_cpu_ptr(d->sd, i);
+		if (!sd)
+			goto err;
+
+		pf = kcalloc(tl_max_llcs, sizeof(unsigned int), GFP_KERNEL);
+		if (!pf)
+			goto err;
+
+		sd->pf = pf;
+	}
+
+	return true;
+err:
+	for_each_cpu(i, cpu_map) {
+		sd = *per_cpu_ptr(d->sd, i);
+		if (sd) {
+			kfree(sd->pf);
+			sd->pf = NULL;
+		}
+	}
+
+	return false;
+}
+
+static void _sched_cache_active_set(bool enable, bool locked)
+{
+	if (enable) {
+		if (locked)
+			static_branch_enable_cpuslocked(&sched_cache_active);
+		else
+			static_branch_enable(&sched_cache_active);
+	} else {
+		if (locked)
+			static_branch_disable_cpuslocked(&sched_cache_active);
+		else
+			static_branch_disable(&sched_cache_active);
+	}
+}
+
+/*
+ * Enable/disable cache aware scheduling according to
+ * user input and the presence of hardware support.
+ */
+static void sched_cache_active_set(bool locked)
+{
+	/* hardware does not support */
+	if (!static_branch_likely(&sched_cache_present)) {
+		_sched_cache_active_set(false, locked);
+		return;
+	}
+
+	/*
+	 * user wants it or not ?
+	 * TBD: read before writing the static key.
+	 * It is not in the critical path, leave as-is
+	 * for now.
+	 */
+	if (sysctl_sched_cache_user) {
+		_sched_cache_active_set(true, locked);
+		if (sched_debug())
+			pr_info("%s: enabling cache aware scheduling\n", __func__);
+	} else {
+		_sched_cache_active_set(false, locked);
+		if (sched_debug())
+			pr_info("%s: disabling cache aware scheduling\n", __func__);
+	}
+}
+
+static void sched_cache_active_set_locked(void)
+{
+	return sched_cache_active_set(true);
+}
+
+void sched_cache_active_set_unlocked(void)
+{
+	return sched_cache_active_set(false);
+}
+#else
+static bool alloc_sd_pref(const struct cpumask *cpu_map,
+			  struct s_data *d)
+{
+	return false;
+}
+#endif
 
 /*
  * Return the canonical balance CPU for this group, this is the first CPU
@@ -2556,6 +2673,7 @@ static int
 build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *attr)
 {
 	enum s_alloc alloc_state = sa_none;
+	bool has_multi_llcs = false;
 	struct sched_domain *sd;
 	struct s_data d;
 	struct rq *rq = NULL;
@@ -2572,10 +2690,18 @@ build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *att
 
 	/* Set up domains for CPUs specified by the cpu_map: */
 	for_each_cpu(i, cpu_map) {
-		struct sched_domain_topology_level *tl;
+		struct sched_domain_topology_level *tl, *tl_llc = NULL;
+		int lid;
 
 		sd = NULL;
 		for_each_sd_topology(tl) {
+			int flags = 0;
+
+			if (tl->sd_flags)
+				flags = (*tl->sd_flags)();
+
+			if (flags & SD_SHARE_LLC)
+				tl_llc = tl;
 
 			sd = build_sched_domain(tl, cpu_map, attr, sd, i);
 
@@ -2585,6 +2711,39 @@ build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *att
 				*per_cpu_ptr(d.sd, i) = sd;
 			if (cpumask_equal(cpu_map, sched_domain_span(sd)))
 				break;
+		}
+
+		lid = per_cpu(sd_llc_id, i);
+		if (lid == -1) {
+			int j;
+
+			/*
+			 * Assign the llc_id to the CPUs that do not
+			 * have an LLC.
+			 */
+			if (!tl_llc) {
+				per_cpu(sd_llc_id, i) = tl_max_llcs++;
+
+				continue;
+			}
+
+			/* try to reuse the llc_id of its siblings */
+			for_each_cpu(j, tl_llc->mask(tl_llc, i)) {
+				if (i == j)
+					continue;
+
+				lid = per_cpu(sd_llc_id, j);
+
+				if (lid != -1) {
+					per_cpu(sd_llc_id, i) = lid;
+
+					break;
+				}
+			}
+
+			/* a new LLC is detected */
+			if (lid == -1)
+				per_cpu(sd_llc_id, i) = tl_max_llcs++;
 		}
 	}
 
@@ -2642,10 +2801,12 @@ build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *att
 				 * between LLCs and memory channels.
 				 */
 				nr_llcs = sd->span_weight / child->span_weight;
-				if (nr_llcs == 1)
+				if (nr_llcs == 1) {
 					imb = sd->span_weight >> 3;
-				else
+				} else {
 					imb = nr_llcs;
+					has_multi_llcs = true;
+				}
 				imb = max(1U, imb);
 				sd->imb_numa_nr = imb;
 
@@ -2674,6 +2835,8 @@ build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *att
 		}
 	}
 
+	alloc_sd_pref(cpu_map, &d);
+
 	/* Attach the domains */
 	rcu_read_lock();
 	for_each_cpu(i, cpu_map) {
@@ -2687,6 +2850,13 @@ build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *att
 	}
 	rcu_read_unlock();
 
+	/*
+	 * Ensure we see enlarged sd->pf when we use new llc_ids and
+	 * bigger max_llcs.
+	 */
+	smp_mb();
+	max_llcs = tl_max_llcs;
+
 	if (has_asym)
 		static_branch_inc_cpuslocked(&sched_asym_cpucapacity);
 
@@ -2698,6 +2868,18 @@ build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *att
 
 	ret = 0;
 error:
+#ifdef CONFIG_SCHED_CACHE
+	/*
+	 * TBD: check before writing to it. sched domain rebuild
+	 * is not in the critical path, leave as-is for now.
+	 */
+	if (!ret && has_multi_llcs)
+		static_branch_enable_cpuslocked(&sched_cache_present);
+	else
+		static_branch_disable_cpuslocked(&sched_cache_present);
+
+	sched_cache_active_set_locked();
+#endif
 	__free_domain_allocs(&d, alloc_state, cpu_map);
 
 	return ret;
