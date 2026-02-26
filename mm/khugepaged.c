@@ -2476,7 +2476,6 @@ static void khugepaged_scan_mm_slot(unsigned int progress_max,
 
 		while (khugepaged_scan.address < hend) {
 			bool mmap_locked = true;
-			unsigned int cur_progress = 0;
 
 			cond_resched();
 			if (unlikely(hpage_collapse_test_exit_or_disable(mm)))
@@ -2492,9 +2491,9 @@ static void khugepaged_scan_mm_slot(unsigned int progress_max,
 
 				mmap_read_unlock(mm);
 				mmap_locked = false;
-				*result = hpage_collapse_scan_file(mm,
-					khugepaged_scan.address, file, pgoff,
-					&cur_progress, cc);
+				*result = hpage_collapse_scan_file(
+					mm, khugepaged_scan.address, file,
+					pgoff, cc);
 				fput(file);
 				if (*result == SCAN_PTE_MAPPED_HUGEPAGE) {
 					mmap_read_lock(mm);
@@ -2507,9 +2506,9 @@ static void khugepaged_scan_mm_slot(unsigned int progress_max,
 					mmap_read_unlock(mm);
 				}
 			} else {
-				*result = hpage_collapse_scan_pmd(mm, vma,
-					khugepaged_scan.address, &mmap_locked,
-					&cur_progress, cc);
+				*result = hpage_collapse_scan_pmd(
+					mm, vma, khugepaged_scan.address,
+					&mmap_locked, cc);
 			}
 
 			if (*result == SCAN_SUCCEED)
@@ -2839,7 +2838,7 @@ retry:
 			mmap_locked = false;
 			*lock_dropped = true;
 			result = hpage_collapse_scan_file(mm, addr, file, pgoff,
-							  NULL, cc);
+							  cc);
 
 			if (result == SCAN_PAGE_DIRTY_OR_WRITEBACK && !triggered_wb &&
 			    mapping_can_writeback(file->f_mapping)) {
@@ -2854,7 +2853,7 @@ retry:
 			fput(file);
 		} else {
 			result = hpage_collapse_scan_pmd(mm, vma, addr,
-							 &mmap_locked, NULL, cc);
+							 &mmap_locked, cc);
 		}
 		if (!mmap_locked)
 			*lock_dropped = true;
