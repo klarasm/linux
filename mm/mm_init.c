@@ -53,6 +53,17 @@ EXPORT_SYMBOL(mem_map);
 void *high_memory;
 EXPORT_SYMBOL(high_memory);
 
+unsigned long zero_page_pfn __ro_after_init;
+EXPORT_SYMBOL(zero_page_pfn);
+
+#ifndef __HAVE_COLOR_ZERO_PAGE
+uint8_t empty_zero_page[PAGE_SIZE] __page_aligned_bss;
+EXPORT_SYMBOL(empty_zero_page);
+
+struct page *__zero_page __ro_after_init;
+EXPORT_SYMBOL(__zero_page);
+#endif /* __HAVE_COLOR_ZERO_PAGE */
+
 #ifdef CONFIG_DEBUG_MEMORY_INIT
 int __meminitdata mminit_loglevel;
 
@@ -1896,7 +1907,11 @@ static void __init free_area_init(void)
 	for_each_node(nid) {
 		pg_data_t *pgdat;
 
-		if (!node_online(nid))
+		/*
+		 * If an architecture has not allocated node data for
+		 * this node, presume the node is memoryless or offline.
+		 */
+		if (!NODE_DATA(nid))
 			alloc_offline_node_data(nid);
 
 		pgdat = NODE_DATA(nid);
@@ -2668,6 +2683,22 @@ static void __init mem_init_print_info(void)
 		);
 }
 
+#ifndef __HAVE_COLOR_ZERO_PAGE
+/*
+ * architectures that __HAVE_COLOR_ZERO_PAGE must define this function
+ */
+void __init __weak arch_setup_zero_pages(void)
+{
+	__zero_page = virt_to_page(empty_zero_page);
+}
+#endif
+
+static void __init init_zero_page_pfn(void)
+{
+	arch_setup_zero_pages();
+	zero_page_pfn = page_to_pfn(ZERO_PAGE(0));
+}
+
 void __init __weak arch_mm_preinit(void)
 {
 }
@@ -2690,6 +2721,7 @@ void __init mm_core_init_early(void)
 void __init mm_core_init(void)
 {
 	arch_mm_preinit();
+	init_zero_page_pfn();
 
 	/* Initializations relying on SMP setup */
 	BUILD_BUG_ON(MAX_ZONELISTS > 2);

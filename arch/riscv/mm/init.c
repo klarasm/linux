@@ -69,10 +69,6 @@ unsigned long vmemmap_start_pfn __ro_after_init;
 EXPORT_SYMBOL(vmemmap_start_pfn);
 #endif
 
-unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)]
-							__page_aligned_bss;
-EXPORT_SYMBOL(empty_zero_page);
-
 extern char _start[];
 void *_dtb_early_va __initdata;
 uintptr_t _dtb_early_pa __initdata;
@@ -1078,11 +1074,6 @@ static int __init print_nokaslr(char *p)
 	return 0;
 }
 early_param("nokaslr", print_nokaslr);
-
-unsigned long kaslr_offset(void)
-{
-	return kernel_map.virt_offset;
-}
 #endif
 
 asmlinkage void __init setup_vm(uintptr_t dtb_pa)

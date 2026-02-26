@@ -42,6 +42,7 @@
 #include "amdgpu_reset.h"
 #include "amdgpu_psp.h"
 #include "amdgpu_ras_mgr.h"
+#include "amdgpu_virt_ras_cmd.h"
 
 #ifdef CONFIG_X86_MCE_AMD
 #include <asm/mce.h>
@@ -228,19 +229,30 @@ static int amdgpu_check_address_validity(struct amdgpu_device *adev,
 		return 0;
 
 	if (amdgpu_sriov_vf(adev)) {
-		if (amdgpu_virt_check_vf_critical_region(adev, address, &hit))
-			return -EPERM;
-		return hit ? -EACCES : 0;
+		if (amdgpu_uniras_enabled(adev)) {
+			if (amdgpu_virt_ras_check_address_validity(adev, address, &hit))
+				return -EPERM;
+			if (hit)
+				return -EACCES;
+		} else {
+			if (amdgpu_virt_check_vf_critical_region(adev, address, &hit))
+				return -EPERM;
+			return hit ? -EACCES : 0;
+		}
 	}
 
 	if ((address >= adev->gmc.mc_vram_size) ||
 	    (address >= RAS_UMC_INJECT_ADDR_LIMIT))
 		return -EFAULT;
 
-	if (amdgpu_uniras_enabled(adev))
-		count = amdgpu_ras_mgr_lookup_bad_pages_in_a_row(adev, address,
-			page_pfns, ARRAY_SIZE(page_pfns));
-	else
+	if (amdgpu_uniras_enabled(adev)) {
+		if (amdgpu_sriov_vf(adev))
+			count = amdgpu_virt_ras_convert_retired_address(adev, address,
+				page_pfns, ARRAY_SIZE(page_pfns));
+		else
+			count = amdgpu_ras_mgr_lookup_bad_pages_in_a_row(adev, address,
+				page_pfns, ARRAY_SIZE(page_pfns));
+	} else
 		count = amdgpu_umc_lookup_bad_pages_in_a_row(adev,
 				address, page_pfns, ARRAY_SIZE(page_pfns));
 
@@ -5665,7 +5677,7 @@ int amdgpu_ras_add_critical_region(struct amdgpu_device *adev,
 	struct amdgpu_ras *con = amdgpu_ras_get_context(adev);
 	struct amdgpu_vram_mgr_resource *vres;
 	struct ras_critical_region *region;
-	struct drm_buddy_block *block;
+	struct gpu_buddy_block *block;
 	int ret = 0;
 
 	if (!bo || !bo->tbo.resource)

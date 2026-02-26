@@ -1593,6 +1593,15 @@ W:	https://ez.analog.com/linux-software-drivers
 F:	Documentation/devicetree/bindings/iio/adc/adi,ad7780.yaml
 F:	drivers/iio/adc/ad7780.c
 
+ANALOG DEVICES INC AD8366 DRIVER
+M:	Michael Hennerich <Michael.Hennerich@analog.com>
+M:	Rodrigo Alencar <rodrigo.alencar@analog.com>
+L:	linux-iio@vger.kernel.org
+S:	Supported
+W:	https://ez.analog.com/linux-software-drivers
+F:	Documentation/devicetree/bindings/iio/amplifiers/adi,ad8366.yaml
+F:	drivers/iio/amplifiers/ad8366.c
+
 ANALOG DEVICES INC AD9467 DRIVER
 M:	Michael Hennerich <Michael.Hennerich@analog.com>
 M:	Nuno Sa <nuno.sa@analog.com>
@@ -2645,7 +2654,9 @@ R:	BST Linux Kernel Upstream Group <bst-upstream@bstai.top>
 L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
 S:	Supported
 F:	Documentation/devicetree/bindings/arm/bst.yaml
+F:	Documentation/devicetree/bindings/mmc/bst,c1200-sdhci.yaml
 F:	arch/arm64/boot/dts/bst/
+F:	drivers/mmc/host/sdhci-of-bst.c
 
 ARM/CALXEDA HIGHBANK ARCHITECTURE
 M:	Andre Przywara <andre.przywara@arm.com>
@@ -6212,6 +6223,7 @@ F:	drivers/scsi/fnic/
 
 CISCO SCSI HBA DRIVER
 M:	Karan Tilak Kumar <kartilak@cisco.com>
+M:	Narsimhulu Musini <nmusini@cisco.com>
 M:	Sesidhar Baddela <sebaddel@cisco.com>
 L:	linux-scsi@vger.kernel.org
 S:	Supported
@@ -6278,7 +6290,7 @@ S:	Maintained
 F:	include/linux/clk.h
 
 CLOCKSOURCE, CLOCKEVENT DRIVERS
-M:	Daniel Lezcano <daniel.lezcano@linaro.org>
+M:	Daniel Lezcano <daniel.lezcano@kernel.org>
 M:	Thomas Gleixner <tglx@kernel.org>
 L:	linux-kernel@vger.kernel.org
 S:	Supported
@@ -6667,7 +6679,7 @@ F:	rust/kernel/cpu.rs
 
 CPU IDLE TIME MANAGEMENT FRAMEWORK
 M:	"Rafael J. Wysocki" <rafael@kernel.org>
-M:	Daniel Lezcano <daniel.lezcano@linaro.org>
+M:	Daniel Lezcano <daniel.lezcano@kernel.org>
 R:	Christian Loehle <christian.loehle@arm.com>
 L:	linux-pm@vger.kernel.org
 S:	Maintained
@@ -6697,7 +6709,7 @@ F:	arch/x86/kernel/msr.c
 
 CPUIDLE DRIVER - ARM BIG LITTLE
 M:	Lorenzo Pieralisi <lpieralisi@kernel.org>
-M:	Daniel Lezcano <daniel.lezcano@linaro.org>
+M:	Daniel Lezcano <daniel.lezcano@kernel.org>
 L:	linux-pm@vger.kernel.org
 L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
 S:	Maintained
@@ -6705,7 +6717,7 @@ T:	git git://git.kernel.org/pub/scm/linux/kernel/git/rafael/linux-pm.git
 F:	drivers/cpuidle/cpuidle-big_little.c
 
 CPUIDLE DRIVER - ARM EXYNOS
-M:	Daniel Lezcano <daniel.lezcano@linaro.org>
+M:	Daniel Lezcano <daniel.lezcano@kernel.org>
 M:	Kukjin Kim <kgene@kernel.org>
 R:	Krzysztof Kozlowski <krzk@kernel.org>
 L:	linux-pm@vger.kernel.org
@@ -8648,7 +8660,7 @@ F:	drivers/phy/mediatek/phy-mtk-hdmi*
 F:	drivers/phy/mediatek/phy-mtk-mipi*
 
 DRM DRIVERS FOR NVIDIA TEGRA
-M:	Thierry Reding <thierry.reding@gmail.com>
+M:	Thierry Reding <thierry.reding@kernel.org>
 M:	Mikko Perttunen <mperttunen@nvidia.com>
 L:	dri-devel@lists.freedesktop.org
 L:	linux-tegra@vger.kernel.org
@@ -8791,6 +8803,14 @@ F:	Documentation/devicetree/bindings/display/brcm,bcm2835-*.yaml
 F:	drivers/gpu/drm/vc4/
 F:	include/uapi/drm/vc4_drm.h
 
+DRM DRIVERS FOR VERISILICON DISPLAY CONTROLLER IP
+M:	Icenowy Zheng <zhengxingda@iscas.ac.cn>
+L:	dri-devel@lists.freedesktop.org
+S:	Maintained
+T:	git https://gitlab.freedesktop.org/drm/misc/kernel.git
+F:	Documentation/devicetree/bindings/display/verisilicon,dc.yaml
+F:	drivers/gpu/drm/verisilicon/
+
 DRM DRIVERS FOR VIVANTE GPU IP
 M:	Lucas Stach <l.stach@pengutronix.de>
 R:	Russell King <linux+etnaviv@armlinux.org.uk>
@@ -8903,15 +8923,17 @@ T:	git https://gitlab.freedesktop.org/drm/misc/kernel.git
 F:	drivers/gpu/drm/ttm/
 F:	include/drm/ttm/
 
-DRM BUDDY ALLOCATOR
+GPU BUDDY ALLOCATOR
 M:	Matthew Auld <matthew.auld@intel.com>
 M:	Arun Pravin <arunpravin.paneerselvam@amd.com>
 R:	Christian Koenig <christian.koenig@amd.com>
 L:	dri-devel@lists.freedesktop.org
 S:	Maintained
 T:	git https://gitlab.freedesktop.org/drm/misc/kernel.git
-F:	drivers/gpu/drm/drm_buddy.c
-F:	drivers/gpu/drm/tests/drm_buddy_test.c
+F:	drivers/gpu/drm_buddy.c
+F:	drivers/gpu/buddy.c
+F:	drivers/gpu/tests/gpu_buddy_test.c
+F:	include/linux/gpu_buddy.h
 F:	include/drm/drm_buddy.h
 
 DRM AUTOMATED TESTING
@@ -10849,6 +10871,7 @@ L:	chrome-platform@lists.linux.dev
 S:	Maintained
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/chrome-platform/linux.git
 F:	drivers/firmware/google/
+F:	include/linux/coreboot.h
 
 GOOGLE TENSOR SoC SUPPORT
 M:	Peter Griffin <peter.griffin@linaro.org>
@@ -14746,7 +14769,6 @@ F:	Documentation/memory-barriers.txt
 F:	tools/memory-model/
 
 LINUX-NEXT TREE
-M:	Stephen Rothwell <sfr@canb.auug.org.au>
 M:	Mark Brown <broonie@kernel.org>
 L:	linux-next@vger.kernel.org
 S:	Supported
@@ -16654,7 +16676,7 @@ M:	Andrew Morton <akpm@linux-foundation.org>
 M:	David Hildenbrand <david@kernel.org>
 R:	Lorenzo Stoakes <lorenzo.stoakes@oracle.com>
 R:	Liam R. Howlett <Liam.Howlett@oracle.com>
-R:	Vlastimil Babka <vbabka@suse.cz>
+R:	Vlastimil Babka <vbabka@kernel.org>
 R:	Mike Rapoport <rppt@kernel.org>
 R:	Suren Baghdasaryan <surenb@google.com>
 R:	Michal Hocko <mhocko@suse.com>
@@ -16784,7 +16806,7 @@ M:	Andrew Morton <akpm@linux-foundation.org>
 M:	David Hildenbrand <david@kernel.org>
 R:	Lorenzo Stoakes <lorenzo.stoakes@oracle.com>
 R:	Liam R. Howlett <Liam.Howlett@oracle.com>
-R:	Vlastimil Babka <vbabka@suse.cz>
+R:	Vlastimil Babka <vbabka@kernel.org>
 R:	Mike Rapoport <rppt@kernel.org>
 R:	Suren Baghdasaryan <surenb@google.com>
 R:	Michal Hocko <mhocko@suse.com>
@@ -16839,7 +16861,7 @@ F:	mm/oom_kill.c
 
 MEMORY MANAGEMENT - PAGE ALLOCATOR
 M:	Andrew Morton <akpm@linux-foundation.org>
-M:	Vlastimil Babka <vbabka@suse.cz>
+M:	Vlastimil Babka <vbabka@kernel.org>
 R:	Suren Baghdasaryan <surenb@google.com>
 R:	Michal Hocko <mhocko@suse.com>
 R:	Brendan Jackman <jackmanb@google.com>
@@ -16885,7 +16907,7 @@ M:	David Hildenbrand <david@kernel.org>
 M:	Lorenzo Stoakes <lorenzo.stoakes@oracle.com>
 R:	Rik van Riel <riel@surriel.com>
 R:	Liam R. Howlett <Liam.Howlett@oracle.com>
-R:	Vlastimil Babka <vbabka@suse.cz>
+R:	Vlastimil Babka <vbabka@kernel.org>
 R:	Harry Yoo <harry.yoo@oracle.com>
 R:	Jann Horn <jannh@google.com>
 L:	linux-mm@kvack.org
@@ -16984,7 +17006,7 @@ MEMORY MAPPING
 M:	Andrew Morton <akpm@linux-foundation.org>
 M:	Liam R. Howlett <Liam.Howlett@oracle.com>
 M:	Lorenzo Stoakes <lorenzo.stoakes@oracle.com>
-R:	Vlastimil Babka <vbabka@suse.cz>
+R:	Vlastimil Babka <vbabka@kernel.org>
 R:	Jann Horn <jannh@google.com>
 R:	Pedro Falcato <pfalcato@suse.de>
 L:	linux-mm@kvack.org
@@ -17014,7 +17036,7 @@ M:	Andrew Morton <akpm@linux-foundation.org>
 M:	Suren Baghdasaryan <surenb@google.com>
 M:	Liam R. Howlett <Liam.Howlett@oracle.com>
 M:	Lorenzo Stoakes <lorenzo.stoakes@oracle.com>
-R:	Vlastimil Babka <vbabka@suse.cz>
+R:	Vlastimil Babka <vbabka@kernel.org>
 R:	Shakeel Butt <shakeel.butt@linux.dev>
 L:	linux-mm@kvack.org
 S:	Maintained
@@ -17030,7 +17052,7 @@ M:	Andrew Morton <akpm@linux-foundation.org>
 M:	Liam R. Howlett <Liam.Howlett@oracle.com>
 M:	Lorenzo Stoakes <lorenzo.stoakes@oracle.com>
 M:	David Hildenbrand <david@kernel.org>
-R:	Vlastimil Babka <vbabka@suse.cz>
+R:	Vlastimil Babka <vbabka@kernel.org>
 R:	Jann Horn <jannh@google.com>
 L:	linux-mm@kvack.org
 S:	Maintained
@@ -18866,6 +18888,15 @@ W:	https://github.com/davejiang/linux/wiki
 T:	git https://github.com/davejiang/linux.git
 F:	drivers/ntb/hw/intel/
 
+NTFS FILESYSTEM
+M:	Namjae Jeon <linkinjeon@kernel.org>
+M:	Hyunchul Lee <hyc.lee@gmail.com>
+L:	linux-fsdevel@vger.kernel.org
+S:	Maintained
+T:	git git://git.kernel.org/pub/scm/linux/kernel/git/linkinjeon/ntfs.git
+F:	Documentation/filesystems/ntfs.rst
+F:	fs/ntfs/
+
 NTFS3 FILESYSTEM
 M:	Konstantin Komarov <almaz.alexandrovich@paragon-software.com>
 L:	ntfs3@lists.linux.dev
@@ -20246,7 +20277,7 @@ S:	Maintained
 F:	drivers/pci/controller/*mvebu*
 
 PCI DRIVER FOR NVIDIA TEGRA
-M:	Thierry Reding <thierry.reding@gmail.com>
+M:	Thierry Reding <thierry.reding@kernel.org>
 L:	linux-tegra@vger.kernel.org
 L:	linux-pci@vger.kernel.org
 S:	Supported
@@ -20507,7 +20538,7 @@ F:	Documentation/devicetree/bindings/pci/hisilicon,kirin-pcie.yaml
 F:	drivers/pci/controller/dwc/pcie-kirin.c
 
 PCIE DRIVER FOR HISILICON STB
-M:	Shawn Guo <shawn.guo@linaro.org>
+M:	Shawn Guo <shawnguo@kernel.org>
 L:	linux-pci@vger.kernel.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/pci/hisilicon-histb-pcie.txt
@@ -20991,6 +21022,12 @@ L:	linux-acpi@vger.kernel.org
 S:	Maintained
 F:	drivers/pnp/
 F:	include/linux/pnp.h
+
+PORTUGUESE (BRAZILIAN) TRANSLATION
+M:	Daniel Pereira <danielmaraboo@gmail.com>
+L:	linux-doc@vger.kernel.org
+S:	Maintained
+F:	Documentation/translations/pt_BR/
 
 PORTWELL EC DRIVER
 M:	Yen-Chi Huang <jesse.huang@portwell.com.tw>
@@ -22828,6 +22865,7 @@ F:	Documentation/devicetree/bindings/reset/thead,th1520-reset.yaml
 F:	arch/riscv/boot/dts/thead/
 F:	drivers/clk/thead/clk-th1520-ap.c
 F:	drivers/firmware/thead,th1520-aon.c
+F:	drivers/gpu/drm/bridge/th1520-dw-hdmi.c
 F:	drivers/mailbox/mailbox-th1520.c
 F:	drivers/net/ethernet/stmicro/stmmac/dwmac-thead.c
 F:	drivers/pinctrl/pinctrl-th1520.c
@@ -23172,7 +23210,7 @@ K:	\b(?i:rust)\b
 RUST [ALLOC]
 M:	Danilo Krummrich <dakr@kernel.org>
 R:	Lorenzo Stoakes <lorenzo.stoakes@oracle.com>
-R:	Vlastimil Babka <vbabka@suse.cz>
+R:	Vlastimil Babka <vbabka@kernel.org>
 R:	Liam R. Howlett <Liam.Howlett@oracle.com>
 R:	Uladzislau Rezki <urezki@gmail.com>
 L:	rust-for-linux@vger.kernel.org
@@ -24335,7 +24373,6 @@ F:	Documentation/devicetree/bindings/interrupt-controller/kontron,sl28cpld-intc.
 F:	Documentation/devicetree/bindings/pwm/kontron,sl28cpld-pwm.yaml
 F:	Documentation/devicetree/bindings/watchdog/kontron,sl28cpld-wdt.yaml
 F:	drivers/gpio/gpio-sl28cpld.c
-F:	drivers/hwmon/sa67mcu-hwmon.c
 F:	drivers/hwmon/sl28cpld-hwmon.c
 F:	drivers/irqchip/irq-sl28cpld.c
 F:	drivers/pwm/pwm-sl28cpld.c
@@ -24348,7 +24385,7 @@ F:	Documentation/devicetree/bindings/nvmem/layouts/kontron,sl28-vpd.yaml
 F:	drivers/nvmem/layouts/sl28vpd.c
 
 SLAB ALLOCATOR
-M:	Vlastimil Babka <vbabka@suse.cz>
+M:	Vlastimil Babka <vbabka@kernel.org>
 M:	Andrew Morton <akpm@linux-foundation.org>
 R:	Christoph Lameter <cl@gentwo.org>
 R:	David Rientjes <rientjes@google.com>
@@ -24907,9 +24944,9 @@ F:	drivers/clk/spear/
 F:	drivers/pinctrl/spear/
 
 SPI NOR SUBSYSTEM
-M:	Tudor Ambarus <tudor.ambarus@linaro.org>
 M:	Pratyush Yadav <pratyush@kernel.org>
 M:	Michael Walle <mwalle@kernel.org>
+R:	Takahiro Kuwano <takahiro.kuwano@infineon.com>
 L:	linux-mtd@lists.infradead.org
 S:	Maintained
 W:	http://www.linux-mtd.infradead.org/
@@ -25949,7 +25986,7 @@ F:	include/linux/tee_drv.h
 F:	include/uapi/linux/tee.h
 
 TEGRA ARCHITECTURE SUPPORT
-M:	Thierry Reding <thierry.reding@gmail.com>
+M:	Thierry Reding <thierry.reding@kernel.org>
 M:	Jonathan Hunter <jonathanh@nvidia.com>
 L:	linux-tegra@vger.kernel.org
 S:	Supported
@@ -25981,7 +26018,7 @@ S:	Supported
 F:	drivers/i2c/busses/i2c-tegra.c
 
 TEGRA IOMMU DRIVERS
-M:	Thierry Reding <thierry.reding@gmail.com>
+M:	Thierry Reding <thierry.reding@kernel.org>
 R:	Krishna Reddy <vdumpa@nvidia.com>
 L:	linux-tegra@vger.kernel.org
 S:	Supported
@@ -26002,12 +26039,12 @@ F:	Documentation/devicetree/bindings/mtd/nvidia,tegra20-nand.yaml
 F:	drivers/mtd/nand/raw/tegra_nand.c
 
 TEGRA PWM DRIVER
-M:	Thierry Reding <thierry.reding@gmail.com>
+M:	Thierry Reding <thierry.reding@kernel.org>
 S:	Supported
 F:	drivers/pwm/pwm-tegra.c
 
 TEGRA QUAD SPI DRIVER
-M:	Thierry Reding <thierry.reding@gmail.com>
+M:	Thierry Reding <thierry.reding@kernel.org>
 M:	Jonathan Hunter <jonathanh@nvidia.com>
 M:	Sowjanya Komatineni <skomatineni@nvidia.com>
 L:	linux-tegra@vger.kernel.org
@@ -26025,7 +26062,7 @@ S:	Supported
 F:	drivers/spi/spi-tegra*
 
 TEGRA VIDEO DRIVER
-M:	Thierry Reding <thierry.reding@gmail.com>
+M:	Thierry Reding <thierry.reding@kernel.org>
 M:	Jonathan Hunter <jonathanh@nvidia.com>
 M:	Sowjanya Komatineni <skomatineni@nvidia.com>
 M:	Luca Ceresoli <luca.ceresoli@bootlin.com>
@@ -26215,7 +26252,7 @@ F:	drivers/media/radio/radio-raremono.c
 
 THERMAL
 M:	Rafael J. Wysocki <rafael@kernel.org>
-M:	Daniel Lezcano <daniel.lezcano@linaro.org>
+M:	Daniel Lezcano <daniel.lezcano@kernel.org>
 R:	Zhang Rui <rui.zhang@intel.com>
 R:	Lukasz Luba <lukasz.luba@arm.com>
 L:	linux-pm@vger.kernel.org
@@ -26245,7 +26282,7 @@ F:	drivers/thermal/amlogic_thermal.c
 
 THERMAL/CPU_COOLING
 M:	Amit Daniel Kachhap <amit.kachhap@gmail.com>
-M:	Daniel Lezcano <daniel.lezcano@linaro.org>
+M:	Daniel Lezcano <daniel.lezcano@kernel.org>
 M:	Viresh Kumar <viresh.kumar@linaro.org>
 R:	Lukasz Luba <lukasz.luba@arm.com>
 L:	linux-pm@vger.kernel.org
@@ -26616,6 +26653,7 @@ F:	include/linux/timekeeping.h
 F:	include/linux/timex.h
 F:	include/uapi/linux/time.h
 F:	include/uapi/linux/timex.h
+F:	kernel/time/.kunitconfig
 F:	kernel/time/alarmtimer.c
 F:	kernel/time/clocksource*
 F:	kernel/time/ntp*
@@ -29184,7 +29222,7 @@ K:	zstd
 
 ZSWAP COMPRESSED SWAP CACHING
 M:	Johannes Weiner <hannes@cmpxchg.org>
-M:	Yosry Ahmed <yosry.ahmed@linux.dev>
+M:	Yosry Ahmed <yosry@kernel.org>
 M:	Nhat Pham <nphamcs@gmail.com>
 R:	Chengming Zhou <chengming.zhou@linux.dev>
 L:	linux-mm@kvack.org
