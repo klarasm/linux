@@ -2377,7 +2377,7 @@ void __init setup_ipl(void)
 	atomic_notifier_chain_register(&panic_notifier_list, &on_panic_nb);
 }
 
-void s390_reset_system(void)
+void __no_stack_protector s390_reset_system(void)
 {
 	/* Disable prefixing */
 	set_prefix(0);
@@ -2502,6 +2502,11 @@ void *ipl_report_finish(struct ipl_report *report)
 	BUG_ON(ptr > buf + report->size);
 out:
 	return buf;
+}
+
+bool arch_get_secureboot(void)
+{
+	return ipl_secure_flag;
 }
 
 int ipl_report_free(struct ipl_report *report)

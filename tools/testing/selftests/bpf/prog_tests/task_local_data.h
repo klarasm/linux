@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause) */
 #ifndef __TASK_LOCAL_DATA_H
 #define __TASK_LOCAL_DATA_H
 
@@ -262,7 +262,7 @@ retry:
 		if (!atomic_compare_exchange_strong(&tld_meta_p->cnt, &cnt, cnt + 1))
 			goto retry;
 
-		strncpy(tld_meta_p->metadata[i].name, name, TLD_NAME_LEN);
+		strscpy(tld_meta_p->metadata[i].name, name);
 		atomic_store(&tld_meta_p->metadata[i].size, size);
 		return (tld_key_t){(__s16)off};
 	}
