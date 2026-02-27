@@ -283,6 +283,17 @@ static inline void __iomem *ioremap_prot(phys_addr_t phys, size_t size,
 
 #define ioremap(addr, size)	\
 	__ioremap_prot((addr), (size), __pgprot(PROT_DEVICE_nGnRE))
+
+#define arch_mk_kernel_prot arch_mk_kernel_prot
+static inline pgprot_t arch_mk_kernel_prot(pgprot_t user_prot)
+{
+	ptdesc_t mem_type = pgprot_val(user_prot) & PTE_ATTRINDX_MASK;
+
+	return __pgprot_modify(PAGE_KERNEL, PTE_ATTRINDX_MASK, mem_type);
+}
+
+#define _PAGE_IOREMAP PROT_DEVICE_nGnRE
+
 #define ioremap_wc(addr, size)	\
 	__ioremap_prot((addr), (size), __pgprot(PROT_NORMAL_NC))
 #define ioremap_np(addr, size)	\
