@@ -1874,6 +1874,7 @@ const char *netdev_cmd_to_name(enum netdev_cmd cmd)
 	N(PRE_CHANGEADDR) N(OFFLOAD_XSTATS_ENABLE) N(OFFLOAD_XSTATS_DISABLE)
 	N(OFFLOAD_XSTATS_REPORT_USED) N(OFFLOAD_XSTATS_REPORT_DELTA)
 	N(XDP_FEAT_CHANGE)
+	N(DEBUG_UNREGISTER)
 	}
 #undef N
 	return "UNKNOWN_NETDEV_EVENT";
@@ -4166,7 +4167,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 
 	qdisc_calculate_pkt_len(skb, q);
 
-	tcf_set_drop_reason(skb, SKB_DROP_REASON_QDISC_DROP);
+	tcf_set_qdisc_drop_reason(skb, QDISC_DROP_GENERIC);
 
 	if (q->flags & TCQ_F_NOLOCK) {
 		if (q->flags & TCQ_F_CAN_BYPASS && nolock_qdisc_is_empty(q) &&
@@ -4274,8 +4275,8 @@ unlock:
 	spin_unlock(root_lock);
 
 free_skbs:
-	tcf_kfree_skb_list(to_free);
-	tcf_kfree_skb_list(to_free2);
+	tcf_kfree_skb_list(to_free, q, txq, dev);
+	tcf_kfree_skb_list(to_free2, q, txq, dev);
 	return rc;
 }
 
@@ -4965,16 +4966,16 @@ EXPORT_SYMBOL(rps_needed);
 struct static_key_false rfs_needed __read_mostly;
 EXPORT_SYMBOL(rfs_needed);
 
-static u32 rfs_slot(u32 hash, const struct rps_dev_flow_table *flow_table)
+static u32 rfs_slot(u32 hash, rps_tag_ptr tag_ptr)
 {
-	return hash_32(hash, flow_table->log);
+	return hash_32(hash, rps_tag_to_log(tag_ptr));
 }
 
 #ifdef CONFIG_RFS_ACCEL
 /**
  * rps_flow_is_active - check whether the flow is recently active.
  * @rflow: Specific flow to check activity.
- * @flow_table: per-queue flowtable that @rflow belongs to.
+ * @log: ilog2(hashsize).
  * @cpu: CPU saved in @rflow.
  *
  * If the CPU has processed many packets since the flow's last activity
@@ -4983,7 +4984,7 @@ static u32 rfs_slot(u32 hash, const struct rps_dev_flow_table *flow_table)
  * Return: true if flow was recently active.
  */
 static bool rps_flow_is_active(struct rps_dev_flow *rflow,
-			       struct rps_dev_flow_table *flow_table,
+			       u8 log,
 			       unsigned int cpu)
 {
 	unsigned int flow_last_active;
@@ -4996,7 +4997,7 @@ static bool rps_flow_is_active(struct rps_dev_flow *rflow,
 	flow_last_active = READ_ONCE(rflow->last_qtail);
 
 	return (int)(sd_input_head - flow_last_active) <
-		(int)(10 << flow_table->log);
+		(int)(10 << log);
 }
 #endif
 
@@ -5008,9 +5009,10 @@ set_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 		u32 head;
 #ifdef CONFIG_RFS_ACCEL
 		struct netdev_rx_queue *rxqueue;
-		struct rps_dev_flow_table *flow_table;
+		struct rps_dev_flow *flow_table;
 		struct rps_dev_flow *old_rflow;
 		struct rps_dev_flow *tmp_rflow;
+		rps_tag_ptr q_tag_ptr;
 		unsigned int tmp_cpu;
 		u16 rxq_index;
 		u32 flow_id;
@@ -5025,16 +5027,18 @@ set_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 			goto out;
 
 		rxqueue = dev->_rx + rxq_index;
-		flow_table = rcu_dereference(rxqueue->rps_flow_table);
-		if (!flow_table)
+		q_tag_ptr = READ_ONCE(rxqueue->rps_flow_table);
+		if (!q_tag_ptr)
 			goto out;
 
-		flow_id = rfs_slot(hash, flow_table);
-		tmp_rflow = &flow_table->flows[flow_id];
+		flow_id = rfs_slot(hash, q_tag_ptr);
+		flow_table = rps_tag_to_table(q_tag_ptr);
+		tmp_rflow = flow_table + flow_id;
 		tmp_cpu = READ_ONCE(tmp_rflow->cpu);
 
 		if (READ_ONCE(tmp_rflow->filter) != RPS_NO_FILTER) {
-			if (rps_flow_is_active(tmp_rflow, flow_table,
+			if (rps_flow_is_active(tmp_rflow,
+					       rps_tag_to_log(q_tag_ptr),
 					       tmp_cpu)) {
 				if (hash != READ_ONCE(tmp_rflow->hash) ||
 				    next_cpu == tmp_cpu)
@@ -5072,9 +5076,8 @@ set_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 static int get_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 		       struct rps_dev_flow **rflowp)
 {
-	const struct rps_sock_flow_table *sock_flow_table;
 	struct netdev_rx_queue *rxqueue = dev->_rx;
-	struct rps_dev_flow_table *flow_table;
+	rps_tag_ptr global_tag_ptr, q_tag_ptr;
 	struct rps_map *map;
 	int cpu = -1;
 	u32 tcpu;
@@ -5095,9 +5098,9 @@ static int get_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 
 	/* Avoid computing hash if RFS/RPS is not active for this rxqueue */
 
-	flow_table = rcu_dereference(rxqueue->rps_flow_table);
+	q_tag_ptr = READ_ONCE(rxqueue->rps_flow_table);
 	map = rcu_dereference(rxqueue->rps_map);
-	if (!flow_table && !map)
+	if (!q_tag_ptr && !map)
 		goto done;
 
 	skb_reset_network_header(skb);
@@ -5105,16 +5108,21 @@ static int get_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 	if (!hash)
 		goto done;
 
-	sock_flow_table = rcu_dereference(net_hotdata.rps_sock_flow_table);
-	if (flow_table && sock_flow_table) {
+	global_tag_ptr = READ_ONCE(net_hotdata.rps_sock_flow_table);
+	if (q_tag_ptr && global_tag_ptr) {
+		struct rps_sock_flow_table *sock_flow_table;
+		struct rps_dev_flow *flow_table;
 		struct rps_dev_flow *rflow;
 		u32 next_cpu;
+		u32 flow_id;
 		u32 ident;
 
 		/* First check into global flow table if there is a match.
 		 * This READ_ONCE() pairs with WRITE_ONCE() from rps_record_sock_flow().
 		 */
-		ident = READ_ONCE(sock_flow_table->ents[hash & sock_flow_table->mask]);
+		flow_id = hash & rps_tag_to_mask(global_tag_ptr);
+		sock_flow_table = rps_tag_to_table(global_tag_ptr);
+		ident = READ_ONCE(sock_flow_table[flow_id].ent);
 		if ((ident ^ hash) & ~net_hotdata.rps_cpu_mask)
 			goto try_rps;
 
@@ -5123,7 +5131,9 @@ static int get_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 		/* OK, now we know there is a match,
 		 * we can look at the local (per receive queue) flow table
 		 */
-		rflow = &flow_table->flows[rfs_slot(hash, flow_table)];
+		flow_id = rfs_slot(hash, q_tag_ptr);
+		flow_table = rps_tag_to_table(q_tag_ptr);
+		rflow = flow_table + flow_id;
 		tcpu = rflow->cpu;
 
 		/*
@@ -5183,19 +5193,23 @@ bool rps_may_expire_flow(struct net_device *dev, u16 rxq_index,
 			 u32 flow_id, u16 filter_id)
 {
 	struct netdev_rx_queue *rxqueue = dev->_rx + rxq_index;
-	struct rps_dev_flow_table *flow_table;
+	struct rps_dev_flow *flow_table;
 	struct rps_dev_flow *rflow;
+	rps_tag_ptr q_tag_ptr;
 	bool expire = true;
+	u8 log;
 
 	rcu_read_lock();
-	flow_table = rcu_dereference(rxqueue->rps_flow_table);
-	if (flow_table && flow_id < (1UL << flow_table->log)) {
+	q_tag_ptr = READ_ONCE(rxqueue->rps_flow_table);
+	log = rps_tag_to_log(q_tag_ptr);
+	if (q_tag_ptr && flow_id < (1UL << log)) {
 		unsigned int cpu;
 
-		rflow = &flow_table->flows[flow_id];
+		flow_table = rps_tag_to_table(q_tag_ptr);
+		rflow = flow_table + flow_id;
 		cpu = READ_ONCE(rflow->cpu);
 		if (READ_ONCE(rflow->filter) == filter_id &&
-		    rps_flow_is_active(rflow, flow_table, cpu))
+		    rps_flow_is_active(rflow, log, cpu))
 			expire = false;
 	}
 	rcu_read_unlock();
@@ -5808,7 +5822,7 @@ static __latent_entropy void net_tx_action(void)
 			to_free = qdisc_run(q);
 			if (root_lock)
 				spin_unlock(root_lock);
-			tcf_kfree_skb_list(to_free);
+			tcf_kfree_skb_list(to_free, q, NULL, qdisc_dev(q));
 		}
 
 		rcu_read_unlock();
@@ -8115,7 +8129,8 @@ struct net_device *netdev_upper_get_next_dev_rcu(struct net_device *dev,
 {
 	struct netdev_adjacent *upper;
 
-	WARN_ON_ONCE(!rcu_read_lock_held() && !lockdep_rtnl_is_held());
+	WARN_ON_ONCE(!rcu_read_lock_held() && !rcu_read_lock_bh_held() &&
+		     !lockdep_rtnl_is_held());
 
 	upper = list_entry_rcu((*iter)->next, struct netdev_adjacent, list);
 
@@ -11559,6 +11574,14 @@ int netdev_refcnt_read(const struct net_device *dev)
 }
 EXPORT_SYMBOL(netdev_refcnt_read);
 
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+static void dump_netdev_trace_buffer(const struct net_device *dev);
+static void erase_netdev_trace_buffer(const struct net_device *dev);
+#else
+static inline void dump_netdev_trace_buffer(const struct net_device *dev) { }
+static inline void erase_netdev_trace_buffer(const struct net_device *dev) { }
+#endif
+
 int netdev_unregister_timeout_secs __read_mostly = 10;
 
 #define WAIT_REFS_MIN_MSECS 1
@@ -11632,11 +11655,16 @@ static struct net_device *netdev_wait_allrefs_any(struct list_head *list)
 
 		if (time_after(jiffies, warning_time +
 			       READ_ONCE(netdev_unregister_timeout_secs) * HZ)) {
+			rtnl_lock();
 			list_for_each_entry(dev, list, todo_list) {
 				pr_emerg("unregister_netdevice: waiting for %s to become free. Usage count = %d\n",
 					 dev->name, netdev_refcnt_read(dev));
 				ref_tracker_dir_print(&dev->refcnt_tracker, 10);
+				call_netdevice_notifiers(NETDEV_DEBUG_UNREGISTER, dev);
+				dump_netdev_trace_buffer(dev);
 			}
+			__rtnl_unlock();
+			rcu_barrier();
 
 			warning_time = jiffies;
 		}
@@ -12034,6 +12062,9 @@ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 
 	dev->priv_len = sizeof_priv;
 
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+	INIT_LIST_HEAD(&dev->netdev_trace_buffer_list);
+#endif
 	ref_tracker_dir_init(&dev->refcnt_tracker, 128, "netdev");
 #ifdef CONFIG_PCPU_DEV_REFCNT
 	dev->pcpu_refcnt = alloc_percpu(int);
@@ -12205,6 +12236,8 @@ void free_netdev(struct net_device *dev)
 	netdev_free_phy_link_topology(dev);
 
 	mutex_destroy(&dev->lock);
+
+	erase_netdev_trace_buffer(dev);
 
 	/*  Compatibility with error handling in drivers */
 	if (dev->reg_state == NETREG_UNINITIALIZED ||
@@ -13308,3 +13341,172 @@ out:
 }
 
 subsys_initcall(net_dev_init);
+
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+
+#define NETDEV_TRACE_BUFFER_SIZE 32768
+static struct netdev_trace_buffer {
+	struct list_head list;
+	int prev_count;
+	atomic_t count;
+	int nr_entries;
+	unsigned long entries[20];
+} netdev_trace_buffer[NETDEV_TRACE_BUFFER_SIZE];
+static LIST_HEAD(netdev_trace_buffer_list);
+static DEFINE_SPINLOCK(netdev_trace_buffer_lock);
+static bool netdev_trace_buffer_exhausted;
+
+static int netdev_trace_buffer_init(void)
+{
+	int i;
+
+	for (i = 0; i < NETDEV_TRACE_BUFFER_SIZE; i++)
+		list_add_tail(&netdev_trace_buffer[i].list, &netdev_trace_buffer_list);
+	return 0;
+}
+pure_initcall(netdev_trace_buffer_init);
+
+static void dump_netdev_trace_buffer(const struct net_device *dev)
+{
+	struct netdev_trace_buffer *ptr;
+	int count, balance = 0, pos = 0;
+
+	print_dst_list(dev);
+	list_for_each_entry_rcu(ptr, &dev->netdev_trace_buffer_list, list,
+				/* list elements can't go away. */ 1) {
+		pos++;
+		count = atomic_read(&ptr->count);
+		balance += count;
+		if (ptr->prev_count == count)
+			continue;
+		ptr->prev_count = count;
+		pr_info("Call trace for %s[%d] %+d at\n", dev->name, pos, count);
+		stack_trace_print(ptr->entries, ptr->nr_entries, 4);
+		cond_resched();
+	}
+	if (!netdev_trace_buffer_exhausted)
+		pr_info("balance as of %s[%d] is %d\n", dev->name, pos, balance);
+}
+
+static void erase_netdev_trace_buffer(const struct net_device *dev)
+{
+	struct netdev_trace_buffer *ptr;
+	unsigned long flags;
+
+	spin_lock_irqsave(&netdev_trace_buffer_lock, flags);
+	while (!list_empty(&dev->netdev_trace_buffer_list)) {
+		ptr = list_first_entry(&dev->netdev_trace_buffer_list, typeof(*ptr), list);
+		list_del(&ptr->list);
+		list_add_tail(&ptr->list, &netdev_trace_buffer_list);
+	}
+	spin_unlock_irqrestore(&netdev_trace_buffer_lock, flags);
+}
+
+int trim_netdev_trace(unsigned long *entries, int nr_entries)
+{
+#ifdef CONFIG_KALLSYMS
+	char buffer[32] = { };
+	char *cp;
+	int i;
+
+	if (in_softirq()) {
+		static unsigned long __data_racy caller;
+
+		if (!caller) {
+			for (i = 0; i < nr_entries; i++) {
+				snprintf(buffer, sizeof(buffer) - 1, "%ps", (void *)entries[i]);
+				cp = strchr(buffer, ' ');
+				if (cp)
+					*cp = '\0';
+				if (!strcmp(buffer, "handle_softirqs")) {
+					caller = entries[i];
+					break;
+				}
+			}
+		}
+		for (i = 0; i < nr_entries; i++)
+			if (entries[i] == caller)
+				return i + 1;
+	} else if (current->flags & PF_WQ_WORKER) {
+		static unsigned long __data_racy caller;
+
+		if (!caller) {
+			for (i = 0; i < nr_entries; i++) {
+				snprintf(buffer, sizeof(buffer) - 1, "%ps", (void *)entries[i]);
+				cp = strchr(buffer, ' ');
+				if (cp)
+					*cp = '\0';
+				if (!strcmp(buffer, "process_one_work")) {
+					caller = entries[i];
+					break;
+				}
+			}
+		}
+		for (i = 0; i < nr_entries; i++)
+			if (entries[i] == caller)
+				return i + 1;
+	} else {
+		for (i = 0; i < nr_entries; i++) {
+			snprintf(buffer, sizeof(buffer) - 1, "%ps", (void *)entries[i]);
+			cp = strchr(buffer, ' ');
+			if (cp)
+				*cp = '\0';
+			if (buffer[0] == 'k') {
+				if (!strcmp(buffer, "ksys_unshare"))
+					return i + 1;
+			} else if (buffer[0] == 's') {
+				if (!strcmp(buffer, "sock_sendmsg_nosec") ||
+				    !strcmp(buffer, "sock_recvmsg_nosec"))
+					return i + 1;
+			} else if (buffer[0] == '_') {
+				if (!strcmp(buffer, "__sys_bind") ||
+				    !strcmp(buffer, "__sock_release") ||
+				    !strcmp(buffer, "__sys_bpf"))
+					return i + 1;
+			} else {
+				if (!strcmp(buffer, "do_sock_setsockopt"))
+					return i + 1;
+			}
+		}
+	}
+#endif
+	return nr_entries;
+}
+EXPORT_SYMBOL(trim_netdev_trace);
+
+void save_netdev_trace_buffer(struct net_device *dev, int delta)
+{
+	struct netdev_trace_buffer *ptr;
+	unsigned long entries[ARRAY_SIZE(ptr->entries)];
+	unsigned long nr_entries;
+	unsigned long flags;
+
+	if (in_nmi())
+		return;
+	nr_entries = stack_trace_save(entries, ARRAY_SIZE(ptr->entries), 1);
+	nr_entries = trim_netdev_trace(entries, nr_entries);
+	list_for_each_entry_rcu(ptr, &dev->netdev_trace_buffer_list, list,
+				/* list elements can't go away. */ 1) {
+		if (ptr->nr_entries == nr_entries &&
+		    !memcmp(ptr->entries, entries, nr_entries * sizeof(unsigned long))) {
+			atomic_add(delta, &ptr->count);
+			return;
+		}
+	}
+	spin_lock_irqsave(&netdev_trace_buffer_lock, flags);
+	if (!list_empty(&netdev_trace_buffer_list)) {
+		ptr = list_first_entry(&netdev_trace_buffer_list, typeof(*ptr), list);
+		list_del(&ptr->list);
+		ptr->prev_count = 0;
+		atomic_set(&ptr->count, delta);
+		ptr->nr_entries = nr_entries;
+		memmove(ptr->entries, entries, nr_entries * sizeof(unsigned long));
+		list_add_tail_rcu(&ptr->list, &dev->netdev_trace_buffer_list);
+	} else {
+		netdev_trace_buffer_exhausted = true;
+	}
+	spin_unlock_irqrestore(&netdev_trace_buffer_lock, flags);
+}
+EXPORT_SYMBOL(save_netdev_trace_buffer);
+
+#endif

@@ -4080,6 +4080,13 @@ static const struct alg_test_desc alg_test_descs[] = {
 			.aead = __VECS(aegis128_tv_template)
 		}
 	}, {
+		.alg = "authenc(hmac(md5),cbc(des))",
+		.generic_driver = "authenc(hmac-md5-lib,cbc(des-generic))",
+		.test = alg_test_aead,
+		.suite = {
+			.aead = __VECS(hmac_md5_des_cbc_tv_temp)
+		}
+	}, {
 		.alg = "authenc(hmac(md5),cbc(des3_ede))",
 		.generic_driver = "authenc(hmac-md5-lib,cbc(des3_ede-generic))",
 		.test = alg_test_aead,
@@ -4132,8 +4139,9 @@ static const struct alg_test_desc alg_test_descs[] = {
 		.fips_allowed = 1,
 	}, {
 		.alg = "authenc(hmac(sha224),cbc(aes))",
-		.generic_driver = "authenc(hmac-sha224-lib,cbc(aes-generic))",
+		.generic_driver = "authenc(hmac-sha224-lib,cbc(aes-lib))",
 		.test = alg_test_aead,
+		.fips_allowed = 1,
 		.suite = {
 			.aead = __VECS(hmac_sha224_aes_cbc_tv_temp)
 		}
@@ -4194,8 +4202,9 @@ static const struct alg_test_desc alg_test_descs[] = {
 		.fips_allowed = 1,
 	}, {
 		.alg = "authenc(hmac(sha384),cbc(aes))",
-		.generic_driver = "authenc(hmac-sha384-lib,cbc(aes-generic))",
+		.generic_driver = "authenc(hmac-sha384-lib,cbc(aes-lib))",
 		.test = alg_test_aead,
+		.fips_allowed = 1,
 		.suite = {
 			.aead = __VECS(hmac_sha384_aes_cbc_tv_temp)
 		}
@@ -4388,7 +4397,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 	}, {
 #endif
 		.alg = "cbcmac(aes)",
-		.generic_driver = "cbcmac(aes-lib)",
+		.generic_driver = "cbcmac-aes-lib",
 		.test = alg_test_hash,
 		.suite = {
 			.hash = __VECS(aes_cbcmac_tv_template)
@@ -4401,7 +4410,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "ccm(aes)",
-		.generic_driver = "ccm_base(ctr(aes-lib),cbcmac(aes-lib))",
+		.generic_driver = "ccm_base(ctr(aes-lib),cbcmac-aes-lib)",
 		.test = alg_test_aead,
 		.fips_allowed = 1,
 		.suite = {
@@ -4429,7 +4438,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		},
 	}, {
 		.alg = "cmac(aes)",
-		.generic_driver = "cmac(aes-lib)",
+		.generic_driver = "cmac-aes-lib",
 		.fips_allowed = 1,
 		.test = alg_test_hash,
 		.suite = {
@@ -5326,7 +5335,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "rfc4309(ccm(aes))",
-		.generic_driver = "rfc4309(ccm_base(ctr(aes-lib),cbcmac(aes-lib)))",
+		.generic_driver = "rfc4309(ccm_base(ctr(aes-lib),cbcmac-aes-lib))",
 		.test = alg_test_aead,
 		.fips_allowed = 1,
 		.suite = {
@@ -5515,7 +5524,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "xcbc(aes)",
-		.generic_driver = "xcbc(aes-lib)",
+		.generic_driver = "xcbc-aes-lib",
 		.test = alg_test_hash,
 		.suite = {
 			.hash = __VECS(aes_xcbc128_tv_template)

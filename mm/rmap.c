@@ -1955,7 +1955,14 @@ static inline unsigned int folio_unmap_pte_batch(struct folio *folio,
 	if (userfaultfd_wp(vma))
 		return 1;
 
-	return folio_pte_batch(folio, pvmw->pte, pte, max_nr);
+	/*
+	 * If unmap fails, we need to restore the ptes. To avoid accidentally
+	 * upgrading write permissions for ptes that were not originally
+	 * writable, and to avoid losing the soft-dirty bit, use the
+	 * appropriate FPB flags.
+	 */
+	return folio_pte_batch_flags(folio, vma, pvmw->pte, &pte, max_nr,
+				     FPB_RESPECT_WRITE | FPB_RESPECT_SOFT_DIRTY);
 }
 
 /*
@@ -2046,7 +2053,7 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 		}
 
 		if (!pvmw.pte) {
-			if (folio_test_anon(folio) && !folio_test_swapbacked(folio)) {
+			if (folio_test_lazyfree(folio)) {
 				if (unmap_huge_pmd_locked(vma, pvmw.address, pvmw.pmd, folio))
 					goto walk_done;
 				/*

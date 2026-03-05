@@ -152,8 +152,10 @@ static void __xe_exec_queue_free(struct xe_exec_queue *q)
 	if (xe_exec_queue_is_multi_queue(q))
 		xe_exec_queue_group_cleanup(q);
 
-	if (q->vm)
+	if (q->vm) {
+		xe_vm_remove_exec_queue(q->vm, q);
 		xe_vm_put(q->vm);
+	}
 
 	if (q->xef)
 		xe_file_put(q->xef);
@@ -224,9 +226,12 @@ static struct xe_exec_queue *__xe_exec_queue_alloc(struct xe_device *xe,
 	q->ring_ops = gt->ring_ops[hwe->class];
 	q->ops = gt->exec_queue_ops;
 	INIT_LIST_HEAD(&q->lr.link);
+	INIT_LIST_HEAD(&q->vm_exec_queue_link);
 	INIT_LIST_HEAD(&q->multi_gt_link);
 	INIT_LIST_HEAD(&q->hw_engine_group_link);
 	INIT_LIST_HEAD(&q->pxp.link);
+	spin_lock_init(&q->multi_queue.lock);
+	spin_lock_init(&q->lrc_lookup_lock);
 	q->multi_queue.priority = XE_MULTI_QUEUE_PRIORITY_NORMAL;
 
 	q->sched_props.timeslice_us = hwe->eclass->sched_props.timeslice_us;
@@ -266,6 +271,66 @@ static struct xe_exec_queue *__xe_exec_queue_alloc(struct xe_device *xe,
 	return q;
 }
 
+static void xe_exec_queue_set_lrc(struct xe_exec_queue *q, struct xe_lrc *lrc, u16 idx)
+{
+	xe_assert(gt_to_xe(q->gt), idx < q->width);
+
+	scoped_guard(spinlock, &q->lrc_lookup_lock)
+		q->lrc[idx] = lrc;
+}
+
+/**
+ * xe_exec_queue_get_lrc() - Get the LRC from exec queue.
+ * @q: The exec queue instance.
+ * @idx: Index within multi-LRC array.
+ *
+ * Retrieves LRC of given index for the exec queue under lock
+ * and takes reference.
+ *
+ * Return: Pointer to LRC on success, error on failure, NULL on
+ * lookup failure.
+ */
+struct xe_lrc *xe_exec_queue_get_lrc(struct xe_exec_queue *q, u16 idx)
+{
+	struct xe_lrc *lrc;
+
+	xe_assert(gt_to_xe(q->gt), idx < q->width);
+
+	scoped_guard(spinlock, &q->lrc_lookup_lock) {
+		lrc = q->lrc[idx];
+		if (lrc)
+			xe_lrc_get(lrc);
+	}
+
+	return lrc;
+}
+
+/**
+ * xe_exec_queue_lrc() - Get the LRC from exec queue.
+ * @q: The exec queue instance.
+ *
+ * Retrieves the primary LRC for the exec queue. Note that this function
+ * returns only the first LRC instance, even when multiple parallel LRCs
+ * are configured. This function does not increment reference count,
+ * so the reference can be just forgotten after use.
+ *
+ * Return: Pointer to LRC on success, error on failure
+ */
+struct xe_lrc *xe_exec_queue_lrc(struct xe_exec_queue *q)
+{
+	return q->lrc[0];
+}
+
+static void __xe_exec_queue_fini(struct xe_exec_queue *q)
+{
+	int i;
+
+	q->ops->fini(q);
+
+	for (i = 0; i < q->width; ++i)
+		xe_lrc_put(q->lrc[i]);
+}
+
 static int __xe_exec_queue_init(struct xe_exec_queue *q, u32 exec_queue_flags)
 {
 	int i, err;
@@ -303,38 +368,51 @@ static int __xe_exec_queue_init(struct xe_exec_queue *q, u32 exec_queue_flags)
 	 * from the moment vCPU resumes execution.
 	 */
 	for (i = 0; i < q->width; ++i) {
-		struct xe_lrc *lrc;
+		struct xe_lrc *__lrc = NULL;
+		int marker;
 
-		xe_gt_sriov_vf_wait_valid_ggtt(q->gt);
-		lrc = xe_lrc_create(q->hwe, q->vm, q->replay_state,
-				    xe_lrc_ring_size(), q->msix_vec, flags);
-		if (IS_ERR(lrc)) {
-			err = PTR_ERR(lrc);
-			goto err_lrc;
-		}
+		do {
+			struct xe_lrc *lrc;
 
-		/* Pairs with READ_ONCE to xe_exec_queue_contexts_hwsp_rebase */
-		WRITE_ONCE(q->lrc[i], lrc);
+			marker = xe_gt_sriov_vf_wait_valid_ggtt(q->gt);
+
+			lrc = xe_lrc_create(q->hwe, q->vm, q->replay_state,
+					    xe_lrc_ring_size(), q->msix_vec, flags);
+			if (IS_ERR(lrc)) {
+				err = PTR_ERR(lrc);
+				goto err_lrc;
+			}
+
+			xe_exec_queue_set_lrc(q, lrc, i);
+
+			if (__lrc)
+				xe_lrc_put(__lrc);
+			__lrc = lrc;
+
+		} while (marker != xe_vf_migration_fixups_complete_count(q->gt));
 	}
 
 	return 0;
 
 err_lrc:
-	for (i = i - 1; i >= 0; --i)
-		xe_lrc_put(q->lrc[i]);
+	__xe_exec_queue_fini(q);
 	return err;
 }
 
-static void __xe_exec_queue_fini(struct xe_exec_queue *q)
-{
-	int i;
-
-	q->ops->fini(q);
-
-	for (i = 0; i < q->width; ++i)
-		xe_lrc_put(q->lrc[i]);
-}
-
+/**
+ * xe_exec_queue_create() - Create an exec queue
+ * @xe: Xe device
+ * @vm: VM for the exec queue
+ * @logical_mask: Logical mask of HW engines
+ * @width: Width of the exec queue (number of LRCs)
+ * @hwe: Hardware engine
+ * @flags: Exec queue creation flags
+ * @extensions: Extensions for exec queue creation
+ *
+ * Create an exec queue (allocate and initialize) with the specified parameters
+ *
+ * Return: Pointer to the created exec queue on success, ERR_PTR on failure
+ */
 struct xe_exec_queue *xe_exec_queue_create(struct xe_device *xe, struct xe_vm *vm,
 					   u32 logical_mask, u16 width,
 					   struct xe_hw_engine *hwe, u32 flags,
@@ -378,6 +456,19 @@ err_post_alloc:
 }
 ALLOW_ERROR_INJECTION(xe_exec_queue_create, ERRNO);
 
+/**
+ * xe_exec_queue_create_class() - Create an exec queue for a specific engine class
+ * @xe: Xe device
+ * @gt: GT for the exec queue
+ * @vm: VM for the exec queue
+ * @class: Engine class
+ * @flags: Exec queue creation flags
+ * @extensions: Extensions for exec queue creation
+ *
+ * Create an exec queue for the specified engine class.
+ *
+ * Return: Pointer to the created exec queue on success, ERR_PTR on failure
+ */
 struct xe_exec_queue *xe_exec_queue_create_class(struct xe_device *xe, struct xe_gt *gt,
 						 struct xe_vm *vm,
 						 enum xe_engine_class class,
@@ -469,6 +560,14 @@ struct xe_exec_queue *xe_exec_queue_create_bind(struct xe_device *xe,
 }
 ALLOW_ERROR_INJECTION(xe_exec_queue_create_bind, ERRNO);
 
+/**
+ * xe_exec_queue_destroy() - Destroy an exec queue
+ * @ref: Reference count of the exec queue
+ *
+ * Called when the last reference to the exec queue is dropped.
+ * Cleans up all resources associated with the exec queue.
+ * This function should not be called directly; use xe_exec_queue_put() instead.
+ */
 void xe_exec_queue_destroy(struct kref *ref)
 {
 	struct xe_exec_queue *q = container_of(ref, struct xe_exec_queue, refcount);
@@ -501,6 +600,14 @@ void xe_exec_queue_destroy(struct kref *ref)
 	q->ops->destroy(q);
 }
 
+/**
+ * xe_exec_queue_fini() - Finalize an exec queue
+ * @q: The exec queue
+ *
+ * Finalizes the exec queue by updating run ticks, releasing LRC references,
+ * and freeing the queue structure. This is called after the queue has been
+ * destroyed and all references have been dropped.
+ */
 void xe_exec_queue_fini(struct xe_exec_queue *q)
 {
 	/*
@@ -515,6 +622,14 @@ void xe_exec_queue_fini(struct xe_exec_queue *q)
 	__xe_exec_queue_free(q);
 }
 
+/**
+ * xe_exec_queue_assign_name() - Assign a name to an exec queue
+ * @q: The exec queue
+ * @instance: Instance number for the engine
+ *
+ * Assigns a human-readable name to the exec queue based on its engine class
+ * and instance number (e.g., "rcs0", "vcs1", "bcs2").
+ */
 void xe_exec_queue_assign_name(struct xe_exec_queue *q, u32 instance)
 {
 	switch (q->class) {
@@ -541,6 +656,15 @@ void xe_exec_queue_assign_name(struct xe_exec_queue *q, u32 instance)
 	}
 }
 
+/**
+ * xe_exec_queue_lookup() - Look up an exec queue by ID
+ * @xef: Xe file private data
+ * @id: Exec queue ID
+ *
+ * Looks up an exec queue by its ID and increments its reference count.
+ *
+ * Return: Pointer to the exec queue if found, NULL otherwise
+ */
 struct xe_exec_queue *xe_exec_queue_lookup(struct xe_file *xef, u32 id)
 {
 	struct xe_exec_queue *q;
@@ -554,6 +678,14 @@ struct xe_exec_queue *xe_exec_queue_lookup(struct xe_file *xef, u32 id)
 	return q;
 }
 
+/**
+ * xe_exec_queue_device_get_max_priority() - Get maximum priority for an exec queues
+ * @xe: Xe device
+ *
+ * Returns the maximum priority level that can be assigned to an exec queues.
+ *
+ * Return: Maximum priority level (HIGH if CAP_SYS_NICE, NORMAL otherwise)
+ */
 enum xe_exec_queue_priority
 xe_exec_queue_device_get_max_priority(struct xe_device *xe)
 {
@@ -860,6 +992,17 @@ static const xe_exec_queue_set_property_fn exec_queue_set_property_funcs[] = {
 							exec_queue_set_multi_queue_priority,
 };
 
+/**
+ * xe_exec_queue_set_property_ioctl() - Set a property on an exec queue
+ * @dev: DRM device
+ * @data: IOCTL data
+ * @file: DRM file
+ *
+ * Allows setting properties on an existing exec queue. Currently only
+ * supports setting multi-queue priority.
+ *
+ * Return: 0 on success, negative error code on failure
+ */
 int xe_exec_queue_set_property_ioctl(struct drm_device *dev, void *data,
 				     struct drm_file *file)
 {
@@ -1084,6 +1227,18 @@ static bool has_sched_groups(struct xe_gt *gt)
 	return false;
 }
 
+/**
+ * xe_exec_queue_create_ioctl() - Create an exec queue via IOCTL
+ * @dev: DRM device
+ * @data: IOCTL data
+ * @file: DRM file
+ *
+ * Creates a new exec queue based on user-provided parameters. Supports
+ * creating VM bind queues, regular exec queues, multi-lrc exec queues
+ * and multi-queue groups.
+ *
+ * Return: 0 on success with exec_queue_id filled in, negative error code on failure
+ */
 int xe_exec_queue_create_ioctl(struct drm_device *dev, void *data,
 			       struct drm_file *file)
 {
@@ -1180,6 +1335,11 @@ int xe_exec_queue_create_ioctl(struct drm_device *dev, void *data,
 		if (XE_IOCTL_DBG(xe, !hwe))
 			return -EINVAL;
 
+		/* multi-lrc is only supported on select engine classes */
+		if (XE_IOCTL_DBG(xe, args->width > 1 &&
+				 !(xe->info.multi_lrc_mask & BIT(hwe->class))))
+			return -EOPNOTSUPP;
+
 		vm = xe_vm_lookup(xef, args->vm_id);
 		if (XE_IOCTL_DBG(xe, !vm))
 			return -ENOENT;
@@ -1233,6 +1393,8 @@ int xe_exec_queue_create_ioctl(struct drm_device *dev, void *data,
 	}
 
 	q->xef = xe_file_get(xef);
+	if (eci[0].engine_class != DRM_XE_ENGINE_CLASS_VM_BIND)
+		xe_vm_add_exec_queue(vm, q);
 
 	/* user id alloc must always be last in ioctl to prevent UAF */
 	err = xa_alloc(&xef->exec_queue.xa, &id, q, xa_limit_32b, GFP_KERNEL);
@@ -1253,6 +1415,17 @@ put_exec_queue:
 	return err;
 }
 
+/**
+ * xe_exec_queue_get_property_ioctl() - Get a property from an exec queue
+ * @dev: DRM device
+ * @data: IOCTL data
+ * @file: DRM file
+ *
+ * Retrieves property values from an existing exec queue. Currently supports
+ * getting the ban/reset status.
+ *
+ * Return: 0 on success with value filled in, negative error code on failure
+ */
 int xe_exec_queue_get_property_ioctl(struct drm_device *dev, void *data,
 				     struct drm_file *file)
 {
@@ -1281,21 +1454,6 @@ int xe_exec_queue_get_property_ioctl(struct drm_device *dev, void *data,
 	xe_exec_queue_put(q);
 
 	return ret;
-}
-
-/**
- * xe_exec_queue_lrc() - Get the LRC from exec queue.
- * @q: The exec_queue.
- *
- * Retrieves the primary LRC for the exec queue. Note that this function
- * returns only the first LRC instance, even when multiple parallel LRCs
- * are configured.
- *
- * Return: Pointer to LRC on success, error on failure
- */
-struct xe_lrc *xe_exec_queue_lrc(struct xe_exec_queue *q)
-{
-	return q->lrc[0];
 }
 
 /**
@@ -1405,6 +1563,16 @@ void xe_exec_queue_kill(struct xe_exec_queue *q)
 	xe_vm_remove_compute_exec_queue(q->vm, q);
 }
 
+/**
+ * xe_exec_queue_destroy_ioctl() - Destroy an exec queue via IOCTL
+ * @dev: DRM device
+ * @data: IOCTL data
+ * @file: DRM file
+ *
+ * Destroys an existing exec queue and releases its reference.
+ *
+ * Return: 0 on success, negative error code on failure
+ */
 int xe_exec_queue_destroy_ioctl(struct drm_device *dev, void *data,
 				struct drm_file *file)
 {
@@ -1657,14 +1825,14 @@ int xe_exec_queue_contexts_hwsp_rebase(struct xe_exec_queue *q, void *scratch)
 	for (i = 0; i < q->width; ++i) {
 		struct xe_lrc *lrc;
 
-		/* Pairs with WRITE_ONCE in __xe_exec_queue_init  */
-		lrc = READ_ONCE(q->lrc[i]);
+		lrc = xe_exec_queue_get_lrc(q, i);
 		if (!lrc)
 			continue;
 
 		xe_lrc_update_memirq_regs_with_address(lrc, q->hwe, scratch);
 		xe_lrc_update_hwctx_regs_with_address(lrc);
 		err = xe_lrc_setup_wa_bb_with_scratch(lrc, q->hwe, scratch);
+		xe_lrc_put(lrc);
 		if (err)
 			break;
 	}

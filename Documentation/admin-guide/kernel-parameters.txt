@@ -74,6 +74,7 @@
 	TPM	TPM drivers are enabled.
 	UMS	USB Mass Storage support is enabled.
 	USB	USB support is enabled.
+	NVME	NVMe support is enabled
 	USBHID	USB Human Interface Device support is enabled.
 	V4L	Video For Linux support is enabled.
 	VGA	The VGA console has been enabled.
@@ -188,6 +189,14 @@ Kernel parameters
 			Some values produce so much output that the system is
 			unusable.  The "log_buf_len" parameter may be useful
 			if you need to capture more output.
+
+	acpi.poweroff_on_fatal=	[ACPI]
+			{0 | 1}
+			Causes the system to poweroff when the ACPI bytecode signals
+			a fatal error. The default value of this setting is 1.
+			Overriding this value should only be done for diagnosing
+			ACPI firmware problems, as the system might behave erratically
+			after having encountered a fatal ACPI error.
 
 	acpi_enforce_resources=	[ACPI]
 			{ strict | lax | no }
@@ -2958,6 +2967,12 @@ Kernel parameters
 			Format: <bool>
 			Default: CONFIG_KFENCE_DEFERRABLE
 
+	kfence.fault=	[MM,KFENCE] Controls the behavior when a KFENCE
+			error is detected.
+			report - print the error report and continue (default).
+			oops   - print the error report and oops.
+			panic  - print the error report and panic.
+
 	kfence.sample_interval=
 			[MM,KFENCE] KFENCE's sample interval in milliseconds.
 			Format: <unsigned integer>
@@ -4786,6 +4801,18 @@ Kernel parameters
 			'node', 'default' can be specified
 			This can be set from sysctl after boot.
 			See Documentation/admin-guide/sysctl/vm.rst for details.
+
+	nvme.quirks=    [NVME] A list of quirk entries to augment the built-in
+			nvme quirk list. List entries are separated by a
+			'-' character.
+			Each entry has the form VendorID:ProductID:quirk_names.
+			The IDs are 4-digits hex numbers and quirk_names is a
+			list of quirk names separated by commas. A quirk name
+			can be prefixed by '^', meaning that the specified
+			quirk must be disabled.
+
+			Example:
+			nvme.quirks=7710:2267:bogus_nid,^identify_cns-9900:7711:broken_msi
 
 	ohci1394_dma=early	[HW,EARLY] enable debugging via the ohci1394 driver.
 			See Documentation/core-api/debugging-via-ohci1394.rst for more
@@ -6733,7 +6760,7 @@ Kernel parameters
 			Default is 'on'.
 
 	initramfs_options= [KNL]
-                        Specify mount options for for the initramfs mount.
+			Specify mount options for the initramfs mount.
 
 	rootfstype=	[KNL] Set root filesystem type
 
