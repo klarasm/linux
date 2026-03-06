@@ -960,7 +960,7 @@ static int mlx5_pci_init(struct mlx5_core_dev *dev, struct pci_dev *pdev,
 
 	mlx5_pci_vsc_init(dev);
 
-	pci_enable_ptm(pdev, NULL);
+	pci_enable_ptm(pdev);
 
 	return 0;
 
@@ -1772,6 +1772,7 @@ static const int types[] = {
 	MLX5_CAP_CRYPTO,
 	MLX5_CAP_SHAMPO,
 	MLX5_CAP_ADV_RDMA,
+	MLX5_CAP_TLP_EMULATION,
 };
 
 static void mlx5_hca_caps_free(struct mlx5_core_dev *dev)
