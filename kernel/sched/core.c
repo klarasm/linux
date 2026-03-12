@@ -687,11 +687,6 @@ bool raw_spin_rq_trylock(struct rq *rq)
 	}
 }
 
-void raw_spin_rq_unlock(struct rq *rq)
-{
-	raw_spin_unlock(rq_lockp(rq));
-}
-
 /*
  * double_rq_lock - safely lock two runqueues
  */
@@ -872,7 +867,14 @@ void update_rq_clock(struct rq *rq)
  * Use HR-timers to deliver accurate preemption points.
  */
 
-static void hrtick_clear(struct rq *rq)
+enum {
+	HRTICK_SCHED_NONE		= 0,
+	HRTICK_SCHED_DEFER		= BIT(1),
+	HRTICK_SCHED_START		= BIT(2),
+	HRTICK_SCHED_REARM_HRTIMER	= BIT(3)
+};
+
+static void __used hrtick_clear(struct rq *rq)
 {
 	if (hrtimer_active(&rq->hrtick_timer))
 		hrtimer_cancel(&rq->hrtick_timer);
@@ -897,12 +899,24 @@ static enum hrtimer_restart hrtick(struct hrtimer *timer)
 	return HRTIMER_NORESTART;
 }
 
-static void __hrtick_restart(struct rq *rq)
+static inline bool hrtick_needs_rearm(struct hrtimer *timer, ktime_t expires)
+{
+	/*
+	 * Queued is false when the timer is not started or currently
+	 * running the callback. In both cases, restart. If queued check
+	 * whether the expiry time actually changes substantially.
+	 */
+	return !hrtimer_is_queued(timer) ||
+		abs(expires - hrtimer_get_expires(timer)) > 5000;
+}
+
+static void hrtick_cond_restart(struct rq *rq)
 {
 	struct hrtimer *timer = &rq->hrtick_timer;
 	ktime_t time = rq->hrtick_time;
 
-	hrtimer_start(timer, time, HRTIMER_MODE_ABS_PINNED_HARD);
+	if (hrtick_needs_rearm(timer, time))
+		hrtimer_start(timer, time, HRTIMER_MODE_ABS_PINNED_HARD);
 }
 
 /*
@@ -914,7 +928,7 @@ static void __hrtick_start(void *arg)
 	struct rq_flags rf;
 
 	rq_lock(rq, &rf);
-	__hrtick_restart(rq);
+	hrtick_cond_restart(rq);
 	rq_unlock(rq, &rf);
 }
 
@@ -925,7 +939,6 @@ static void __hrtick_start(void *arg)
  */
 void hrtick_start(struct rq *rq, u64 delay)
 {
-	struct hrtimer *timer = &rq->hrtick_timer;
 	s64 delta;
 
 	/*
@@ -933,27 +946,67 @@ void hrtick_start(struct rq *rq, u64 delay)
 	 * doesn't make sense and can cause timer DoS.
 	 */
 	delta = max_t(s64, delay, 10000LL);
-	rq->hrtick_time = ktime_add_ns(hrtimer_cb_get_time(timer), delta);
+
+	/*
+	 * If this is in the middle of schedule() only note the delay
+	 * and let hrtick_schedule_exit() deal with it.
+	 */
+	if (rq->hrtick_sched) {
+		rq->hrtick_sched |= HRTICK_SCHED_START;
+		rq->hrtick_delay = delta;
+		return;
+	}
+
+	rq->hrtick_time = ktime_add_ns(ktime_get(), delta);
+	if (!hrtick_needs_rearm(&rq->hrtick_timer, rq->hrtick_time))
+		return;
 
 	if (rq == this_rq())
-		__hrtick_restart(rq);
+		hrtimer_start(&rq->hrtick_timer, rq->hrtick_time, HRTIMER_MODE_ABS_PINNED_HARD);
 	else
 		smp_call_function_single_async(cpu_of(rq), &rq->hrtick_csd);
+}
+
+static inline void hrtick_schedule_enter(struct rq *rq)
+{
+	rq->hrtick_sched = HRTICK_SCHED_DEFER;
+	if (hrtimer_test_and_clear_rearm_deferred())
+		rq->hrtick_sched |= HRTICK_SCHED_REARM_HRTIMER;
+}
+
+static inline void hrtick_schedule_exit(struct rq *rq)
+{
+	if (rq->hrtick_sched & HRTICK_SCHED_START) {
+		rq->hrtick_time = ktime_add_ns(ktime_get(), rq->hrtick_delay);
+		hrtick_cond_restart(rq);
+	} else if (idle_rq(rq)) {
+		/*
+		 * No need for using hrtimer_is_active(). The timer is CPU local
+		 * and interrupts are disabled, so the callback cannot be
+		 * running and the queued state is valid.
+		 */
+		if (hrtimer_is_queued(&rq->hrtick_timer))
+			hrtimer_cancel(&rq->hrtick_timer);
+	}
+
+	if (rq->hrtick_sched & HRTICK_SCHED_REARM_HRTIMER)
+		__hrtimer_rearm_deferred();
+
+	rq->hrtick_sched = HRTICK_SCHED_NONE;
 }
 
 static void hrtick_rq_init(struct rq *rq)
 {
 	INIT_CSD(&rq->hrtick_csd, __hrtick_start, rq);
-	hrtimer_setup(&rq->hrtick_timer, hrtick, CLOCK_MONOTONIC, HRTIMER_MODE_REL_HARD);
+	rq->hrtick_sched = HRTICK_SCHED_NONE;
+	hrtimer_setup(&rq->hrtick_timer, hrtick, CLOCK_MONOTONIC,
+		      HRTIMER_MODE_REL_HARD | HRTIMER_MODE_LAZY_REARM);
 }
 #else /* !CONFIG_SCHED_HRTICK: */
-static inline void hrtick_clear(struct rq *rq)
-{
-}
-
-static inline void hrtick_rq_init(struct rq *rq)
-{
-}
+static inline void hrtick_clear(struct rq *rq) { }
+static inline void hrtick_rq_init(struct rq *rq) { }
+static inline void hrtick_schedule_enter(struct rq *rq) { }
+static inline void hrtick_schedule_exit(struct rq *rq) { }
 #endif /* !CONFIG_SCHED_HRTICK */
 
 /*
@@ -4721,7 +4774,7 @@ int sched_cgroup_fork(struct task_struct *p, struct kernel_clone_args *kargs)
 		p->sched_class->task_fork(p);
 	raw_spin_unlock_irqrestore(&p->pi_lock, flags);
 
-	return scx_fork(p);
+	return scx_fork(p, kargs);
 }
 
 void sched_cancel_fork(struct task_struct *p)
@@ -4729,8 +4782,11 @@ void sched_cancel_fork(struct task_struct *p)
 	scx_cancel_fork(p);
 }
 
+static void sched_mm_cid_fork(struct task_struct *t);
+
 void sched_post_fork(struct task_struct *p)
 {
+	sched_mm_cid_fork(p);
 	uclamp_post_fork(p);
 	scx_post_fork(p);
 }
@@ -5029,6 +5085,7 @@ static inline void finish_lock_switch(struct rq *rq)
 	 */
 	spin_acquire(&__rq_lockp(rq)->dep_map, 0, 0, _THIS_IP_);
 	__balance_callbacks(rq, NULL);
+	hrtick_schedule_exit(rq);
 	raw_spin_rq_unlock_irq(rq);
 }
 
@@ -5678,7 +5735,7 @@ static void sched_tick_remote(struct work_struct *work)
 	os = atomic_fetch_add_unless(&twork->state, -1, TICK_SCHED_REMOTE_RUNNING);
 	WARN_ON_ONCE(os == TICK_SCHED_REMOTE_OFFLINE);
 	if (os == TICK_SCHED_REMOTE_RUNNING)
-		queue_delayed_work(system_unbound_wq, dwork, HZ);
+		queue_delayed_work(system_dfl_wq, dwork, HZ);
 }
 
 static void sched_tick_start(int cpu)
@@ -5697,7 +5754,7 @@ static void sched_tick_start(int cpu)
 	if (os == TICK_SCHED_REMOTE_OFFLINE) {
 		twork->cpu = cpu;
 		INIT_DELAYED_WORK(&twork->work, sched_tick_remote);
-		queue_delayed_work(system_unbound_wq, &twork->work, HZ);
+		queue_delayed_work(system_dfl_wq, &twork->work, HZ);
 	}
 }
 
@@ -6782,9 +6839,6 @@ static void __sched notrace __schedule(int sched_mode)
 
 	schedule_debug(prev, preempt);
 
-	if (sched_feat(HRTICK) || sched_feat(HRTICK_DL))
-		hrtick_clear(rq);
-
 	klp_sched_try_switch(prev);
 
 	local_irq_disable();
@@ -6810,6 +6864,8 @@ static void __sched notrace __schedule(int sched_mode)
 	 */
 	rq_lock(rq, &rf);
 	smp_mb__after_spinlock();
+
+	hrtick_schedule_enter(rq);
 
 	/* Promote REQ to ACT */
 	rq->clock_update_flags <<= 1;
@@ -6913,6 +6969,7 @@ keep_resched:
 
 		rq_unpin_lock(rq, &rf);
 		__balance_callbacks(rq, NULL);
+		hrtick_schedule_exit(rq);
 		raw_spin_rq_unlock_irq(rq);
 	}
 	trace_sched_exit_tp(is_switch);
@@ -10617,13 +10674,10 @@ static inline void mm_cid_transit_to_cpu(struct task_struct *t, struct mm_cid_pc
 	}
 }
 
-static bool mm_cid_fixup_task_to_cpu(struct task_struct *t, struct mm_struct *mm)
+static void mm_cid_fixup_task_to_cpu(struct task_struct *t, struct mm_struct *mm)
 {
 	/* Remote access to mm::mm_cid::pcpu requires rq_lock */
 	guard(task_rq_lock)(t);
-	/* If the task is not active it is not in the users count */
-	if (!t->mm_cid.active)
-		return false;
 	if (cid_on_task(t->mm_cid.cid)) {
 		/* If running on the CPU, put the CID in transit mode, otherwise drop it */
 		if (task_rq(t)->curr == t)
@@ -10631,69 +10685,43 @@ static bool mm_cid_fixup_task_to_cpu(struct task_struct *t, struct mm_struct *mm
 		else
 			mm_unset_cid_on_task(t);
 	}
-	return true;
-}
-
-static void mm_cid_do_fixup_tasks_to_cpus(struct mm_struct *mm)
-{
-	struct task_struct *p, *t;
-	unsigned int users;
-
-	/*
-	 * This can obviously race with a concurrent affinity change, which
-	 * increases the number of allowed CPUs for this mm, but that does
-	 * not affect the mode and only changes the CID constraints. A
-	 * possible switch back to per task mode happens either in the
-	 * deferred handler function or in the next fork()/exit().
-	 *
-	 * The caller has already transferred. The newly incoming task is
-	 * already accounted for, but not yet visible.
-	 */
-	users = mm->mm_cid.users - 2;
-	if (!users)
-		return;
-
-	guard(rcu)();
-	for_other_threads(current, t) {
-		if (mm_cid_fixup_task_to_cpu(t, mm))
-			users--;
-	}
-
-	if (!users)
-		return;
-
-	/* Happens only for VM_CLONE processes. */
-	for_each_process_thread(p, t) {
-		if (t == current || t->mm != mm)
-			continue;
-		if (mm_cid_fixup_task_to_cpu(t, mm)) {
-			if (--users == 0)
-				return;
-		}
-	}
 }
 
 static void mm_cid_fixup_tasks_to_cpus(void)
 {
 	struct mm_struct *mm = current->mm;
+	struct task_struct *t;
 
-	mm_cid_do_fixup_tasks_to_cpus(mm);
+	lockdep_assert_held(&mm->mm_cid.mutex);
+
+	hlist_for_each_entry(t, &mm->mm_cid.user_list, mm_cid.node) {
+		/* Current has already transferred before invoking the fixup. */
+		if (t != current)
+			mm_cid_fixup_task_to_cpu(t, mm);
+	}
+
 	mm_cid_complete_transit(mm, MM_CID_ONCPU);
 }
 
 static bool sched_mm_cid_add_user(struct task_struct *t, struct mm_struct *mm)
 {
+	lockdep_assert_held(&mm->mm_cid.lock);
+
 	t->mm_cid.active = 1;
+	hlist_add_head(&t->mm_cid.node, &mm->mm_cid.user_list);
 	mm->mm_cid.users++;
 	return mm_update_max_cids(mm);
 }
 
-void sched_mm_cid_fork(struct task_struct *t)
+static void sched_mm_cid_fork(struct task_struct *t)
 {
 	struct mm_struct *mm = t->mm;
 	bool percpu;
 
-	WARN_ON_ONCE(!mm || t->mm_cid.cid != MM_CID_UNSET);
+	if (!mm)
+		return;
+
+	WARN_ON_ONCE(t->mm_cid.cid != MM_CID_UNSET);
 
 	guard(mutex)(&mm->mm_cid.mutex);
 	scoped_guard(raw_spinlock_irq, &mm->mm_cid.lock) {
@@ -10732,12 +10760,13 @@ void sched_mm_cid_fork(struct task_struct *t)
 
 static bool sched_mm_cid_remove_user(struct task_struct *t)
 {
+	lockdep_assert_held(&t->mm->mm_cid.lock);
+
 	t->mm_cid.active = 0;
-	scoped_guard(preempt) {
-		/* Clear the transition bit */
-		t->mm_cid.cid = cid_from_transit_cid(t->mm_cid.cid);
-		mm_unset_cid_on_task(t);
-	}
+	/* Clear the transition bit */
+	t->mm_cid.cid = cid_from_transit_cid(t->mm_cid.cid);
+	mm_unset_cid_on_task(t);
+	hlist_del_init(&t->mm_cid.node);
 	t->mm->mm_cid.users--;
 	return mm_update_max_cids(t->mm);
 }
@@ -10880,11 +10909,13 @@ void mm_init_cid(struct mm_struct *mm, struct task_struct *p)
 	mutex_init(&mm->mm_cid.mutex);
 	mm->mm_cid.irq_work = IRQ_WORK_INIT_HARD(mm_cid_irq_work);
 	INIT_WORK(&mm->mm_cid.work, mm_cid_work_fn);
+	INIT_HLIST_HEAD(&mm->mm_cid.user_list);
 	cpumask_copy(mm_cpus_allowed(mm), &p->cpus_mask);
 	bitmap_zero(mm_cidmask(mm), num_possible_cpus());
 }
 #else /* CONFIG_SCHED_MM_CID */
 static inline void mm_update_cpus_allowed(struct mm_struct *mm, const struct cpumask *affmsk) { }
+static inline void sched_mm_cid_fork(struct task_struct *t) { }
 #endif /* !CONFIG_SCHED_MM_CID */
 
 static DEFINE_PER_CPU(struct sched_change_ctx, sched_change_ctx);
