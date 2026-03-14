@@ -590,7 +590,7 @@ out_free_vma:
 static int split_vma(struct vma_iterator *vmi, struct vm_area_struct *vma,
 		     unsigned long addr, int new_below)
 {
-	if (vma->vm_mm->map_count >= sysctl_max_map_count)
+	if (vma->vm_mm->map_count >= get_sysctl_max_map_count())
 		return -ENOMEM;
 
 	return __split_vma(vmi, vma, addr, new_below);
@@ -1394,7 +1394,7 @@ static int vms_gather_munmap_vmas(struct vma_munmap_struct *vms,
 		 * its limit temporarily, to help free resources as expected.
 		 */
 		if (vms->end < vms->vma->vm_end &&
-		    vms->vma->vm_mm->map_count >= sysctl_max_map_count) {
+		    vms->vma->vm_mm->map_count >= get_sysctl_max_map_count()) {
 			error = -ENOMEM;
 			goto map_count_exceeded;
 		}
@@ -2611,15 +2611,19 @@ static void __mmap_complete(struct mmap_state *map, struct vm_area_struct *vma)
 	vma_set_page_prot(vma);
 }
 
-static void call_action_prepare(struct mmap_state *map,
-				struct vm_area_desc *desc)
+static int call_action_prepare(struct mmap_state *map,
+			       struct vm_area_desc *desc)
 {
 	struct mmap_action *action = &desc->action;
+	int err;
 
-	mmap_action_prepare(action, desc);
+	err = mmap_action_prepare(desc, action);
+	if (err)
+		return err;
 
 	if (action->hide_from_rmap_until_complete)
 		map->hold_file_rmap_lock = true;
+	return 0;
 }
 
 /*
@@ -2643,7 +2647,9 @@ static int call_mmap_prepare(struct mmap_state *map,
 	if (err)
 		return err;
 
-	call_action_prepare(map, desc);
+	err = call_action_prepare(map, desc);
+	if (err)
+		return err;
 
 	/* Update fields permitted to be changed. */
 	map->pgoff = desc->pgoff;
@@ -2697,22 +2703,35 @@ static bool can_set_ksm_flags_early(struct mmap_state *map)
 	return false;
 }
 
-static int call_action_complete(struct mmap_state *map,
-				struct vm_area_desc *desc,
-				struct vm_area_struct *vma)
+static int call_mapped_hook(struct vm_area_struct *vma)
 {
-	struct mmap_action *action = &desc->action;
-	int ret;
+	const struct vm_operations_struct *vm_ops = vma->vm_ops;
+	void *vm_private_data = vma->vm_private_data;
+	int err;
 
-	ret = mmap_action_complete(action, vma);
-
-	/* If we held the file rmap we need to release it. */
-	if (map->hold_file_rmap_lock) {
-		struct file *file = vma->vm_file;
-
-		i_mmap_unlock_write(file->f_mapping);
+	if (!vm_ops || !vm_ops->mapped)
+		return 0;
+	err = vm_ops->mapped(vma->vm_start, vma->vm_end, vma->vm_pgoff,
+			     vma->vm_file, &vm_private_data);
+	if (err) {
+		unmap_vma_locked(vma);
+		return err;
 	}
-	return ret;
+	/* Update private data if changed. */
+	if (vm_private_data != vma->vm_private_data)
+		vma->vm_private_data = vm_private_data;
+	return 0;
+}
+
+static void maybe_drop_file_rmap_lock(struct mmap_state *map,
+				      struct vm_area_struct *vma)
+{
+	struct file *file;
+
+	if (!map->hold_file_rmap_lock)
+		return;
+	file = vma->vm_file;
+	i_mmap_unlock_write(file->f_mapping);
 }
 
 static unsigned long __mmap_region(struct file *file, unsigned long addr,
@@ -2766,8 +2785,11 @@ static unsigned long __mmap_region(struct file *file, unsigned long addr,
 	__mmap_complete(&map, vma);
 
 	if (have_mmap_prepare && allocated_new) {
-		error = call_action_complete(&map, &desc, vma);
+		error = mmap_action_complete(vma, &desc.action);
+		if (!error)
+			error = call_mapped_hook(vma);
 
+		maybe_drop_file_rmap_lock(&map, vma);
 		if (error)
 			return error;
 	}
@@ -2868,7 +2890,7 @@ int do_brk_flags(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	if (!may_expand_vm(mm, vm_flags, len >> PAGE_SHIFT))
 		return -ENOMEM;
 
-	if (mm->map_count > sysctl_max_map_count)
+	if (mm->map_count > get_sysctl_max_map_count())
 		return -ENOMEM;
 
 	if (security_vm_enough_memory_mm(mm, len >> PAGE_SHIFT))
