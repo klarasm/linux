@@ -189,6 +189,7 @@ macro_rules! b_str {
 //
 // - error[E0379]: functions in trait impls cannot be declared const
 #[inline]
+#[expect(clippy::disallowed_methods, reason = "internal implementation")]
 pub const fn as_char_ptr_in_const_context(c_str: &CStr) -> *const c_char {
     c_str.as_ptr().cast()
 }
@@ -319,6 +320,7 @@ unsafe fn to_bytes_mut(s: &mut CStr) -> &mut [u8] {
 
 impl CStrExt for CStr {
     #[inline]
+    #[expect(clippy::disallowed_methods, reason = "internal implementation")]
     unsafe fn from_char_ptr<'a>(ptr: *const c_char) -> &'a Self {
         // SAFETY: The safety preconditions are the same as for `CStr::from_ptr`.
         unsafe { CStr::from_ptr(ptr.cast()) }
@@ -334,6 +336,7 @@ impl CStrExt for CStr {
     }
 
     #[inline]
+    #[expect(clippy::disallowed_methods, reason = "internal implementation")]
     fn as_char_ptr(&self) -> *const c_char {
         self.as_ptr().cast()
     }
@@ -664,13 +667,13 @@ impl fmt::Write for Formatter<'_> {
 ///
 /// * The first byte of `buffer` is always zero.
 /// * The length of `buffer` is at least 1.
-pub(crate) struct NullTerminatedFormatter<'a> {
+pub struct NullTerminatedFormatter<'a> {
     buffer: &'a mut [u8],
 }
 
 impl<'a> NullTerminatedFormatter<'a> {
     /// Create a new [`Self`] instance.
-    pub(crate) fn new(buffer: &'a mut [u8]) -> Option<NullTerminatedFormatter<'a>> {
+    pub fn new(buffer: &'a mut [u8]) -> Option<NullTerminatedFormatter<'a>> {
         *(buffer.first_mut()?) = 0;
 
         // INVARIANT:
