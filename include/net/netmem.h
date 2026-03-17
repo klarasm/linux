@@ -93,7 +93,24 @@ enum net_iov_type {
  *		supported.
  */
 struct net_iov {
-	struct netmem_desc desc;
+	union {
+		struct netmem_desc desc;
+
+		/* XXX: The following part should be removed once all
+		 * the references to them are converted so as to be
+		 * accessed via netmem_desc e.g. niov->desc.pp instead
+		 * of niov->pp.
+		 */
+		struct {
+			unsigned long _flags;
+			unsigned long pp_magic;
+			struct page_pool *pp;
+			unsigned long _pp_mapping_pad;
+			unsigned long dma_addr;
+			atomic_long_t pp_ref_count;
+		};
+	};
+
 	unsigned int page_type;
 	enum net_iov_type type;
 	struct net_iov_area *owner;
