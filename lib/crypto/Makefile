@@ -26,7 +26,9 @@ libaes-$(CONFIG_ARM) += arm/aes-cipher-core.o
 
 ifeq ($(CONFIG_ARM64),y)
 libaes-y += arm64/aes-cipher-core.o
-libaes-$(CONFIG_KERNEL_MODE_NEON) += arm64/aes-ce-core.o
+libaes-$(CONFIG_KERNEL_MODE_NEON) += arm64/aes-ce-core.o \
+				     arm64/aes-ce.o \
+				     arm64/aes-neon.o
 endif
 
 ifeq ($(CONFIG_PPC),y)
@@ -54,6 +56,9 @@ libaes-$(CONFIG_RISCV) += riscv/aes-riscv64-zvkned.o
 libaes-$(CONFIG_SPARC) += sparc/aes_asm.o
 libaes-$(CONFIG_X86) += x86/aes-aesni.o
 endif # CONFIG_CRYPTO_LIB_AES_ARCH
+
+# clean-files must be defined unconditionally
+clean-files += powerpc/aesp8-ppc.S
 
 ################################################################################
 
