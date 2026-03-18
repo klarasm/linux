@@ -1289,7 +1289,7 @@ EXPORT_SYMBOL(__compat_vma_mmap);
  */
 int compat_vma_mmap(struct file *file, struct vm_area_struct *vma)
 {
-	struct vm_area_desc desc;
+	struct vm_area_desc desc = { 0 };
 	int err;
 
 	compat_set_desc_from_vma(&desc, file, vma);
