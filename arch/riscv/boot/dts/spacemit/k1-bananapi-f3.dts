@@ -343,6 +343,10 @@
 	status = "okay";
 };
 
+&watchdog {
+	status = "okay";
+};
+
 &usbphy2 {
 	status = "okay";
 };
