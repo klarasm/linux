@@ -105,7 +105,6 @@ static int memfd_luo_preserve_folios(struct file *file,
 	if (!size) {
 		*nr_foliosp = 0;
 		*out_folios_ser = NULL;
-		memset(kho_vmalloc, 0, sizeof(*kho_vmalloc));
 		return 0;
 	}
 
@@ -412,6 +411,7 @@ static int memfd_luo_retrieve_folios(struct file *file,
 	struct folio *folio;
 	int err = -EIO;
 	long i;
+	u64 nr_added = 0;
 
 	for (i = 0; i < nr_folios; i++) {
 		const struct memfd_luo_folio_ser *pfolio = &folios_ser[i];
@@ -463,11 +463,14 @@ static int memfd_luo_retrieve_folios(struct file *file,
 			goto unlock_folio;
 		}
 
-		shmem_recalc_inode(inode, 1, 0);
+		nr_added++;
 		folio_add_lru(folio);
 		folio_unlock(folio);
 		folio_put(folio);
 	}
+
+	if (nr_added)
+		shmem_recalc_inode(inode, nr_added, 0);
 
 	return 0;
 
@@ -486,6 +489,9 @@ put_folios:
 		if (folio)
 			folio_put(folio);
 	}
+
+	if (nr_added)
+		shmem_recalc_inode(inode, nr_added, 0);
 
 	return err;
 }
@@ -525,7 +531,7 @@ static int memfd_luo_retrieve(struct liveupdate_file_op_args *args)
 	}
 
 	vfs_setpos(file, ser->pos, MAX_LFS_FILESIZE);
-	file->f_inode->i_size = ser->size;
+	i_size_write(file_inode(file), ser->size);
 
 	if (ser->nr_folios) {
 		folios_ser = kho_restore_vmalloc(&ser->folios);
