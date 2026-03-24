@@ -14,11 +14,7 @@
 #include <linux/static_call.h>
 #include "xor_impl.h"
 
-/*
- * Provide a temporary default until the fastest or forced implementation is
- * picked.
- */
-DEFINE_STATIC_CALL(xor_gen_impl, xor_gen_32regs);
+DEFINE_STATIC_CALL_NULL(xor_gen_impl, *xor_block_8regs.xor_gen);
 
 /**
  * xor_gen - generate RAID-style XOR information
@@ -29,7 +25,7 @@ DEFINE_STATIC_CALL(xor_gen_impl, xor_gen_32regs);
  *
  * Performs bit-wise XOR operation into @dest for each of the @src_cnt vectors
  * in @srcs for a length of @bytes bytes.  @src_count must be non-zero, and the
- * memory pointed to by @dest and each member of @srcs must be at least 32-byte
+ * memory pointed to by @dest and each member of @srcs must be at least 64-byte
  * aligned.  @bytes must be non-zero and a multiple of 512.
  *
  * Note: for typical RAID uses, @dest either needs to be zeroed, or filled with
@@ -169,6 +165,11 @@ static int __init xor_init(void)
 #ifdef MODULE
 	return calibrate_xor_blocks();
 #else
+	/*
+	 * Pick the first template as the temporary default until calibration
+	 * happens.
+	 */
+	static_call_update(xor_gen_impl, template_list->xor_gen);
 	return 0;
 #endif
 }
