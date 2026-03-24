@@ -413,6 +413,7 @@ struct module {
 	struct module_attribute *modinfo_attrs;
 	const char *version;
 	const char *srcversion;
+	const char *imported_namespaces;
 	struct kobject *holders_dir;
 
 	/* Exported symbols */
@@ -508,6 +509,8 @@ struct module {
 	void *btf_data;
 	void *btf_base_data;
 #endif
+	void *lineinfo_data;		/* .mod_lineinfo section in MOD_RODATA */
+	unsigned int lineinfo_data_size;
 #ifdef CONFIG_JUMP_LABEL
 	struct jump_entry *jump_entries;
 	unsigned int num_jump_entries;
@@ -1020,6 +1023,9 @@ static inline unsigned long find_kallsyms_symbol_value(struct module *mod,
 }
 
 #endif  /* CONFIG_MODULES && CONFIG_KALLSYMS */
+
+bool module_lookup_lineinfo(struct module *mod, unsigned long addr,
+			    const char **file, unsigned int *line);
 
 /* Define __free(module_put) macro for struct module *. */
 DEFINE_FREE(module_put, struct module *, if (_T) module_put(_T))

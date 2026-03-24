@@ -156,10 +156,11 @@ struct amdxdna_drm_config_hwctx {
 
 enum amdxdna_bo_type {
 	AMDXDNA_BO_INVALID = 0,
-	AMDXDNA_BO_SHMEM,
-	AMDXDNA_BO_DEV_HEAP,
-	AMDXDNA_BO_DEV,
-	AMDXDNA_BO_CMD,
+	AMDXDNA_BO_SHMEM = 1, /* Be compatible with legacy application code. */
+	AMDXDNA_BO_SHARE = 1,
+	AMDXDNA_BO_DEV_HEAP = 2,
+	AMDXDNA_BO_DEV = 3,
+	AMDXDNA_BO_CMD = 4,
 };
 
 /**
@@ -353,7 +354,8 @@ struct amdxdna_drm_query_clock_metadata {
 };
 
 enum amdxdna_sensor_type {
-	AMDXDNA_SENSOR_TYPE_POWER
+	AMDXDNA_SENSOR_TYPE_POWER,
+	AMDXDNA_SENSOR_TYPE_COLUMN_UTILIZATION
 };
 
 /**

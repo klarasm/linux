@@ -552,8 +552,6 @@ struct lpfc_cgn_info {
 	);
 
 	__le32   cgn_info_crc;
-#define LPFC_CGN_CRC32_MAGIC_NUMBER	0x1EDC6F41
-#define LPFC_CGN_CRC32_SEED		0xFFFFFFFF
 };
 
 #define LPFC_CGN_INFO_SZ	(sizeof(struct lpfc_cgn_info) -  \
@@ -1667,8 +1665,9 @@ lpfc_phba_elsring(struct lpfc_hba *phba)
  * @mask: Pointer to phba's cpumask member.
  * @start: starting cpu index
  *
- * Note: If no valid cpu found, then nr_cpu_ids is returned.
+ * Returns: next online CPU in @mask on success
  *
+ * Note: If no valid cpu found, then nr_cpu_ids is returned.
  **/
 static __always_inline unsigned int
 lpfc_next_online_cpu(const struct cpumask *mask, unsigned int start)
@@ -1680,8 +1679,9 @@ lpfc_next_online_cpu(const struct cpumask *mask, unsigned int start)
  * lpfc_next_present_cpu - Finds next present CPU after n
  * @n: the cpu prior to search
  *
- * Note: If no next present cpu, then fallback to first present cpu.
+ * Returns: next present CPU after CPU @n
  *
+ * Note: If no next present cpu, then fallback to first present cpu.
  **/
 static __always_inline unsigned int lpfc_next_present_cpu(int n)
 {
@@ -1691,7 +1691,7 @@ static __always_inline unsigned int lpfc_next_present_cpu(int n)
 /**
  * lpfc_sli4_mod_hba_eq_delay - update EQ delay
  * @phba: Pointer to HBA context object.
- * @q: The Event Queue to update.
+ * @eq: The Event Queue to update.
  * @delay: The delay value (in us) to be written.
  *
  **/
@@ -1753,8 +1753,9 @@ static const char *routine(enum enum_name table_key)			\
  * Pr Tag     1               0              N
  * Pr Tag     1               1              Y
  * Pr Tag     2               *              Y
- ---------------------------------------------------
+ * ---------------------------------------------------
  *
+ * Returns: whether VMID is enabled
  **/
 static inline int lpfc_is_vmid_enabled(struct lpfc_hba *phba)
 {
