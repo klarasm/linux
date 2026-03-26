@@ -468,6 +468,7 @@ int simple_util_hw_params(struct snd_pcm_substream *substream,
 	struct snd_soc_dai *sdai;
 	struct simple_util_priv *priv = snd_soc_card_get_drvdata(rtd->card);
 	struct simple_dai_props *props = runtime_simple_priv_to_props(priv, rtd);
+	enum simple_util_sysclk_order order = props->sysclk_order;
 	unsigned int mclk, mclk_fs = 0;
 	int i, ret;
 
@@ -501,18 +502,36 @@ int simple_util_hw_params(struct snd_pcm_substream *substream,
 				goto end;
 		}
 
-		for_each_rtd_codec_dais(rtd, i, sdai) {
-			pdai = simple_props_to_dai_codec(props, i);
-			ret = snd_soc_dai_set_sysclk(sdai, 0, mclk, pdai->clk_direction);
-			if (ret && ret != -ENOTSUPP)
-				goto end;
-		}
+		if (order == SIMPLE_SYSCLK_ORDER_CPU_FIRST) {
+			/* CPU first */
+			for_each_rtd_cpu_dais(rtd, i, sdai) {
+				pdai = simple_props_to_dai_cpu(props, i);
+				ret = snd_soc_dai_set_sysclk(sdai, 0, mclk, pdai->clk_direction);
+				if (ret && ret != -ENOTSUPP)
+					goto end;
+			}
 
-		for_each_rtd_cpu_dais(rtd, i, sdai) {
-			pdai = simple_props_to_dai_cpu(props, i);
-			ret = snd_soc_dai_set_sysclk(sdai, 0, mclk, pdai->clk_direction);
-			if (ret && ret != -ENOTSUPP)
-				goto end;
+			for_each_rtd_codec_dais(rtd, i, sdai) {
+				pdai = simple_props_to_dai_codec(props, i);
+				ret = snd_soc_dai_set_sysclk(sdai, 0, mclk, pdai->clk_direction);
+				if (ret && ret != -ENOTSUPP)
+					goto end;
+			}
+		} else {
+			/* default: codec first */
+			for_each_rtd_codec_dais(rtd, i, sdai) {
+				pdai = simple_props_to_dai_codec(props, i);
+				ret = snd_soc_dai_set_sysclk(sdai, 0, mclk, pdai->clk_direction);
+				if (ret && ret != -ENOTSUPP)
+					goto end;
+			}
+
+			for_each_rtd_cpu_dais(rtd, i, sdai) {
+				pdai = simple_props_to_dai_cpu(props, i);
+				ret = snd_soc_dai_set_sysclk(sdai, 0, mclk, pdai->clk_direction);
+				if (ret && ret != -ENOTSUPP)
+					goto end;
+			}
 		}
 	}
 
@@ -699,7 +718,7 @@ void simple_util_canonicalize_cpu(struct snd_soc_dai_link_component *cpus,
 				  int is_single_links)
 {
 	/*
-	 * In soc_bind_dai_link() will check cpu name after
+	 * In snd_soc_add_pcm_runtime() will check cpu name after
 	 * of_node matching if dai_link has cpu_dai_name.
 	 * but, it will never match if name was created by
 	 * fmt_single_name() remove cpu_dai_name if cpu_args
@@ -1183,9 +1202,9 @@ void graph_util_parse_link_direction(struct device_node *np,
 	bool is_playback_only = of_property_read_bool(np, "playback-only");
 	bool is_capture_only  = of_property_read_bool(np, "capture-only");
 
-	if (np && playback_only)
+	if (playback_only && is_playback_only)
 		*playback_only = is_playback_only;
-	if (np && capture_only)
+	if (capture_only && is_capture_only)
 		*capture_only = is_capture_only;
 }
 EXPORT_SYMBOL_GPL(graph_util_parse_link_direction);
