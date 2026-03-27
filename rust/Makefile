@@ -118,7 +118,7 @@ syn-flags := \
     $(call cfgs-to-flags,$(syn-cfgs))
 
 pin_init_internal-cfgs := \
-    kernel
+    kernel USE_RUSTC_FEATURES
 
 pin_init_internal-flags := \
     --extern proc_macro2 \
@@ -127,7 +127,7 @@ pin_init_internal-flags := \
     $(call cfgs-to-flags,$(pin_init_internal-cfgs))
 
 pin_init-cfgs := \
-    kernel
+    kernel USE_RUSTC_FEATURES
 
 pin_init-flags := \
     --extern pin_init_internal \
@@ -591,6 +591,8 @@ rust-analyzer:
 		--cfgs='proc_macro2=$(proc_macro2-cfgs)' \
 		--cfgs='quote=$(quote-cfgs)' \
 		--cfgs='syn=$(syn-cfgs)' \
+		--cfgs='pin_init_internal=$(pin_init_internal-cfgs)' \
+		--cfgs='pin_init=$(pin_init-cfgs)' \
 		$(realpath $(srctree)) $(realpath $(objtree)) \
 		$(rustc_sysroot) $(RUST_LIB_SRC) $(if $(KBUILD_EXTMOD),$(srcroot)) \
 		> rust-project.json
