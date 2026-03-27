@@ -1402,7 +1402,7 @@ static enum scan_result collapse_huge_page(struct mm_struct *mm, unsigned long s
 	if (is_pmd_order(order)) { /* PMD collapse */
 		pgtable = pmd_pgtable(_pmd);
 		if (arch_needs_pgtable_deposit()) {
-			pgtable_trans_huge_deposit(mm, pmd, pgtable);
+			arch_pgtable_trans_huge_deposit(mm, pmd, pgtable);
 		} else {
 			mm_dec_nr_ptes(mm);
 			pte_free(mm, pgtable);
