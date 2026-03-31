@@ -45,7 +45,7 @@ static int get_dio_alignment(int fd)
 }
 
 static bool check_dio_alignment(unsigned int start_off,
-			        unsigned int end_off, unsigned int align)
+				unsigned int end_off, unsigned int align)
 {
 	unsigned int writesize = end_off - start_off;
 
