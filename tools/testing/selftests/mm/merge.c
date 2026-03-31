@@ -1245,7 +1245,7 @@ TEST_F(merge, merge_vmas_with_mseal)
 		SKIP(return, "mseal not supported, skipping.");
 
 	/* Map carveout. */
-	carveout = mmap(NULL, 17 * page_size, PROT_NONE,
+	carveout = mmap(NULL, 5 * page_size, PROT_NONE,
 			MAP_PRIVATE | MAP_ANON, -1, 0);
 	ASSERT_NE(carveout, MAP_FAILED);
 
@@ -1257,14 +1257,14 @@ TEST_F(merge, merge_vmas_with_mseal)
 	 * |-----------|-----------|-----------|
 	 *      ptr         ptr2        ptr3
 	 */
-	ptr = mmap(&carveout[page_size], 5 * page_size, PROT_READ | PROT_WRITE,
+	ptr = mmap(&carveout[page_size], page_size, PROT_READ | PROT_WRITE,
 		   MAP_ANON | MAP_PRIVATE | MAP_FIXED, -1, 0);
 	ASSERT_NE(ptr, MAP_FAILED);
-	ptr2 = mmap(&carveout[page_size * 6], 5 * page_size,
+	ptr2 = mmap(&carveout[2 * page_size], page_size,
 		    PROT_READ | PROT_WRITE | PROT_EXEC,
 		   MAP_ANON | MAP_PRIVATE | MAP_FIXED, -1, 0);
 	ASSERT_NE(ptr2, MAP_FAILED);
-	ptr3 = mmap(&carveout[page_size * 11], 5 * page_size, PROT_READ,
+	ptr3 = mmap(&carveout[3 * page_size], page_size, PROT_READ,
 		   MAP_ANON | MAP_PRIVATE | MAP_FIXED, -1, 0);
 	ASSERT_NE(ptr3, MAP_FAILED);
 
@@ -1276,10 +1276,10 @@ TEST_F(merge, merge_vmas_with_mseal)
 	 * |-----------|-----------|-----------|
 	 *      ptr         ptr2        ptr3
 	 */
-	ASSERT_EQ(sys_mseal(ptr2, 5 * page_size, 0), 0);
+	ASSERT_EQ(sys_mseal(ptr2, page_size, 0), 0);
 
 	/* Make first VMA mergeable upon mseal. */
-	ASSERT_EQ(mprotect(ptr, 5 * page_size,
+	ASSERT_EQ(mprotect(ptr, page_size,
 			   PROT_READ | PROT_WRITE | PROT_EXEC), 0);
 	/*
 	 * At this point we have:
@@ -1291,7 +1291,7 @@ TEST_F(merge, merge_vmas_with_mseal)
 	 *
 	 * Now mseal all of the VMAs.
 	 */
-	ASSERT_EQ(sys_mseal(ptr, 15 * page_size, 0), 0);
+	ASSERT_EQ(sys_mseal(ptr, 3 * page_size, 0), 0);
 
 	/*
 	 * We should end up with:
@@ -1303,7 +1303,7 @@ TEST_F(merge, merge_vmas_with_mseal)
 	 */
 	ASSERT_TRUE(find_vma_procmap(procmap, ptr));
 	ASSERT_EQ(procmap->query.vma_start, (unsigned long)ptr);
-	ASSERT_EQ(procmap->query.vma_end, (unsigned long)ptr + 10 * page_size);
+	ASSERT_EQ(procmap->query.vma_end, (unsigned long)ptr + 2 * page_size);
 }
 
 TEST_F(merge_with_fork, mremap_faulted_to_unfaulted_prev)
