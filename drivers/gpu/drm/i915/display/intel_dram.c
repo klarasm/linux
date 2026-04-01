@@ -7,15 +7,16 @@
 
 #include <drm/drm_managed.h>
 #include <drm/drm_print.h>
+#include <drm/intel/intel_pcode_regs.h>
 
-#include "i915_reg.h"
 #include "intel_display_core.h"
 #include "intel_display_utils.h"
+#include "intel_display_regs.h"
 #include "intel_dram.h"
 #include "intel_mchbar_regs.h"
-#include "intel_pcode.h"
+#include "intel_parent.h"
 #include "intel_uncore.h"
-#include "vlv_iosf_sb.h"
+#include "vlv_sideband.h"
 
 struct dram_dimm_info {
 	u16 size;
@@ -108,9 +109,9 @@ static unsigned int chv_mem_freq(struct intel_display *display)
 {
 	u32 val;
 
-	vlv_iosf_sb_get(display->drm, BIT(VLV_IOSF_SB_CCK));
-	val = vlv_iosf_sb_read(display->drm, VLV_IOSF_SB_CCK, CCK_FUSE_REG);
-	vlv_iosf_sb_put(display->drm, BIT(VLV_IOSF_SB_CCK));
+	vlv_cck_get(display);
+	val = vlv_cck_read(display, CCK_FUSE_REG);
+	vlv_cck_put(display);
 
 	switch ((val >> 2) & 0x7) {
 	case 3:
@@ -124,9 +125,9 @@ static unsigned int vlv_mem_freq(struct intel_display *display)
 {
 	u32 val;
 
-	vlv_iosf_sb_get(display->drm, BIT(VLV_IOSF_SB_PUNIT));
-	val = vlv_iosf_sb_read(display->drm, VLV_IOSF_SB_PUNIT, PUNIT_REG_GPU_FREQ_STS);
-	vlv_iosf_sb_put(display->drm, BIT(VLV_IOSF_SB_PUNIT));
+	vlv_punit_get(display);
+	val = vlv_punit_read(display, PUNIT_REG_GPU_FREQ_STS);
+	vlv_punit_put(display);
 
 	switch ((val >> 6) & 3) {
 	case 0:
@@ -692,8 +693,8 @@ static int icl_pcode_read_mem_global_info(struct intel_display *display,
 	u32 val = 0;
 	int ret;
 
-	ret = intel_pcode_read(display->drm, ICL_PCODE_MEM_SUBSYSYSTEM_INFO |
-			       ICL_PCODE_MEM_SS_READ_GLOBAL_INFO, &val, NULL);
+	ret = intel_parent_pcode_read(display, ICL_PCODE_MEM_SUBSYSYSTEM_INFO |
+				      ICL_PCODE_MEM_SS_READ_GLOBAL_INFO, &val, NULL);
 	if (ret)
 		return ret;
 

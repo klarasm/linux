@@ -43,7 +43,7 @@
  * the program is aborting before finishing all tests):
  *
  *    ksft_exit_fail_msg(fmt, ...);
- *    ksft_exit_fail_perror(msg);
+ *    ksft_exit_fail_perror(fmt, ...);
  *
  */
 #ifndef __KSELFTEST_H
@@ -399,6 +399,7 @@ static inline __noreturn void ksft_exit_fail(void)
 #define ksft_finished()			\
 	ksft_exit(ksft_plan ==		\
 		  ksft_cnt.ksft_pass +	\
+		  ksft_cnt.ksft_xpass +	\
 		  ksft_cnt.ksft_xfail +	\
 		  ksft_cnt.ksft_xskip)
 
@@ -417,9 +418,24 @@ static inline __noreturn __printf(1, 2) void ksft_exit_fail_msg(const char *msg,
 	exit(KSFT_FAIL);
 }
 
-static inline __noreturn void ksft_exit_fail_perror(const char *msg)
+static inline __noreturn __printf(1, 2) void ksft_exit_fail_perror(const char *msg, ...)
 {
-	ksft_exit_fail_msg("%s: %s (%d)\n", msg, strerror(errno), errno);
+	va_list args;
+	char *buf = NULL;
+	int saved_errno = errno;
+
+	va_start(args, msg);
+	if (vasprintf(&buf, msg, args) == -1) {
+		va_end(args);
+		ksft_exit_fail_msg("vasprintf failed: %s (%d)\n", strerror(saved_errno),
+				saved_errno);
+	}
+	va_end(args);
+
+	errno = saved_errno;
+	ksft_exit_fail_msg("%s: %s (%d)\n", buf, strerror(errno), errno);
+
+	free(buf);
 }
 
 static inline __noreturn void ksft_exit_xfail(void)
@@ -473,6 +489,17 @@ static inline int ksft_min_kernel_version(unsigned int min_major,
 		ksft_exit_fail_msg("Can't parse kernel version\n");
 
 	return major > min_major || (major == min_major && minor >= min_minor);
+}
+
+static inline void ksft_reset_state(void)
+{
+	ksft_cnt.ksft_pass = 0;
+	ksft_cnt.ksft_fail = 0;
+	ksft_cnt.ksft_xfail = 0;
+	ksft_cnt.ksft_xpass = 0;
+	ksft_cnt.ksft_xskip = 0;
+	ksft_cnt.ksft_error = 0;
+	ksft_plan = 0;
 }
 
 #endif /* __KSELFTEST_H */

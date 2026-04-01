@@ -2085,6 +2085,11 @@ static struct pci_device_id driver_denylist_ideapad_z570[] = {
 	{}
 };
 
+static struct pci_device_id driver_denylist_msi_x870e[] = {
+	{ PCI_DEVICE_SUB(0x1022, 0x15e3, 0x1462, 0xee59) }, /* MSI X870E Tomahawk WiFi */
+	{}
+};
+
 /* DMI-based denylist, to be used when:
  *  - PCI subsystem IDs are zero, impossible to distinguish from valid sound cards.
  *  - Different modifications of the same laptop use different GPU models.
@@ -2097,6 +2102,14 @@ static const struct dmi_system_id driver_denylist_dmi[] = {
 			DMI_MATCH(DMI_PRODUCT_VERSION, "Ideapad Z570"),
 		},
 		.driver_data = &driver_denylist_ideapad_z570,
+	},
+	{
+		/* PCI device matching alone incorrectly matches some laptops */
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "Micro-Star International Co., Ltd."),
+			DMI_MATCH(DMI_BOARD_NAME, "MAG X870E TOMAHAWK WIFI (MS-7E59)"),
+		},
+		.driver_data = &driver_denylist_msi_x870e,
 	},
 	{}
 };
@@ -2420,20 +2433,7 @@ static void azx_remove(struct pci_dev *pci)
 		/* cancel the pending probing work */
 		chip = card->private_data;
 		hda = container_of(chip, struct hda_intel, chip);
-		/* FIXME: below is an ugly workaround.
-		 * Both device_release_driver() and driver_probe_device()
-		 * take *both* the device's and its parent's lock before
-		 * calling the remove() and probe() callbacks.  The codec
-		 * probe takes the locks of both the codec itself and its
-		 * parent, i.e. the PCI controller dev.  Meanwhile, when
-		 * the PCI controller is unbound, it takes its lock, too
-		 * ==> ouch, a deadlock!
-		 * As a workaround, we unlock temporarily here the controller
-		 * device during cancel_work_sync() call.
-		 */
-		device_unlock(&pci->dev);
 		cancel_delayed_work_sync(&hda->probe_work);
-		device_lock(&pci->dev);
 
 		clear_bit(chip->dev_index, probed_devs);
 		pci_set_drvdata(pci, NULL);

@@ -6,8 +6,8 @@
 #include <linux/iopoll.h>
 
 #include <drm/drm_print.h>
+#include <drm/intel/intel_gmd_misc_regs.h>
 
-#include "i915_reg.h"
 #include "i9xx_wm.h"
 #include "i9xx_wm_regs.h"
 #include "intel_atomic.h"
@@ -118,41 +118,41 @@ static void chv_set_memory_dvfs(struct intel_display *display, bool enable)
 	u32 val;
 	int ret;
 
-	vlv_punit_get(display->drm);
+	vlv_punit_get(display);
 
-	val = vlv_punit_read(display->drm, PUNIT_REG_DDR_SETUP2);
+	val = vlv_punit_read(display, PUNIT_REG_DDR_SETUP2);
 	if (enable)
 		val &= ~FORCE_DDR_HIGH_FREQ;
 	else
 		val |= FORCE_DDR_HIGH_FREQ;
 	val &= ~FORCE_DDR_LOW_FREQ;
 	val |= FORCE_DDR_FREQ_REQ_ACK;
-	vlv_punit_write(display->drm, PUNIT_REG_DDR_SETUP2, val);
+	vlv_punit_write(display, PUNIT_REG_DDR_SETUP2, val);
 
-	ret = poll_timeout_us(val = vlv_punit_read(display->drm, PUNIT_REG_DDR_SETUP2),
+	ret = poll_timeout_us(val = vlv_punit_read(display, PUNIT_REG_DDR_SETUP2),
 			      (val & FORCE_DDR_FREQ_REQ_ACK) == 0,
 			      500, 3000, false);
 	if (ret)
 		drm_err(display->drm,
 			"timed out waiting for Punit DDR DVFS request\n");
 
-	vlv_punit_put(display->drm);
+	vlv_punit_put(display);
 }
 
 static void chv_set_memory_pm5(struct intel_display *display, bool enable)
 {
 	u32 val;
 
-	vlv_punit_get(display->drm);
+	vlv_punit_get(display);
 
-	val = vlv_punit_read(display->drm, PUNIT_REG_DSPSSPM);
+	val = vlv_punit_read(display, PUNIT_REG_DSPSSPM);
 	if (enable)
 		val |= DSP_MAXFIFO_PM5_ENABLE;
 	else
 		val &= ~DSP_MAXFIFO_PM5_ENABLE;
-	vlv_punit_write(display->drm, PUNIT_REG_DSPSSPM, val);
+	vlv_punit_write(display, PUNIT_REG_DSPSSPM, val);
 
-	vlv_punit_put(display->drm);
+	vlv_punit_put(display);
 }
 
 #define FW_WM(value, plane) \
@@ -182,8 +182,8 @@ static bool _intel_set_memory_cxsr(struct intel_display *display, bool enable)
 		intel_de_posting_read(display, DSPFW3(display));
 	} else if (display->platform.i945g || display->platform.i945gm) {
 		was_enabled = intel_de_read(display, FW_BLC_SELF) & FW_BLC_SELF_EN;
-		val = enable ? _MASKED_BIT_ENABLE(FW_BLC_SELF_EN) :
-			       _MASKED_BIT_DISABLE(FW_BLC_SELF_EN);
+		val = enable ? REG_MASKED_FIELD_ENABLE(FW_BLC_SELF_EN) :
+			       REG_MASKED_FIELD_DISABLE(FW_BLC_SELF_EN);
 		intel_de_write(display, FW_BLC_SELF, val);
 		intel_de_posting_read(display, FW_BLC_SELF);
 	} else if (display->platform.i915gm) {
@@ -193,8 +193,8 @@ static bool _intel_set_memory_cxsr(struct intel_display *display, bool enable)
 		 * FW_BLC_SELF. What's going on?
 		 */
 		was_enabled = intel_de_read(display, INSTPM) & INSTPM_SELF_EN;
-		val = enable ? _MASKED_BIT_ENABLE(INSTPM_SELF_EN) :
-			       _MASKED_BIT_DISABLE(INSTPM_SELF_EN);
+		val = enable ? REG_MASKED_FIELD_ENABLE(INSTPM_SELF_EN) :
+			       REG_MASKED_FIELD_DISABLE(INSTPM_SELF_EN);
 		intel_de_write(display, INSTPM, val);
 		intel_de_posting_read(display, INSTPM);
 	} else {
@@ -3918,9 +3918,9 @@ static void vlv_wm_get_hw_state(struct intel_display *display)
 	wm->level = VLV_WM_LEVEL_PM2;
 
 	if (display->platform.cherryview) {
-		vlv_punit_get(display->drm);
+		vlv_punit_get(display);
 
-		val = vlv_punit_read(display->drm, PUNIT_REG_DSPSSPM);
+		val = vlv_punit_read(display, PUNIT_REG_DSPSSPM);
 		if (val & DSP_MAXFIFO_PM5_ENABLE)
 			wm->level = VLV_WM_LEVEL_PM5;
 
@@ -3933,11 +3933,11 @@ static void vlv_wm_get_hw_state(struct intel_display *display)
 		 * HIGH/LOW bits so that we don't actually change
 		 * the current state.
 		 */
-		val = vlv_punit_read(display->drm, PUNIT_REG_DDR_SETUP2);
+		val = vlv_punit_read(display, PUNIT_REG_DDR_SETUP2);
 		val |= FORCE_DDR_FREQ_REQ_ACK;
-		vlv_punit_write(display->drm, PUNIT_REG_DDR_SETUP2, val);
+		vlv_punit_write(display, PUNIT_REG_DDR_SETUP2, val);
 
-		ret = poll_timeout_us(val = vlv_punit_read(display->drm, PUNIT_REG_DDR_SETUP2),
+		ret = poll_timeout_us(val = vlv_punit_read(display, PUNIT_REG_DDR_SETUP2),
 				      (val & FORCE_DDR_FREQ_REQ_ACK) == 0,
 				      500, 3000, false);
 		if (ret) {
@@ -3946,12 +3946,12 @@ static void vlv_wm_get_hw_state(struct intel_display *display)
 				    "assuming DDR DVFS is disabled\n");
 			display->wm.num_levels = VLV_WM_LEVEL_PM5 + 1;
 		} else {
-			val = vlv_punit_read(display->drm, PUNIT_REG_DDR_SETUP2);
+			val = vlv_punit_read(display, PUNIT_REG_DDR_SETUP2);
 			if ((val & FORCE_DDR_HIGH_FREQ) == 0)
 				wm->level = VLV_WM_LEVEL_DDR_DVFS;
 		}
 
-		vlv_punit_put(display->drm);
+		vlv_punit_put(display);
 	}
 
 	for_each_intel_crtc(display->drm, crtc) {
