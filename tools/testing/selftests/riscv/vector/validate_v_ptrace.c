@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <errno.h>
 
+#include <linux/bits.h>
 #include <linux/ptrace.h>
 #include <linux/elf.h>
 
@@ -346,8 +347,8 @@ FIXTURE_TEARDOWN(v_csr_invalid)
 {
 }
 
-#define VECTOR_1_0		BIT(0)
-#define XTHEAD_VECTOR_0_7	BIT(1)
+#define VECTOR_1_0		_BITUL(0)
+#define XTHEAD_VECTOR_0_7	_BITUL(1)
 
 #define vector_test(x)		((x) & VECTOR_1_0)
 #define xthead_test(x)		((x) & XTHEAD_VECTOR_0_7)
