@@ -521,7 +521,7 @@ static int cuse_channel_open(struct inode *inode, struct file *file)
 	 */
 	fuse_conn_init(&cc->fc, &cc->fm, file->f_cred->user_ns, no_free_ptr(fch));
 	cc->fc.release = cuse_fc_release;
-	fud = fuse_dev_alloc_install(fch);
+	fud = fuse_dev_alloc_install(cc->fc.chan);
 	fuse_conn_put(&cc->fc);
 	if (!fud)
 		return -ENOMEM;
