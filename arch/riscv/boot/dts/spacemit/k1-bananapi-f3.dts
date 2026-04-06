@@ -367,3 +367,7 @@
 		reset-gpios = <&gpio K1_GPIO(124) GPIO_ACTIVE_LOW>;
 	};
 };
+
+&watchdog {
+	status = "okay";
+};
