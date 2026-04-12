@@ -7,6 +7,9 @@
 #include <linux/stop_machine.h>
 #include <linux/string_helpers.h>
 
+#include <drm/intel/mchbar_regs.h>
+#include <drm/intel/pci_config.h>
+
 #include "display/intel_display_reset.h"
 #include "display/intel_overlay.h"
 #include "gem/i915_gem_context.h"
@@ -27,8 +30,6 @@
 #include "intel_gt_pm.h"
 #include "intel_gt_print.h"
 #include "intel_gt_requests.h"
-#include "intel_mchbar_regs.h"
-#include "intel_pci_config.h"
 #include "intel_reset.h"
 
 #define RESET_MAX_RETRIES 3
@@ -586,7 +587,7 @@ static int gen8_engine_reset_prepare(struct intel_engine_cs *engine)
 		return 0;
 	}
 
-	intel_uncore_write_fw(uncore, reg, _MASKED_BIT_ENABLE(request));
+	intel_uncore_write_fw(uncore, reg, REG_MASKED_FIELD_ENABLE(request));
 	ret = __intel_wait_for_register_fw(uncore, reg, mask, ack,
 					   700, 0, NULL);
 	if (ret)
@@ -602,7 +603,7 @@ static void gen8_engine_reset_cancel(struct intel_engine_cs *engine)
 {
 	intel_uncore_write_fw(engine->uncore,
 			      RING_RESET_CTL(engine->mmio_base),
-			      _MASKED_BIT_DISABLE(RESET_CTL_REQUEST_RESET));
+			      REG_MASKED_FIELD_DISABLE(RESET_CTL_REQUEST_RESET));
 }
 
 static int gen8_reset_engines(struct intel_gt *gt,
