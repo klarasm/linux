@@ -85,9 +85,9 @@ config RESET_EIC7700
 
 config RESET_EYEQ
 	bool "Mobileye EyeQ reset controller"
-	depends on MACH_EYEQ5 || MACH_EYEQ6H || COMPILE_TEST
+	depends on EYEQ || COMPILE_TEST
 	select AUXILIARY_BUS
-	default MACH_EYEQ5 || MACH_EYEQ6H
+	default EYEQ
 	help
 	  This enables the Mobileye EyeQ reset controller, used in EyeQ5, EyeQ6L
 	  and EyeQ6H SoCs.
@@ -323,6 +323,17 @@ config RESET_SUNXI
 	select RESET_SIMPLE
 	help
 	  This enables the reset driver for Allwinner SoCs.
+
+config RESET_TENSTORRENT_ATLANTIS
+	tristate "Tenstorrent atlantis reset driver"
+	depends on ARCH_TENSTORRENT || COMPILE_TEST
+	select AUXILIARY_BUS
+	default ARCH_TENSTORRENT
+	help
+	  This enables the driver for the reset controller
+	  present in the Tenstorrent Atlantis SoC.
+	  Enable this option to be able to use hardware
+	  resets on Atalantis based systems.
 
 config RESET_TH1520
 	tristate "T-HEAD TH1520 reset controller"
