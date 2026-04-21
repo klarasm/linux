@@ -1874,6 +1874,7 @@ const char *netdev_cmd_to_name(enum netdev_cmd cmd)
 	N(PRE_CHANGEADDR) N(OFFLOAD_XSTATS_ENABLE) N(OFFLOAD_XSTATS_DISABLE)
 	N(OFFLOAD_XSTATS_REPORT_USED) N(OFFLOAD_XSTATS_REPORT_DELTA)
 	N(XDP_FEAT_CHANGE)
+	N(DEBUG_UNREGISTER)
 	}
 #undef N
 	return "UNKNOWN_NETDEV_EVENT";
@@ -9593,14 +9594,14 @@ static void dev_change_rx_flags(struct net_device *dev, int flags)
 		ops->ndo_change_rx_flags(dev, flags);
 }
 
-static int __dev_set_promiscuity(struct net_device *dev, int inc, bool notify)
+int __dev_set_promiscuity(struct net_device *dev, int inc, bool notify)
 {
 	unsigned int old_flags = dev->flags;
 	unsigned int promiscuity, flags;
 	kuid_t uid;
 	kgid_t gid;
 
-	ASSERT_RTNL();
+	netdev_ops_assert_locked(dev);
 
 	promiscuity = dev->promiscuity + inc;
 	if (promiscuity == 0) {
@@ -9636,16 +9637,8 @@ static int __dev_set_promiscuity(struct net_device *dev, int inc, bool notify)
 
 		dev_change_rx_flags(dev, IFF_PROMISC);
 	}
-	if (notify) {
-		/* The ops lock is only required to ensure consistent locking
-		 * for `NETDEV_CHANGE` notifiers. This function is sometimes
-		 * called without the lock, even for devices that are ops
-		 * locked, such as in `dev_uc_sync_multiple` when using
-		 * bonding or teaming.
-		 */
-		netdev_ops_assert_locked(dev);
+	if (notify)
 		__dev_notify_flags(dev, old_flags, IFF_PROMISC, 0, NULL);
-	}
 	return 0;
 }
 
@@ -9667,7 +9660,7 @@ int netif_set_allmulti(struct net_device *dev, int inc, bool notify)
 	unsigned int old_flags = dev->flags, old_gflags = dev->gflags;
 	unsigned int allmulti, flags;
 
-	ASSERT_RTNL();
+	netdev_ops_assert_locked(dev);
 
 	allmulti = dev->allmulti + inc;
 	if (allmulti == 0) {
@@ -9697,46 +9690,6 @@ int netif_set_allmulti(struct net_device *dev, int inc, bool notify)
 	return 0;
 }
 
-/*
- *	Upload unicast and multicast address lists to device and
- *	configure RX filtering. When the device doesn't support unicast
- *	filtering it is put in promiscuous mode while unicast addresses
- *	are present.
- */
-void __dev_set_rx_mode(struct net_device *dev)
-{
-	const struct net_device_ops *ops = dev->netdev_ops;
-
-	/* dev_open will call this function so the list will stay sane. */
-	if (!(dev->flags&IFF_UP))
-		return;
-
-	if (!netif_device_present(dev))
-		return;
-
-	if (!(dev->priv_flags & IFF_UNICAST_FLT)) {
-		/* Unicast addresses changes may only happen under the rtnl,
-		 * therefore calling __dev_set_promiscuity here is safe.
-		 */
-		if (!netdev_uc_empty(dev) && !dev->uc_promisc) {
-			__dev_set_promiscuity(dev, 1, false);
-			dev->uc_promisc = true;
-		} else if (netdev_uc_empty(dev) && dev->uc_promisc) {
-			__dev_set_promiscuity(dev, -1, false);
-			dev->uc_promisc = false;
-		}
-	}
-
-	if (ops->ndo_set_rx_mode)
-		ops->ndo_set_rx_mode(dev);
-}
-
-void dev_set_rx_mode(struct net_device *dev)
-{
-	netif_addr_lock_bh(dev);
-	__dev_set_rx_mode(dev);
-	netif_addr_unlock_bh(dev);
-}
 
 /**
  * netif_get_flags() - get flags reported to userspace
@@ -9775,7 +9728,7 @@ int __dev_change_flags(struct net_device *dev, unsigned int flags,
 	unsigned int old_flags = dev->flags;
 	int ret;
 
-	ASSERT_RTNL();
+	netdev_ops_assert_locked(dev);
 
 	/*
 	 *	Set the flags on our device.
@@ -11408,6 +11361,11 @@ int register_netdevice(struct net_device *dev)
 		goto err_uninit;
 	}
 
+	if (netdev_need_ops_lock(dev) &&
+	    dev->netdev_ops->ndo_set_rx_mode &&
+	    !dev->netdev_ops->ndo_set_rx_mode_async)
+		netdev_WARN(dev, "ops-locked drivers should use ndo_set_rx_mode_async\n");
+
 	ret = netdev_do_alloc_pcpu_stats(dev);
 	if (ret)
 		goto err_uninit;
@@ -11605,6 +11563,14 @@ int netdev_refcnt_read(const struct net_device *dev)
 }
 EXPORT_SYMBOL(netdev_refcnt_read);
 
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+static void dump_netdev_trace_buffer(const struct net_device *dev);
+static void erase_netdev_trace_buffer(const struct net_device *dev);
+#else
+static inline void dump_netdev_trace_buffer(const struct net_device *dev) { }
+static inline void erase_netdev_trace_buffer(const struct net_device *dev) { }
+#endif
+
 int netdev_unregister_timeout_secs __read_mostly = 10;
 
 #define WAIT_REFS_MIN_MSECS 1
@@ -11678,11 +11644,16 @@ static struct net_device *netdev_wait_allrefs_any(struct list_head *list)
 
 		if (time_after(jiffies, warning_time +
 			       READ_ONCE(netdev_unregister_timeout_secs) * HZ)) {
+			rtnl_lock();
 			list_for_each_entry(dev, list, todo_list) {
 				pr_emerg("unregister_netdevice: waiting for %s to become free. Usage count = %d\n",
 					 dev->name, netdev_refcnt_read(dev));
 				ref_tracker_dir_print(&dev->refcnt_tracker, 10);
+				call_netdevice_notifiers(NETDEV_DEBUG_UNREGISTER, dev);
+				dump_netdev_trace_buffer(dev);
 			}
+			__rtnl_unlock();
+			rcu_barrier();
 
 			warning_time = jiffies;
 		}
@@ -12080,6 +12051,9 @@ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 
 	dev->priv_len = sizeof_priv;
 
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+	INIT_LIST_HEAD(&dev->netdev_trace_buffer_list);
+#endif
 	ref_tracker_dir_init(&dev->refcnt_tracker, 128, "netdev");
 #ifdef CONFIG_PCPU_DEV_REFCNT
 	dev->pcpu_refcnt = alloc_percpu(int);
@@ -12127,6 +12101,8 @@ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 #endif
 
 	mutex_init(&dev->lock);
+	INIT_LIST_HEAD(&dev->rx_mode_node);
+	__hw_addr_init(&dev->rx_mode_addr_cache);
 
 	dev->priv_flags = IFF_XMIT_DST_RELEASE | IFF_XMIT_DST_RELEASE_PERM;
 	setup(dev);
@@ -12231,6 +12207,8 @@ void free_netdev(struct net_device *dev)
 
 	kfree(rcu_dereference_protected(dev->ingress_queue, 1));
 
+	__hw_addr_flush(&dev->rx_mode_addr_cache);
+
 	/* Flush device addresses */
 	dev_addr_flush(dev);
 
@@ -12251,6 +12229,8 @@ void free_netdev(struct net_device *dev)
 	netdev_free_phy_link_topology(dev);
 
 	mutex_destroy(&dev->lock);
+
+	erase_netdev_trace_buffer(dev);
 
 	/*  Compatibility with error handling in drivers */
 	if (dev->reg_state == NETREG_UNINITIALIZED ||
@@ -13358,3 +13338,172 @@ out:
 }
 
 subsys_initcall(net_dev_init);
+
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+
+#define NETDEV_TRACE_BUFFER_SIZE 32768
+static struct netdev_trace_buffer {
+	struct list_head list;
+	int prev_count;
+	atomic_t count;
+	int nr_entries;
+	unsigned long entries[20];
+} netdev_trace_buffer[NETDEV_TRACE_BUFFER_SIZE];
+static LIST_HEAD(netdev_trace_buffer_list);
+static DEFINE_SPINLOCK(netdev_trace_buffer_lock);
+static bool netdev_trace_buffer_exhausted;
+
+static int netdev_trace_buffer_init(void)
+{
+	int i;
+
+	for (i = 0; i < NETDEV_TRACE_BUFFER_SIZE; i++)
+		list_add_tail(&netdev_trace_buffer[i].list, &netdev_trace_buffer_list);
+	return 0;
+}
+pure_initcall(netdev_trace_buffer_init);
+
+static void dump_netdev_trace_buffer(const struct net_device *dev)
+{
+	struct netdev_trace_buffer *ptr;
+	int count, balance = 0, pos = 0;
+
+	dump_dst_trace_buffer(dev);
+	list_for_each_entry_rcu(ptr, &dev->netdev_trace_buffer_list, list,
+				/* list elements can't go away. */ 1) {
+		pos++;
+		count = atomic_read(&ptr->count);
+		balance += count;
+		if (ptr->prev_count == count)
+			continue;
+		ptr->prev_count = count;
+		pr_info("Call trace for %s[%d] %+d at\n", dev->name, pos, count);
+		stack_trace_print(ptr->entries, ptr->nr_entries, 4);
+		cond_resched();
+	}
+	if (!netdev_trace_buffer_exhausted)
+		pr_info("balance as of %s[%d] is %d\n", dev->name, pos, balance);
+}
+
+static void erase_netdev_trace_buffer(const struct net_device *dev)
+{
+	struct netdev_trace_buffer *ptr;
+	unsigned long flags;
+
+	spin_lock_irqsave(&netdev_trace_buffer_lock, flags);
+	while (!list_empty(&dev->netdev_trace_buffer_list)) {
+		ptr = list_first_entry(&dev->netdev_trace_buffer_list, typeof(*ptr), list);
+		list_del(&ptr->list);
+		list_add_tail(&ptr->list, &netdev_trace_buffer_list);
+	}
+	spin_unlock_irqrestore(&netdev_trace_buffer_lock, flags);
+}
+
+int trim_netdev_trace(unsigned long *entries, int nr_entries)
+{
+#ifdef CONFIG_KALLSYMS
+	char buffer[32] = { };
+	char *cp;
+	int i;
+
+	if (in_softirq()) {
+		static unsigned long __data_racy caller;
+
+		if (!caller) {
+			for (i = 0; i < nr_entries; i++) {
+				snprintf(buffer, sizeof(buffer) - 1, "%ps", (void *)entries[i]);
+				cp = strchr(buffer, ' ');
+				if (cp)
+					*cp = '\0';
+				if (!strcmp(buffer, "handle_softirqs")) {
+					caller = entries[i];
+					break;
+				}
+			}
+		}
+		for (i = 0; i < nr_entries; i++)
+			if (entries[i] == caller)
+				return i + 1;
+	} else if (current->flags & PF_WQ_WORKER) {
+		static unsigned long __data_racy caller;
+
+		if (!caller) {
+			for (i = 0; i < nr_entries; i++) {
+				snprintf(buffer, sizeof(buffer) - 1, "%ps", (void *)entries[i]);
+				cp = strchr(buffer, ' ');
+				if (cp)
+					*cp = '\0';
+				if (!strcmp(buffer, "process_one_work")) {
+					caller = entries[i];
+					break;
+				}
+			}
+		}
+		for (i = 0; i < nr_entries; i++)
+			if (entries[i] == caller)
+				return i + 1;
+	} else {
+		for (i = 0; i < nr_entries; i++) {
+			snprintf(buffer, sizeof(buffer) - 1, "%ps", (void *)entries[i]);
+			cp = strchr(buffer, ' ');
+			if (cp)
+				*cp = '\0';
+			if (buffer[0] == 'k') {
+				if (!strcmp(buffer, "ksys_unshare"))
+					return i + 1;
+			} else if (buffer[0] == 's') {
+				if (!strcmp(buffer, "sock_sendmsg_nosec") ||
+				    !strcmp(buffer, "sock_recvmsg_nosec"))
+					return i + 1;
+			} else if (buffer[0] == '_') {
+				if (!strcmp(buffer, "__sys_bind") ||
+				    !strcmp(buffer, "__sock_release") ||
+				    !strcmp(buffer, "__sys_bpf"))
+					return i + 1;
+			} else {
+				if (!strcmp(buffer, "do_sock_setsockopt"))
+					return i + 1;
+			}
+		}
+	}
+#endif
+	return nr_entries;
+}
+EXPORT_SYMBOL(trim_netdev_trace);
+
+void save_netdev_trace_buffer(struct net_device *dev, int delta)
+{
+	struct netdev_trace_buffer *ptr;
+	unsigned long entries[ARRAY_SIZE(ptr->entries)];
+	unsigned long nr_entries;
+	unsigned long flags;
+
+	if (in_nmi())
+		return;
+	nr_entries = stack_trace_save(entries, ARRAY_SIZE(ptr->entries), 1);
+	nr_entries = trim_netdev_trace(entries, nr_entries);
+	list_for_each_entry_rcu(ptr, &dev->netdev_trace_buffer_list, list,
+				/* list elements can't go away. */ 1) {
+		if (ptr->nr_entries == nr_entries &&
+		    !memcmp(ptr->entries, entries, nr_entries * sizeof(unsigned long))) {
+			atomic_add(delta, &ptr->count);
+			return;
+		}
+	}
+	spin_lock_irqsave(&netdev_trace_buffer_lock, flags);
+	if (!list_empty(&netdev_trace_buffer_list)) {
+		ptr = list_first_entry(&netdev_trace_buffer_list, typeof(*ptr), list);
+		list_del(&ptr->list);
+		ptr->prev_count = 0;
+		atomic_set(&ptr->count, delta);
+		ptr->nr_entries = nr_entries;
+		memmove(ptr->entries, entries, nr_entries * sizeof(unsigned long));
+		list_add_tail_rcu(&ptr->list, &dev->netdev_trace_buffer_list);
+	} else {
+		netdev_trace_buffer_exhausted = true;
+	}
+	spin_unlock_irqrestore(&netdev_trace_buffer_lock, flags);
+}
+EXPORT_SYMBOL(save_netdev_trace_buffer);
+
+#endif
