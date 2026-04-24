@@ -611,80 +611,6 @@ static struct clk_bw_params dcn42_bw_params = {
 
 };
 
-static struct wm_table ddr5_wm_table = {
-	.entries = {
-		{
-			.wm_inst = WM_A,
-			.wm_type = WM_TYPE_PSTATE_CHG,
-			.pstate_latency_us = 11.72,
-			.sr_exit_time_us = 28.0,
-			.sr_enter_plus_exit_time_us = 30.0,
-			.valid = true,
-		},
-		{
-			.wm_inst = WM_B,
-			.wm_type = WM_TYPE_PSTATE_CHG,
-			.pstate_latency_us = 11.72,
-			.sr_exit_time_us = 28.0,
-			.sr_enter_plus_exit_time_us = 30.0,
-			.valid = true,
-		},
-		{
-			.wm_inst = WM_C,
-			.wm_type = WM_TYPE_PSTATE_CHG,
-			.pstate_latency_us = 11.72,
-			.sr_exit_time_us = 28.0,
-			.sr_enter_plus_exit_time_us = 30.0,
-			.valid = true,
-		},
-		{
-			.wm_inst = WM_D,
-			.wm_type = WM_TYPE_PSTATE_CHG,
-			.pstate_latency_us = 11.72,
-			.sr_exit_time_us = 28.0,
-			.sr_enter_plus_exit_time_us = 30.0,
-			.valid = true,
-		},
-	}
-};
-
-static struct wm_table lpddr5_wm_table = {
-	.entries = {
-		{
-			.wm_inst = WM_A,
-			.wm_type = WM_TYPE_PSTATE_CHG,
-			.pstate_latency_us = 11.65333,
-			.sr_exit_time_us = 28.0,
-			.sr_enter_plus_exit_time_us = 30.0,
-			.valid = true,
-		},
-		{
-			.wm_inst = WM_B,
-			.wm_type = WM_TYPE_PSTATE_CHG,
-			.pstate_latency_us = 11.65333,
-			.sr_exit_time_us = 28.0,
-			.sr_enter_plus_exit_time_us = 30.0,
-			.valid = true,
-		},
-		{
-			.wm_inst = WM_C,
-			.wm_type = WM_TYPE_PSTATE_CHG,
-			.pstate_latency_us = 11.65333,
-			.sr_exit_time_us = 28.0,
-			.sr_enter_plus_exit_time_us = 30.0,
-			.valid = true,
-		},
-		{
-			.wm_inst = WM_D,
-			.wm_type = WM_TYPE_PSTATE_CHG,
-			.pstate_latency_us = 11.65333,
-			.sr_exit_time_us = 28.0,
-			.sr_enter_plus_exit_time_us = 30.0,
-			.valid = true,
-		},
-	}
-};
-
 struct dcn42_ss_info_table dcn42_ss_info_table = {
 	.ss_divider = 1000,
 	.ss_percentage = {0, 0, 375, 375, 375}
@@ -708,7 +634,7 @@ static void dcn42_read_ss_info_from_lut(struct clk_mgr_internal *clk_mgr)
 
 void dcn42_build_watermark_ranges(struct clk_bw_params *bw_params, struct dcn42_watermarks *table)
 {
-	int i, num_valid_sets;
+	uint8_t i, num_valid_sets;
 
 	num_valid_sets = 0;
 
@@ -717,8 +643,10 @@ void dcn42_build_watermark_ranges(struct clk_bw_params *bw_params, struct dcn42_
 		if (!bw_params->wm_table.entries[i].valid)
 			continue;
 
-		table->WatermarkRow[WM_DCFCLK][num_valid_sets].WmSetting = bw_params->wm_table.entries[i].wm_inst;
-		table->WatermarkRow[WM_DCFCLK][num_valid_sets].WmType = bw_params->wm_table.entries[i].wm_type;
+		table->WatermarkRow[WM_DCFCLK][num_valid_sets].WmSetting =
+			(uint8_t)bw_params->wm_table.entries[i].wm_inst;
+		table->WatermarkRow[WM_DCFCLK][num_valid_sets].WmType =
+			(uint8_t)bw_params->wm_table.entries[i].wm_type;
 		/* We will not select WM based on fclk, so leave it as unconstrained */
 		table->WatermarkRow[WM_DCFCLK][num_valid_sets].MinClock = 0;
 		table->WatermarkRow[WM_DCFCLK][num_valid_sets].MaxClock = 0xFFFF;
@@ -729,10 +657,10 @@ void dcn42_build_watermark_ranges(struct clk_bw_params *bw_params, struct dcn42_
 			else {
 				/* add 1 to make it non-overlapping with next lvl */
 				table->WatermarkRow[WM_DCFCLK][num_valid_sets].MinMclk =
-						bw_params->clk_table.entries[i - 1].dcfclk_mhz + 1;
+						(uint16_t)(bw_params->clk_table.entries[i - 1].dcfclk_mhz + 1);
 			}
 			table->WatermarkRow[WM_DCFCLK][num_valid_sets].MaxMclk =
-					bw_params->clk_table.entries[i].dcfclk_mhz;
+					(uint16_t)bw_params->clk_table.entries[i].dcfclk_mhz;
 
 		} else {
 			/* unconstrained for memory retraining */
@@ -808,9 +736,12 @@ void dcn42_notify_wm_ranges(struct clk_mgr *clk_mgr_base)
 			clk_mgr_dcn42->smu_wm_set.mc_address.low_part);
 	dcn42_smu_transfer_wm_table_dram_2_smu(clk_mgr);
 
-	if (clk_mgr_dcn42->smu_wm_set.wm_set && clk_mgr_dcn42->smu_wm_set.mc_address.quad_part != 0)
+	if (clk_mgr_dcn42->smu_wm_set.wm_set && clk_mgr_dcn42->smu_wm_set.mc_address.quad_part != 0) {
 		dm_helpers_free_gpu_mem(clk_mgr->base.ctx, DC_MEM_ALLOC_TYPE_GART,
 				clk_mgr_dcn42->smu_wm_set.wm_set);
+		clk_mgr_dcn42->smu_wm_set.wm_set = NULL;
+		clk_mgr_dcn42->smu_wm_set.mc_address.quad_part = 0;
+	}
 
 }
 
@@ -1141,10 +1072,6 @@ void dcn42_clk_mgr_construct(
 		if (ctx->dc_bios->integrated_info) {
 			clk_mgr->base.base.dentist_vco_freq_khz = ctx->dc_bios->integrated_info->dentist_vco_freq;
 
-			if (ctx->dc_bios->integrated_info->memory_type == LpDdr5MemType)
-				dcn42_bw_params.wm_table = lpddr5_wm_table;
-			else
-				dcn42_bw_params.wm_table = ddr5_wm_table;
 			dcn42_bw_params.vram_type = ctx->dc_bios->integrated_info->memory_type;
 			dcn42_bw_params.dram_channel_width_bytes = ctx->dc_bios->integrated_info->memory_type == 0x22 ? 8 : 4;
 			dcn42_bw_params.num_channels = ctx->dc_bios->integrated_info->ma_channel_number ? ctx->dc_bios->integrated_info->ma_channel_number : 1;
@@ -1177,7 +1104,10 @@ void dcn42_clk_mgr_destroy(struct clk_mgr_internal *clk_mgr_int)
 {
 	struct clk_mgr_dcn42 *clk_mgr = TO_CLK_MGR_DCN42(clk_mgr_int);
 
-	if (clk_mgr->smu_wm_set.wm_set && clk_mgr->smu_wm_set.mc_address.quad_part != 0)
+	if (clk_mgr->smu_wm_set.wm_set && clk_mgr->smu_wm_set.mc_address.quad_part != 0) {
 		dm_helpers_free_gpu_mem(clk_mgr_int->base.ctx, DC_MEM_ALLOC_TYPE_GART,
 				clk_mgr->smu_wm_set.wm_set);
+		clk_mgr->smu_wm_set.wm_set = NULL;
+		clk_mgr->smu_wm_set.mc_address.quad_part = 0;
+	}
 }

@@ -743,14 +743,15 @@ static bool decide_dp_link_settings(struct dc_link *link, struct dc_link_setting
 {
 	struct dc_link_settings initial_link_setting = {
 		LANE_COUNT_ONE, LINK_RATE_LOW, LINK_SPREAD_DISABLED, false, 0};
-	if (link->preferred_link_setting.link_rate != LINK_RATE_UNKNOWN)
-		initial_link_setting.link_rate = link->preferred_link_setting.link_rate;
 	struct dc_link_settings current_link_setting =
 			initial_link_setting;
 	uint32_t link_bw;
 
 	if (req_bw > dp_link_bandwidth_kbps(link, &link->verified_link_cap))
 		return false;
+
+	if (link->preferred_link_setting.link_rate != LINK_RATE_UNKNOWN)
+		initial_link_setting.link_rate = link->preferred_link_setting.link_rate;
 
 	/* search for the minimum link setting that:
 	 * 1. is supported according to the link training result
@@ -1712,7 +1713,7 @@ enum dc_status dp_retrieve_lttpr_cap(struct dc_link *link)
 		CONN_DATA_DETECT(link, lttpr_dpcd_data, sizeof(lttpr_dpcd_data), "LTTPR Caps: ");
 
 		// Identify closest LTTPR to determine if workarounds required for known embedded LTTPR
-		closest_lttpr_offset = dp_get_closest_lttpr_offset(lttpr_count);
+		closest_lttpr_offset = dp_get_closest_lttpr_offset((uint8_t)lttpr_count);
 
 		core_link_read_dpcd(link, (DP_LTTPR_IEEE_OUI + closest_lttpr_offset),
 				link->dpcd_caps.lttpr_caps.lttpr_ieee_oui, sizeof(link->dpcd_caps.lttpr_caps.lttpr_ieee_oui));
