@@ -1353,7 +1353,7 @@ static bool panic_on_unrecoverable_mf(unsigned long pfn,
 		cpu_relax();
 		return page_count(p) == 0 &&
 		       !PageLRU(p) &&
-		       !page_mapped(p) &&
+		       !folio_mapped(page_folio(p)) &&
 		       !page_folio(p)->mapping &&
 		       !is_free_buddy_page(p);
 	default:
