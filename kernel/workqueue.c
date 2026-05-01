@@ -3183,6 +3183,10 @@ static bool manage_workers(struct worker *worker)
 	return true;
 }
 
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+static noinline void process_one_work(struct worker *worker, struct work_struct *work);
+#endif
+
 /**
  * process_one_work - process single work
  * @worker: self
@@ -3206,6 +3210,9 @@ __acquires(&pool->lock)
 	unsigned long work_data;
 	int lockdep_start_depth, rcu_start_depth;
 	bool bh_draining = pool->flags & POOL_BH_DRAINING;
+#ifdef CONFIG_KCOV
+	unsigned int old_kcov_mode, new_kcov_mode;
+#endif
 #ifdef CONFIG_LOCKDEP
 	/*
 	 * It is permissible to free the struct work_struct from
@@ -3299,7 +3306,13 @@ __acquires(&pool->lock)
 	 */
 	lockdep_invariant_state(true);
 	trace_workqueue_execute_start(work);
+#ifdef CONFIG_KCOV
+	old_kcov_mode = READ_ONCE(current->kcov_mode);
+#endif
 	worker->current_func(work);
+#ifdef CONFIG_KCOV
+	new_kcov_mode = READ_ONCE(current->kcov_mode);
+#endif
 	/*
 	 * While we must be careful to not use "work" after this, the trace
 	 * point will only record its address.
@@ -3322,6 +3335,11 @@ __acquires(&pool->lock)
 		debug_show_held_locks(current);
 		dump_stack();
 	}
+#ifdef CONFIG_KCOV
+	if (unlikely((old_kcov_mode & ~(1 << 30)) != (new_kcov_mode & ~(1 << 30))))
+		pr_err("BUG: workqueue function %ps changed kcov_mode from %u to %u\n",
+		       worker->current_func, old_kcov_mode, new_kcov_mode);
+#endif
 
 	/*
 	 * The following prevents a kworker from hogging CPU on !PREEMPTION
@@ -3412,6 +3430,11 @@ static int worker_thread(void *__worker)
 {
 	struct worker *worker = __worker;
 	struct worker_pool *pool = worker->pool;
+
+#ifdef CONFIG_KCOV
+	if (unlikely(current->kcov_mode & ~(1 << 30)))
+		pr_err("BUG: %s started with kcov_mode=%u\n", __func__, current->kcov_mode);
+#endif
 
 	/* tell the scheduler that this is a workqueue worker */
 	set_pf_worker(true);
@@ -3564,6 +3587,11 @@ static int rescuer_thread(void *__rescuer)
 	struct worker *rescuer = __rescuer;
 	struct workqueue_struct *wq = rescuer->rescue_wq;
 	bool should_stop;
+
+#ifdef CONFIG_KCOV
+	if (unlikely(current->kcov_mode & ~(1 << 30)))
+		pr_err("BUG: %s started with kcov_mode=%u\n", __func__, current->kcov_mode);
+#endif
 
 	set_user_nice(current, RESCUER_NICE_LEVEL);
 
@@ -5906,6 +5934,21 @@ err_destroy:
 	return NULL;
 }
 
+__printf(1, 0)
+static struct workqueue_struct *alloc_workqueue_va(const char *fmt,
+						   unsigned int flags,
+						   int max_active,
+						   va_list args)
+{
+	struct workqueue_struct *wq;
+
+	wq = __alloc_workqueue(fmt, flags, max_active, args);
+	if (wq)
+		wq_init_lockdep(wq);
+
+	return wq;
+}
+
 __printf(1, 4)
 struct workqueue_struct *alloc_workqueue_noprof(const char *fmt,
 						unsigned int flags,
@@ -5915,12 +5958,8 @@ struct workqueue_struct *alloc_workqueue_noprof(const char *fmt,
 	va_list args;
 
 	va_start(args, max_active);
-	wq = __alloc_workqueue(fmt, flags, max_active, args);
+	wq = alloc_workqueue_va(fmt, flags, max_active, args);
 	va_end(args);
-	if (!wq)
-		return NULL;
-
-	wq_init_lockdep(wq);
 
 	return wq;
 }
@@ -5932,15 +5971,15 @@ static void devm_workqueue_release(void *res)
 }
 
 __printf(2, 5) struct workqueue_struct *
-devm_alloc_workqueue(struct device *dev, const char *fmt, unsigned int flags,
-		     int max_active, ...)
+devm_alloc_workqueue_noprof(struct device *dev, const char *fmt,
+			    unsigned int flags, int max_active, ...)
 {
 	struct workqueue_struct *wq;
 	va_list args;
 	int ret;
 
 	va_start(args, max_active);
-	wq = alloc_workqueue(fmt, flags, max_active, args);
+	wq = alloc_workqueue_va(fmt, flags, max_active, args);
 	va_end(args);
 	if (!wq)
 		return NULL;
@@ -5951,7 +5990,7 @@ devm_alloc_workqueue(struct device *dev, const char *fmt, unsigned int flags,
 
 	return wq;
 }
-EXPORT_SYMBOL_GPL(devm_alloc_workqueue);
+EXPORT_SYMBOL_GPL(devm_alloc_workqueue_noprof);
 
 #ifdef CONFIG_LOCKDEP
 __printf(1, 5)
