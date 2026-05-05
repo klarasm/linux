@@ -438,6 +438,15 @@ ieee80211_verify_sta_ht_mcs_support(struct ieee80211_sub_if_data *sdata,
 	ieee80211_apply_htcap_overrides(sdata, &sta_ht_cap);
 
 	/*
+	 * Some Xfinity XB8 firmware advertises >1 spatial stream MCS indexes in
+	 * their basic HT-MCS set. On cards with lower spatial streams, the check
+	 * would fail, and we'd be stuck with no HT when it in fact work fine with
+	 * its own supported rate. So check it only in strict mode.
+	 */
+	if (!ieee80211_hw_check(&sdata->local->hw, STRICT))
+		return true;
+
+	/*
 	 * P802.11REVme/D7.0 - 6.5.4.2.4
 	 * ...
 	 * If the MLME of an HT STA receives an MLME-JOIN.request primitive
@@ -2571,8 +2580,9 @@ static void ieee80211_csa_switch_work(struct wiphy *wiphy,
 			return;
 
 		link_sta->pub->bandwidth =
-			_ieee80211_sta_cur_vht_bw(link_sta,
-						  &link->csa.chanreq.oper);
+			ieee80211_sta_current_bw(link_sta,
+						 &link->csa.chanreq.oper,
+						 IEEE80211_STA_BW_TX_TO_STA);
 		return;
 	}
 
@@ -5748,20 +5758,13 @@ static bool ieee80211_assoc_config_link(struct ieee80211_link_data *link,
 	 * next beacon and update then.
 	 */
 
-	/*
-	 * If an operating mode notification IE is present, override the
-	 * NSS calculation (that would be done in rate_control_rate_init())
-	 * and use the # of streams from that element.
-	 */
-	if (elems->opmode_notif &&
-	    !(*elems->opmode_notif & IEEE80211_OPMODE_NOTIF_RX_NSS_TYPE_BF)) {
-		u8 nss;
+	ieee80211_sta_init_nss_bw_capa(link_sta, &bss_conf->chanreq.oper);
 
-		nss = *elems->opmode_notif & IEEE80211_OPMODE_NOTIF_RX_NSS_MASK;
-		nss >>= IEEE80211_OPMODE_NOTIF_RX_NSS_SHIFT;
-		nss += 1;
-		link_sta->pub->rx_nss = nss;
-	}
+	/* If an operating mode notification element is present, use it. */
+	if (elems->opmode_notif)
+		__ieee80211_vht_handle_opmode(sdata, link_sta,
+					      *elems->opmode_notif,
+					      sband->band);
 
 	/*
 	 * Always handle WMM once after association regardless
@@ -10617,7 +10620,6 @@ void ieee80211_process_ml_reconf_resp(struct ieee80211_sub_if_data *sdata,
 		if (add_links_data->link[link_id].status != WLAN_STATUS_SUCCESS)
 			goto disconnect;
 
-		ieee80211_sta_init_nss(link_sta);
 		if (ieee80211_sta_activate_link(sta, link_id))
 			goto disconnect;
 
