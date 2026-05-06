@@ -3037,8 +3037,8 @@ static void __split_huge_pud_locked(struct vm_area_struct *vma, pud_t *pud,
 
 	if (!folio_test_dirty(folio) && pud_dirty(old_pud))
 		folio_mark_dirty(folio);
-	if (!folio_test_referenced(folio) && pud_young(old_pud))
-		folio_set_referenced(folio);
+	if (pud_young(old_pud) && vma_has_recency(vma))
+		folio_mark_accessed(folio);
 	folio_remove_rmap_pud(folio, page, vma);
 	folio_put(folio);
 	add_mm_counter(vma->vm_mm, mm_counter_file(folio),
@@ -3155,8 +3155,8 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 			folio = page_folio(page);
 			if (!folio_test_dirty(folio) && pmd_dirty(old_pmd))
 				folio_mark_dirty(folio);
-			if (!folio_test_referenced(folio) && pmd_young(old_pmd))
-				folio_set_referenced(folio);
+			if (pmd_young(old_pmd) && vma_has_recency(vma))
+				folio_mark_accessed(folio);
 			folio_remove_rmap_pmd(folio, page, vma);
 			folio_put(folio);
 		}
@@ -3651,13 +3651,11 @@ static void __split_folio_to_order(struct folio *folio, int old_order,
 		 */
 		new_folio->flags.f &= ~PAGE_FLAGS_CHECK_AT_PREP;
 		new_folio->flags.f |= (folio->flags.f &
-				((1L << PG_referenced) |
-				 (1L << PG_swapbacked) |
+				((1L << PG_swapbacked) |
 				 (1L << PG_swapcache) |
 				 (1L << PG_mlocked) |
 				 (1L << PG_uptodate) |
 				 (1L << PG_active) |
-				 (1L << PG_workingset) |
 				 (1L << PG_locked) |
 				 (1L << PG_unevictable) |
 #ifdef CONFIG_ARCH_USES_PG_ARCH_2
