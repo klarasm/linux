@@ -1401,7 +1401,12 @@ static enum scan_result collapse_huge_page(struct mm_struct *mm, unsigned long s
 	WARN_ON_ONCE(!pmd_none(*pmd));
 	if (is_pmd_order(order)) { /* PMD collapse */
 		pgtable = pmd_pgtable(_pmd);
-		pgtable_trans_huge_deposit(mm, pmd, pgtable);
+		if (arch_needs_pgtable_deposit()) {
+			arch_pgtable_trans_huge_deposit(mm, pmd, pgtable);
+		} else {
+			mm_dec_nr_ptes(mm);
+			pte_free(mm, pgtable);
+		}
 		map_anon_folio_pmd_nopf(folio, pmd, vma, pmd_addr);
 	} else { /* mTHP collapse */
 		map_anon_folio_pte_nopf(folio, pte, vma, start_addr, /*uffd_wp=*/ false);
