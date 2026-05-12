@@ -85,7 +85,7 @@ pub(crate) fn pin_data(
 
     for (pinned, field) in &fields {
         if !pinned && is_phantom_pinned(&field.ty) {
-            dcx.error(
+            dcx.warn(
                 field,
                 format!(
                     "The field `{}` of type `PhantomPinned` only has an effect \
@@ -247,19 +247,17 @@ fn generate_projections(
     let projection = format_ident!("{ident}Projection");
     let this = format_ident!("this");
 
-    let (fields_decl, fields_proj) = collect_tuple(fields.iter().map(
-        |(
-            pinned,
-            Field {
+    let (fields_decl, fields_proj): (Vec<_>, Vec<_>) = fields
+        .iter()
+        .map(|(pinned, field)| {
+            let Field {
                 vis,
                 ident,
                 ty,
                 attrs,
                 ..
-            },
-        )| {
-            let mut attrs = attrs.clone();
-            attrs.retain(|a| !a.path().is_ident("pin"));
+            } = field;
+
             let mut no_doc_attrs = attrs.clone();
             no_doc_attrs.retain(|a| !a.path().is_ident("doc"));
             let ident = ident
@@ -289,8 +287,8 @@ fn generate_projections(
                     ),
                 )
             }
-        },
-    ));
+        })
+        .collect();
     let structurally_pinned_fields_docs = fields
         .iter()
         .filter_map(|(pinned, field)| pinned.then_some(field))
@@ -304,7 +302,9 @@ fn generate_projections(
         #[doc = #docs]
         #[allow(dead_code)]
         #[doc(hidden)]
-        #vis struct #projection #generics_with_pin_lt {
+        #vis struct #projection #generics_with_pin_lt
+            #whr
+        {
             #(#fields_decl)*
             ___pin_phantom_data: ::core::marker::PhantomData<&'__pin mut ()>,
         }
@@ -358,8 +358,6 @@ fn generate_the_pin_data(
         struct_ident: &Ident,
         pinned: bool,
     ) -> TokenStream {
-        let mut attrs = attrs.clone();
-        attrs.retain(|a| !a.path().is_ident("pin"));
         let ident = ident
             .as_ref()
             .expect("only structs with named fields are supported");
@@ -499,15 +497,4 @@ impl VisitMut for SelfReplacer {
     fn visit_item_mut(&mut self, _: &mut Item) {
         // Do not descend into items, since items reset/change what `Self` refers to.
     }
-}
-
-// replace with `.collect()` once MSRV is above 1.79
-fn collect_tuple<A, B>(iter: impl Iterator<Item = (A, B)>) -> (Vec<A>, Vec<B>) {
-    let mut res_a = vec![];
-    let mut res_b = vec![];
-    for (a, b) in iter {
-        res_a.push(a);
-        res_b.push(b);
-    }
-    (res_a, res_b)
 }
