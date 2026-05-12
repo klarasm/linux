@@ -99,6 +99,11 @@
 
 #define EP_ITEM_COST (sizeof(struct epitem) + sizeof(struct eppoll_entry))
 
+struct epoll_filefd {
+	struct file *file;
+	int fd;
+} __packed;
+
 /* Wait structure used by the poll hooks */
 struct eppoll_entry {
 	/* List header used to link this structure to the "struct epitem" */
@@ -329,9 +334,17 @@ static void __init epoll_sysctls_init(void)
 
 static const struct file_operations eventpoll_fops;
 
-int is_file_epoll(struct file *f)
+static inline int is_file_epoll(struct file *f)
 {
 	return f->f_op == &eventpoll_fops;
+}
+
+/* Setup the structure that is used as key for the RB tree */
+static inline void ep_set_ffd(struct epoll_filefd *ffd,
+			      struct file *file, int fd)
+{
+	ffd->file = file;
+	ffd->fd = fd;
 }
 
 /* Compare RB tree keys */
@@ -1160,15 +1173,17 @@ static int ep_alloc(struct eventpoll **pep)
  * are protected by the "mtx" mutex, and ep_find() must be called with
  * "mtx" held.
  */
-static struct epitem *ep_find(struct eventpoll *ep, struct epoll_filefd *tf)
+static struct epitem *ep_find(struct eventpoll *ep, struct file *file, int fd)
 {
 	int kcmp;
 	struct rb_node *rbp;
 	struct epitem *epi, *epir = NULL;
+	struct epoll_filefd ffd;
 
+	ep_set_ffd(&ffd, file, fd);
 	for (rbp = ep->rbr.rb_root.rb_node; rbp; ) {
 		epi = rb_entry(rbp, struct epitem, rbn);
-		kcmp = ep_cmp_ffd(tf, &epi->ffd);
+		kcmp = ep_cmp_ffd(&ffd, &epi->ffd);
 		if (kcmp > 0)
 			rbp = rbp->rb_right;
 		else if (kcmp < 0)
@@ -1549,7 +1564,7 @@ allocate:
  * Must be called with "mtx" held.
  */
 static int ep_insert(struct eventpoll *ep, const struct epoll_event *event,
-		     struct epoll_filefd *tf, int full_check)
+		     struct file *tfile, int fd, int full_check)
 {
 	int error, pwake = 0;
 	__poll_t revents;
@@ -1557,8 +1572,8 @@ static int ep_insert(struct eventpoll *ep, const struct epoll_event *event,
 	struct ep_pqueue epq;
 	struct eventpoll *tep = NULL;
 
-	if (is_file_epoll(tf->file))
-		tep = tf->file->private_data;
+	if (is_file_epoll(tfile))
+		tep = tfile->private_data;
 
 	lockdep_assert_irqs_enabled();
 
@@ -1575,14 +1590,14 @@ static int ep_insert(struct eventpoll *ep, const struct epoll_event *event,
 	/* Item initialization follow here ... */
 	INIT_LIST_HEAD(&epi->rdllink);
 	epi->ep = ep;
-	epi->ffd = *tf;
+	ep_set_ffd(&epi->ffd, tfile, fd);
 	epi->event = *event;
 	epi->next = EP_UNACTIVE_PTR;
 
 	if (tep)
 		mutex_lock_nested(&tep->mtx, 1);
 	/* Add the current item to the list of active epoll hook for this file */
-	if (unlikely(attach_epitem(tf->file, epi) < 0)) {
+	if (unlikely(attach_epitem(tfile, epi) < 0)) {
 		if (tep)
 			mutex_unlock(&tep->mtx);
 		kmem_cache_free(epi_cache, epi);
@@ -1591,7 +1606,7 @@ static int ep_insert(struct eventpoll *ep, const struct epoll_event *event,
 	}
 
 	if (full_check && !tep)
-		list_file(tf->file);
+		list_file(tfile);
 
 	/*
 	 * Add the current item to the RB tree. All RB tree operations are
@@ -2220,8 +2235,8 @@ static inline int epoll_mutex_lock(struct mutex *mutex, int depth,
 	return -EAGAIN;
 }
 
-int do_epoll_ctl_file(struct file *f, int op, struct epoll_filefd *tf,
-		      struct epoll_event *epds, bool nonblock)
+int do_epoll_ctl(int epfd, int op, int fd, struct epoll_event *epds,
+		 bool nonblock)
 {
 	int error;
 	int full_check = 0;
@@ -2229,8 +2244,17 @@ int do_epoll_ctl_file(struct file *f, int op, struct epoll_filefd *tf,
 	struct epitem *epi;
 	struct eventpoll *tep = NULL;
 
+	CLASS(fd, f)(epfd);
+	if (fd_empty(f))
+		return -EBADF;
+
+	/* Get the "struct file *" for the target file */
+	CLASS(fd, tf)(fd);
+	if (fd_empty(tf))
+		return -EBADF;
+
 	/* The target file descriptor must support poll */
-	if (!file_can_poll(tf->file))
+	if (!file_can_poll(fd_file(tf)))
 		return -EPERM;
 
 	/* Check if EPOLLWAKEUP is allowed */
@@ -2243,7 +2267,7 @@ int do_epoll_ctl_file(struct file *f, int op, struct epoll_filefd *tf,
 	 * adding an epoll file descriptor inside itself.
 	 */
 	error = -EINVAL;
-	if (f == tf->file || !is_file_epoll(f))
+	if (fd_file(f) == fd_file(tf) || !is_file_epoll(fd_file(f)))
 		goto error_tgt_fput;
 
 	/*
@@ -2254,7 +2278,7 @@ int do_epoll_ctl_file(struct file *f, int op, struct epoll_filefd *tf,
 	if (ep_op_has_event(op) && (epds->events & EPOLLEXCLUSIVE)) {
 		if (op == EPOLL_CTL_MOD)
 			goto error_tgt_fput;
-		if (op == EPOLL_CTL_ADD && (is_file_epoll(tf->file) ||
+		if (op == EPOLL_CTL_ADD && (is_file_epoll(fd_file(tf)) ||
 				(epds->events & ~EPOLLEXCLUSIVE_OK_BITS)))
 			goto error_tgt_fput;
 	}
@@ -2263,7 +2287,7 @@ int do_epoll_ctl_file(struct file *f, int op, struct epoll_filefd *tf,
 	 * At this point it is safe to assume that the "private_data" contains
 	 * our own data structure.
 	 */
-	ep = f->private_data;
+	ep = fd_file(f)->private_data;
 
 	/*
 	 * When we insert an epoll file descriptor inside another epoll file
@@ -2284,16 +2308,16 @@ int do_epoll_ctl_file(struct file *f, int op, struct epoll_filefd *tf,
 	if (error)
 		goto error_tgt_fput;
 	if (op == EPOLL_CTL_ADD) {
-		if (READ_ONCE(f->f_ep) || ep->gen == loop_check_gen ||
-		    is_file_epoll(tf->file)) {
+		if (READ_ONCE(fd_file(f)->f_ep) || ep->gen == loop_check_gen ||
+		    is_file_epoll(fd_file(tf))) {
 			mutex_unlock(&ep->mtx);
 			error = epoll_mutex_lock(&epnested_mutex, 0, nonblock);
 			if (error)
 				goto error_tgt_fput;
 			loop_check_gen++;
 			full_check = 1;
-			if (is_file_epoll(tf->file)) {
-				tep = tf->file->private_data;
+			if (is_file_epoll(fd_file(tf))) {
+				tep = fd_file(tf)->private_data;
 				error = -ELOOP;
 				if (ep_loop_check(ep, tep) != 0)
 					goto error_tgt_fput;
@@ -2309,14 +2333,14 @@ int do_epoll_ctl_file(struct file *f, int op, struct epoll_filefd *tf,
 	 * above, we can be sure to be able to use the item looked up by
 	 * ep_find() till we release the mutex.
 	 */
-	epi = ep_find(ep, tf);
+	epi = ep_find(ep, fd_file(tf), fd);
 
 	error = -EINVAL;
 	switch (op) {
 	case EPOLL_CTL_ADD:
 		if (!epi) {
 			epds->events |= EPOLLERR | EPOLLHUP;
-			error = ep_insert(ep, epds, tf, full_check);
+			error = ep_insert(ep, epds, fd_file(tf), fd, full_check);
 		} else
 			error = -EEXIST;
 		break;
@@ -2351,26 +2375,6 @@ error_tgt_fput:
 		mutex_unlock(&epnested_mutex);
 	}
 	return error;
-
-}
-
-int do_epoll_ctl(int epfd, int op, int fd, struct epoll_event *epds,
-		 bool nonblock)
-{
-	struct epoll_filefd efd;
-
-	CLASS(fd, f)(epfd);
-	if (fd_empty(f))
-		return -EBADF;
-
-	/* Get the "struct file *" for the target file */
-	CLASS(fd, tf)(fd);
-	if (fd_empty(tf))
-		return -EBADF;
-
-	efd.file = fd_file(tf);
-	efd.fd = fd;
-	return do_epoll_ctl_file(fd_file(f), op, &efd, epds, nonblock);
 }
 
 /*
