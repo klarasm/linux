@@ -5507,6 +5507,185 @@ num_entries(int infotype, char *bufstart, char *end_of_buf, char **lastentry,
 }
 
 /*
+ * Callback for async QueryDirectory with multi-credit support
+ */
+static void
+smb2_query_dir_callback(struct TCP_Server_Info *server, struct mid_q_entry *mid)
+{
+	struct cifs_query_dir_io *qd_io = mid->callback_data;
+	struct cifs_tcon *tcon = qd_io->tcon;
+	struct smb2_hdr *shdr = (struct smb2_hdr *)qd_io->iov[0].iov_base;
+	struct cifs_credits credits = {
+		.value = 0,
+		.instance = 0,
+	};
+
+	WARN_ONCE(qd_io->server != server,
+		  "qd_io server %p != mid server %p",
+		  qd_io->server, server);
+
+	cifs_dbg(FYI, "%s: mid=%llu state=%d result=%d\n",
+		 __func__, mid->mid, mid->mid_state, qd_io->result);
+
+	switch (mid->mid_state) {
+	case MID_RESPONSE_RECEIVED:
+		credits.value = le16_to_cpu(shdr->CreditRequest);
+		credits.instance = server->reconnect_instance;
+		/* result already set, check signature if needed */
+		if (server->sign && !mid->decrypted) {
+			int rc;
+			struct smb_rqst rqst = {
+				.rq_iov = &qd_io->iov[0],
+				.rq_nvec = qd_io->iov[1].iov_len ? 2 : 1,
+			};
+
+			rc = smb2_verify_signature(&rqst, server);
+			if (rc) {
+				cifs_tcon_dbg(VFS, "QueryDir signature verification returned error = %d\n",
+					      rc);
+				qd_io->result = rc;
+			}
+		}
+		break;
+	case MID_REQUEST_SUBMITTED:
+	case MID_RETRY_NEEDED:
+		qd_io->result = -EAGAIN;
+		break;
+	case MID_RESPONSE_MALFORMED:
+		credits.value = le16_to_cpu(shdr->CreditRequest);
+		credits.instance = server->reconnect_instance;
+		qd_io->result = smb_EIO(smb_eio_trace_read_rsp_malformed);
+		break;
+	default:
+		qd_io->result = smb_EIO1(smb_eio_trace_read_mid_state_unknown,
+					 mid->mid_state);
+		break;
+	}
+
+	if (qd_io->result && qd_io->result != -ENODATA)
+		cifs_stats_fail_inc(tcon, SMB2_QUERY_DIRECTORY_HE);
+
+	trace_smb3_rw_credits(0, 0, qd_io->credits.value,
+			      server->credits, server->in_flight,
+			      0, cifs_trace_rw_credits_read_response_clear);
+	qd_io->credits.value = 0;
+	release_mid(server, mid);
+	trace_smb3_rw_credits(0, 0, 0,
+			      server->credits, server->in_flight,
+			      credits.value, cifs_trace_rw_credits_read_response_add);
+	add_credits(server, &credits, 0);
+
+	complete(&qd_io->done);
+}
+
+/*
+ * QueryDirectory with large buffer and multi-credit support.
+ * Uses async infrastructure but waits for completion synchronously.
+ */
+int
+SMB2_query_directory_large(struct cifs_query_dir_io *qd_io, unsigned int buf_size)
+{
+	int rc, flags = 0;
+	char *buf;
+	struct smb2_hdr *shdr;
+	struct smb_rqst rqst = { .rq_iov = &qd_io->iov[0],
+				 .rq_nvec = SMB2_QUERY_DIRECTORY_IOV_SIZE };
+	struct TCP_Server_Info *server = qd_io->server;
+	struct cifs_tcon *tcon = qd_io->tcon;
+	unsigned int total_len;
+	int credit_request;
+
+	cifs_dbg(FYI, "%s: buf_size=%u\n", __func__, buf_size);
+
+	/* Cap buffer size to avoid kmalloc failures for very large allocations.
+	 * SMB2_MAX_QD_DATABUF_SIZE is a safe limit that stays well below typical
+	 * kmalloc constraints while still allowing large directory listings.
+	 */
+	if (buf_size > SMB2_MAX_QD_DATABUF_SIZE)
+		buf_size = SMB2_MAX_QD_DATABUF_SIZE;
+
+	/* Allocate response buffer. Since we'll build a combined header+data buffer,
+	 * we need space for both. We'll request a slightly smaller OutputBufferLength
+	 * from the server to ensure the total response fits.
+	 */
+	qd_io->combined_iov.iov_base = kmalloc(buf_size, GFP_KERNEL);
+	if (!qd_io->combined_iov.iov_base)
+		return -ENOMEM;
+	/* Store total capacity in iov_len; updated to actual data length by receive handler */
+	qd_io->combined_iov.iov_len = buf_size;
+
+	/* Initialize completion */
+	init_completion(&qd_io->done);
+
+	/* Request less data from server to leave room for the response header.
+	 * Use MAX_CIFS_SMALL_BUFFER_SIZE as a safety margin.
+	 */
+	rc = SMB2_query_directory_init(qd_io->xid, tcon, server,
+				       &rqst, qd_io->persistent_fid,
+				       qd_io->volatile_fid, qd_io->index,
+				       qd_io->srch_inf->info_level,
+				       buf_size - MAX_CIFS_SMALL_BUFFER_SIZE);
+	if (rc) {
+		kfree(qd_io->combined_iov.iov_base);
+		qd_io->combined_iov.iov_base = NULL;
+		return rc;
+	}
+
+	if (smb3_encryption_required(tcon))
+		flags |= CIFS_TRANSFORM_REQ;
+
+	buf = rqst.rq_iov[0].iov_base;
+	total_len = rqst.rq_iov[0].iov_len;
+
+	shdr = (struct smb2_hdr *)buf;
+
+	if (qd_io->replay) {
+		/* Back-off before retry */
+		if (qd_io->cur_sleep)
+			msleep(qd_io->cur_sleep);
+		smb2_set_replay(server, &rqst);
+	}
+
+	/* Set credit charge based on buffer size */
+	if (qd_io->credits.value > 0) {
+		shdr->CreditCharge = cpu_to_le16(DIV_ROUND_UP(buf_size,
+						SMB2_MAX_BUFFER_SIZE));
+		credit_request = le16_to_cpu(shdr->CreditCharge) + 8;
+		if (server->credits >= server->max_credits)
+			shdr->CreditRequest = cpu_to_le16(0);
+		else
+			shdr->CreditRequest = cpu_to_le16(
+				min_t(int, server->max_credits -
+						server->credits, credit_request));
+
+		flags |= CIFS_HAS_CREDITS;
+	}
+
+	rc = cifs_call_async(server, &rqst,
+			     cifs_query_dir_receive, smb2_query_dir_callback,
+			     smb2_query_dir_handle_data, qd_io, flags,
+			     &qd_io->credits);
+	if (rc) {
+		cifs_stats_fail_inc(tcon, SMB2_QUERY_DIRECTORY_HE);
+		trace_smb3_query_dir_err(qd_io->xid, qd_io->persistent_fid,
+					 tcon->tid, tcon->ses->Suid,
+					 qd_io->index, 0, rc);
+		kfree(qd_io->combined_iov.iov_base);
+		qd_io->combined_iov.iov_base = NULL;
+	}
+
+	/* Free request buffer immediately after async call */
+	cifs_small_buf_release(buf);
+
+	if (rc)
+		return rc;
+
+	/* Wait for the async operation to complete */
+	wait_for_completion(&qd_io->done);
+	return qd_io->result;
+}
+
+/*
  * Readdir/FindFirst
  */
 int SMB2_query_directory_init(const unsigned int xid,
@@ -5514,17 +5693,26 @@ int SMB2_query_directory_init(const unsigned int xid,
 			      struct TCP_Server_Info *server,
 			      struct smb_rqst *rqst,
 			      u64 persistent_fid, u64 volatile_fid,
-			      int index, int info_level)
+			      int index, int info_level,
+			      unsigned int output_size)
 {
 	struct smb2_query_directory_req *req;
 	unsigned char *bufptr;
 	__le16 asteriks = cpu_to_le16('*');
-	unsigned int output_size = CIFSMaxBufSize -
-		MAX_SMB2_CREATE_RESPONSE_SIZE -
-		MAX_SMB2_CLOSE_RESPONSE_SIZE;
 	unsigned int total_len;
 	struct kvec *iov = rqst->rq_iov;
 	int len, rc;
+
+	/*
+	 * Use provided output_size, or default to CIFSMaxBufSize calculation.
+	 * The default is for standalone QueryDir (smb2_query_dir_next).
+	 * For compounds, the caller should pass explicit output_size.
+	 */
+	if (output_size == 0) {
+		output_size = CIFSMaxBufSize -
+			MAX_SMB2_CREATE_RESPONSE_SIZE -
+			MAX_SMB2_CLOSE_RESPONSE_SIZE;
+	}
 
 	rc = smb2_plain_req_init(SMB2_QUERY_DIRECTORY, tcon, server,
 				 (void **) &req, &total_len);
@@ -5561,12 +5749,6 @@ int SMB2_query_directory_init(const unsigned int xid,
 	req->FileNameOffset =
 		cpu_to_le16(sizeof(struct smb2_query_directory_req));
 	req->FileNameLength = cpu_to_le16(len);
-	/*
-	 * BB could be 30 bytes or so longer if we used SMB2 specific
-	 * buffer lengths, but this is safe and close enough.
-	 */
-	output_size = min_t(unsigned int, output_size, server->maxBuf);
-	output_size = min_t(unsigned int, output_size, 2 << 15);
 	req->OutputBufferLength = cpu_to_le32(output_size);
 
 	iov[0].iov_base = (char *)req;
@@ -5635,6 +5817,8 @@ smb2_parse_query_directory(struct cifs_tcon *tcon,
 	if (srch_inf->ntwrk_buf_start) {
 		if (srch_inf->smallBuf)
 			cifs_small_buf_release(srch_inf->ntwrk_buf_start);
+		else if (srch_inf->is_dynamic_buf)
+			kfree(srch_inf->ntwrk_buf_start);
 		else
 			cifs_buf_release(srch_inf->ntwrk_buf_start);
 	}
@@ -5654,12 +5838,18 @@ smb2_parse_query_directory(struct cifs_tcon *tcon,
 	cifs_dbg(FYI, "num entries %d last_index %lld srch start %p srch end %p\n",
 		 srch_inf->entries_in_buffer, srch_inf->index_of_last_entry,
 		 srch_inf->srch_entries_start, srch_inf->last_entry);
-	if (resp_buftype == CIFS_LARGE_BUFFER)
+	if (resp_buftype == CIFS_LARGE_BUFFER) {
 		srch_inf->smallBuf = false;
-	else if (resp_buftype == CIFS_SMALL_BUFFER)
+		srch_inf->is_dynamic_buf = false;
+	} else if (resp_buftype == CIFS_SMALL_BUFFER) {
 		srch_inf->smallBuf = true;
-	else
+		srch_inf->is_dynamic_buf = false;
+	} else if (resp_buftype == CIFS_DYNAMIC_BUFFER) {
+		srch_inf->smallBuf = false;
+		srch_inf->is_dynamic_buf = true;
+	} else {
 		cifs_tcon_dbg(VFS, "Invalid search buffer type\n");
+	}
 
 	return 0;
 }
@@ -5699,7 +5889,7 @@ replay_again:
 	rc = SMB2_query_directory_init(xid, tcon, server,
 				       &rqst, persistent_fid,
 				       volatile_fid, index,
-				       srch_inf->info_level);
+				       srch_inf->info_level, 0);
 	if (rc)
 		goto qdir_exit;
 
