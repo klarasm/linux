@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
- * Copyright (C) 2024-2025 Intel Corporation
+ * Copyright (C) 2024-2026 Intel Corporation
  */
 #include <linux/rtnetlink.h>
 #include <net/mac80211.h>
@@ -236,6 +236,8 @@ static const struct iwl_hcmd_names iwl_mld_mac_conf_names[] = {
 	HCMD_NAME(STA_REMOVE_CMD),
 	HCMD_NAME(ROC_CMD),
 	HCMD_NAME(NAN_CFG_CMD),
+	HCMD_NAME(NAN_SCHEDULE_CMD),
+	HCMD_NAME(NAN_PEER_CMD),
 	HCMD_NAME(NAN_DW_END_NOTIF),
 	HCMD_NAME(NAN_JOINED_CLUSTER_NOTIF),
 	HCMD_NAME(MISSED_BEACONS_NOTIF),
@@ -410,9 +412,6 @@ iwl_op_mode_mld_start(struct iwl_trans *trans, const struct iwl_rf_cfg *cfg,
 	mld = IWL_OP_MODE_GET_MLD(op_mode);
 
 	iwl_construct_mld(mld, trans, cfg, fw, hw, dbgfs_dir);
-
-	/* we'll verify later it matches between commands */
-	mld->fw_rates_ver_3 = iwl_fw_lookup_cmd_ver(mld->fw, TX_CMD, 0) >= 11;
 
 	iwl_mld_construct_fw_runtime(mld, trans, fw, dbgfs_dir);
 

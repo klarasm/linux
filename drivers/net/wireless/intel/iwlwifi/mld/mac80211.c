@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
- * Copyright (C) 2024-2025 Intel Corporation
+ * Copyright (C) 2024-2026 Intel Corporation
  */
 
 #include <net/mac80211.h>
@@ -62,17 +62,16 @@ static const struct ieee80211_iface_limit iwl_mld_limits_ap[] = {
 
 static const struct ieee80211_iface_limit iwl_mld_limits_nan[] = {
 	{
-		.max = 2,
+		.max = 1,
 		.types = BIT(NL80211_IFTYPE_STATION),
 	},
 	{
 		.max = 1,
 		.types = BIT(NL80211_IFTYPE_NAN),
 	},
-	/* Removed when two channels are permitted */
 	{
-		.max = 1,
-		.types = BIT(NL80211_IFTYPE_AP),
+		.max = 2,
+		.types = BIT(NL80211_IFTYPE_NAN_DATA),
 	},
 };
 
@@ -90,19 +89,13 @@ iwl_mld_iface_combinations[] = {
 		.limits = iwl_mld_limits_ap,
 		.n_limits = ARRAY_SIZE(iwl_mld_limits_ap),
 	},
-	/* NAN combinations follow, these exclude P2P */
+	/* NAN combination follow, this excludes P2P and AP */
 	{
-		.num_different_channels = 2,
-		.max_interfaces = 3,
-		.limits = iwl_mld_limits_nan,
-		.n_limits = ARRAY_SIZE(iwl_mld_limits_nan) - 1,
-	},
-	{
-		.num_different_channels = 1,
+		.num_different_channels = 3,
 		.max_interfaces = 4,
 		.limits = iwl_mld_limits_nan,
 		.n_limits = ARRAY_SIZE(iwl_mld_limits_nan),
-	}
+	},
 };
 
 static const u8 ext_capa_base[IWL_MLD_STA_EXT_CAPA_SIZE] = {
@@ -272,6 +265,40 @@ static void iwl_mac_hw_set_flags(struct iwl_mld *mld)
 	ieee80211_hw_set(hw, TDLS_WIDER_BW);
 }
 
+static void iwl_mld_hw_set_nan(struct iwl_mld *mld)
+{
+	struct ieee80211_hw *hw = mld->hw;
+
+	hw->wiphy->interface_modes |= BIT(NL80211_IFTYPE_NAN);
+	hw->wiphy->interface_modes |= BIT(NL80211_IFTYPE_NAN_DATA);
+
+	hw->wiphy->nan_supported_bands = BIT(NL80211_BAND_2GHZ);
+	if (mld->nvm_data->bands[NL80211_BAND_5GHZ].n_channels)
+		hw->wiphy->nan_supported_bands |=
+			BIT(NL80211_BAND_5GHZ);
+
+	hw->wiphy->nan_capa.flags = WIPHY_NAN_FLAGS_CONFIGURABLE_SYNC |
+				    WIPHY_NAN_FLAGS_USERSPACE_DE;
+
+	hw->wiphy->nan_capa.op_mode = NAN_OP_MODE_PHY_MODE_VHT |
+				      NAN_OP_MODE_PHY_MODE_HE |
+				      NAN_OP_MODE_160MHZ;
+
+	hw->wiphy->nan_capa.n_antennas =
+		(hweight32(hw->wiphy->available_antennas_tx) &
+		 NAN_DEV_CAPA_NUM_TX_ANT_MASK) |
+		((hweight32(hw->wiphy->available_antennas_rx) <<
+		  NAN_DEV_CAPA_NUM_RX_ANT_POS) &
+		 NAN_DEV_CAPA_NUM_RX_ANT_MASK);
+
+	/* Maximal channel switch time is 4 msec */
+	hw->wiphy->nan_capa.max_channel_switch_time = 4 * USEC_PER_MSEC;
+
+	hw->wiphy->nan_capa.phy.ht = mld->nvm_data->nan_phy_capa.ht;
+	hw->wiphy->nan_capa.phy.vht = mld->nvm_data->nan_phy_capa.vht;
+	hw->wiphy->nan_capa.phy.he = mld->nvm_data->nan_phy_capa.he;
+}
+
 static void iwl_mac_hw_set_wiphy(struct iwl_mld *mld)
 {
 	struct ieee80211_hw *hw = mld->hw;
@@ -334,37 +361,16 @@ static void iwl_mac_hw_set_wiphy(struct iwl_mld *mld)
 
 	wiphy->hw_timestamp_max_peers = 1;
 
+	wiphy->iface_combinations = iwl_mld_iface_combinations;
+
 	if (iwl_mld_nan_supported(mld)) {
-		hw->wiphy->interface_modes |= BIT(NL80211_IFTYPE_NAN);
-		hw->wiphy->iface_combinations = iwl_mld_iface_combinations;
-		hw->wiphy->n_iface_combinations =
-			ARRAY_SIZE(iwl_mld_iface_combinations);
-
-		hw->wiphy->nan_supported_bands = BIT(NL80211_BAND_2GHZ);
-		if (mld->nvm_data->bands[NL80211_BAND_5GHZ].n_channels)
-			hw->wiphy->nan_supported_bands |=
-				BIT(NL80211_BAND_5GHZ);
-
-		hw->wiphy->nan_capa.flags = WIPHY_NAN_FLAGS_CONFIGURABLE_SYNC |
-					    WIPHY_NAN_FLAGS_USERSPACE_DE;
-
-		hw->wiphy->nan_capa.op_mode = NAN_OP_MODE_PHY_MODE_MASK |
-					      NAN_OP_MODE_80P80MHZ |
-					      NAN_OP_MODE_160MHZ;
-
-		/* Support 2 antenna's for Tx and Rx */
-		hw->wiphy->nan_capa.n_antennas = 0x22;
-
-		/* Maximal channel switch time is 4 msec */
-		hw->wiphy->nan_capa.max_channel_switch_time = 4;
-		hw->wiphy->nan_capa.dev_capabilities =
-			NAN_DEV_CAPA_EXT_KEY_ID_SUPPORTED |
-			NAN_DEV_CAPA_NDPE_SUPPORTED;
-	} else {
-		wiphy->iface_combinations = iwl_mld_iface_combinations;
-		/* Do not include NAN combinations */
 		wiphy->n_iface_combinations =
-			ARRAY_SIZE(iwl_mld_iface_combinations) - 2;
+			ARRAY_SIZE(iwl_mld_iface_combinations);
+		iwl_mld_hw_set_nan(mld);
+	} else {
+		/* Do not include NAN combination */
+		wiphy->n_iface_combinations =
+			ARRAY_SIZE(iwl_mld_iface_combinations) - 1;
 	}
 
 	wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_VHT_IBSS);
@@ -449,22 +455,6 @@ static void iwl_mac_hw_set_misc(struct iwl_mld *mld)
 
 static int iwl_mld_hw_verify_preconditions(struct iwl_mld *mld)
 {
-	int ratecheck;
-
-	/* check for rates version 3 */
-	ratecheck =
-		(iwl_fw_lookup_cmd_ver(mld->fw, TX_CMD, 0) >= 11) +
-		(iwl_fw_lookup_notif_ver(mld->fw, DATA_PATH_GROUP,
-					 TLC_MNG_UPDATE_NOTIF, 0) >= 4) +
-		(iwl_fw_lookup_notif_ver(mld->fw, LEGACY_GROUP,
-					 REPLY_RX_MPDU_CMD, 0) >= 6) +
-		(iwl_fw_lookup_notif_ver(mld->fw, LONG_GROUP, TX_CMD, 0) >= 9);
-
-	if (ratecheck != 0 && ratecheck != 4) {
-		IWL_ERR(mld, "Firmware has inconsistent rates\n");
-		return -EINVAL;
-	}
-
 	/* 11ax is expected to be enabled for all supported devices */
 	if (WARN_ON(!mld->nvm_data->sku_cap_11ax_enable))
 		return -EINVAL;
@@ -673,6 +663,9 @@ int iwl_mld_mac80211_add_interface(struct ieee80211_hw *hw,
 	if (ret)
 		return ret;
 
+	if (vif->type == NL80211_IFTYPE_NAN_DATA)
+		return 0;
+
 	/*
 	 * Add the default link, but not if this is an MLD vif as that implies
 	 * the HW is restarting and it will be configured by change_vif_links.
@@ -741,7 +734,7 @@ void iwl_mld_mac80211_remove_interface(struct ieee80211_hw *hw,
 
 	if (vif->type == NL80211_IFTYPE_NAN)
 		mld->nan_device_vif = NULL;
-	else
+	else if (vif->type != NL80211_IFTYPE_NAN_DATA)
 		iwl_mld_remove_link(mld, &vif->bss_conf);
 
 #ifdef CONFIG_IWLWIFI_DEBUGFS
@@ -1231,33 +1224,6 @@ int iwl_mld_mac80211_set_rts_threshold(struct ieee80211_hw *hw, int radio_idx,
 	return 0;
 }
 
-static void
-iwl_mld_link_info_changed_ap_ibss(struct iwl_mld *mld,
-				  struct ieee80211_vif *vif,
-				  struct ieee80211_bss_conf *link,
-				  u64 changes)
-{
-	u32 link_changes = 0;
-
-	if (changes & BSS_CHANGED_ERP_SLOT)
-		link_changes |= LINK_CONTEXT_MODIFY_RATES_INFO;
-
-	if (changes & (BSS_CHANGED_ERP_CTS_PROT | BSS_CHANGED_HT))
-		link_changes |= LINK_CONTEXT_MODIFY_PROTECT_FLAGS;
-
-	if (changes & (BSS_CHANGED_QOS | BSS_CHANGED_BANDWIDTH))
-		link_changes |= LINK_CONTEXT_MODIFY_QOS_PARAMS;
-
-	if (changes & BSS_CHANGED_HE_BSS_COLOR)
-		link_changes |= LINK_CONTEXT_MODIFY_HE_PARAMS;
-
-	if (link_changes)
-		iwl_mld_change_link_in_fw(mld, link, link_changes);
-
-	if (changes & BSS_CHANGED_BEACON)
-		iwl_mld_update_beacon_template(mld, vif, link);
-}
-
 static
 u32 iwl_mld_link_changed_mapping(struct iwl_mld *mld,
 				 struct ieee80211_vif *vif,
@@ -1367,6 +1333,10 @@ iwl_mld_mac80211_link_info_changed(struct ieee80211_hw *hw,
 		if (changes & BSS_CHANGED_MU_GROUPS)
 			iwl_mld_update_mu_groups(mld, link_conf);
 		break;
+	case NL80211_IFTYPE_NAN:
+	case NL80211_IFTYPE_NAN_DATA:
+		/* NAN has no links */
+		break;
 	default:
 		/* shouldn't happen */
 		WARN_ON_ONCE(1);
@@ -1382,28 +1352,6 @@ iwl_mld_mac80211_link_info_changed(struct ieee80211_hw *hw,
 		iwl_mld_set_tx_power(mld, link_conf, link_conf->txpower);
 }
 
-static void
-iwl_mld_smps_workaround(struct iwl_mld *mld, struct ieee80211_vif *vif, bool enable)
-{
-	struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
-	bool workaround_required =
-		iwl_fw_lookup_cmd_ver(mld->fw, MAC_PM_POWER_TABLE, 0) < 2;
-
-	if (!workaround_required)
-		return;
-
-	/* Send the device-level power commands since the
-	 * firmware checks the POWER_TABLE_CMD's POWER_SAVE_EN bit to
-	 * determine SMPS mode.
-	 */
-	if (mld_vif->ps_disabled == !enable)
-		return;
-
-	mld_vif->ps_disabled = !enable;
-
-	iwl_mld_update_device_power(mld, false);
-}
-
 static
 void iwl_mld_mac80211_vif_cfg_changed(struct ieee80211_hw *hw,
 				      struct ieee80211_vif *vif,
@@ -1413,6 +1361,11 @@ void iwl_mld_mac80211_vif_cfg_changed(struct ieee80211_hw *hw,
 	int ret;
 
 	lockdep_assert_wiphy(mld->wiphy);
+
+	if (vif->type == NL80211_IFTYPE_NAN) {
+		iwl_mld_nan_vif_cfg_changed(mld, vif, changes);
+		return;
+	}
 
 	if (vif->type != NL80211_IFTYPE_STATION)
 		return;
@@ -1436,10 +1389,8 @@ void iwl_mld_mac80211_vif_cfg_changed(struct ieee80211_hw *hw,
 		}
 	}
 
-	if (changes & BSS_CHANGED_PS) {
-		iwl_mld_smps_workaround(mld, vif, vif->cfg.ps);
+	if (changes & BSS_CHANGED_PS)
 		iwl_mld_update_mac_power(mld, vif, false);
-	}
 
 	/* TODO: task=MLO BSS_CHANGED_MLD_VALID_LINKS/CHANGED_MLD_TTLM */
 }
@@ -1609,7 +1560,7 @@ iwl_mld_mac80211_conf_tx(struct ieee80211_hw *hw,
 
 	lockdep_assert_wiphy(mld->wiphy);
 
-	if (vif->type == NL80211_IFTYPE_NAN)
+	if (vif->type == NL80211_IFTYPE_NAN || vif->type == NL80211_IFTYPE_NAN_DATA)
 		return 0;
 
 	link = iwl_mld_link_dereference_check(mld_vif, link_id);
@@ -1825,7 +1776,7 @@ static int iwl_mld_move_sta_state_up(struct iwl_mld *mld,
 		   new_state == IEEE80211_STA_AUTHORIZED) {
 		ret = 0;
 
-		if (!sta->tdls) {
+		if (vif->type == NL80211_IFTYPE_STATION && !sta->tdls) {
 			mld_vif->authorized = true;
 
 			/* Ensure any block due to a non-BSS link is synced */
@@ -1846,7 +1797,6 @@ static int iwl_mld_move_sta_state_up(struct iwl_mld *mld,
 						    FW_CTXT_ACTION_MODIFY);
 			if (ret)
 				return ret;
-			iwl_mld_smps_workaround(mld, vif, vif->cfg.ps);
 		}
 
 		/* MFP is set by default before the station is authorized.
@@ -1891,7 +1841,6 @@ static int iwl_mld_move_sta_state_down(struct iwl_mld *mld,
 						  &mld_vif->mlo_scan_start_wk);
 
 			iwl_mld_reset_cca_40mhz_workaround(mld, vif);
-			iwl_mld_smps_workaround(mld, vif, true);
 		}
 
 		/* once we move into assoc state, need to update the FW to
@@ -2296,8 +2245,19 @@ static int iwl_mld_mac80211_set_key(struct ieee80211_hw *hw,
 				    struct ieee80211_sta *sta,
 				    struct ieee80211_key_conf *key)
 {
+	struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
 	struct iwl_mld *mld = IWL_MAC80211_GET_MLD(hw);
 	int ret;
+
+	/*
+	 * FW always needs the AP STA for client mode.
+	 * Note that during removal this could already
+	 * be NULL (mac80211 removes keys after STAs)
+	 * but then we'll already have removed the key
+	 * and set hw_key_idx = STA_KEY_IDX_INVALID.
+	 */
+	if (!sta && vif->type == NL80211_IFTYPE_STATION)
+		sta = mld_vif->ap_sta;
 
 	switch (cmd) {
 	case SET_KEY:
@@ -2847,4 +2807,5 @@ const struct ieee80211_ops iwl_mld_hw_ops = {
 	.start_nan = iwl_mld_start_nan,
 	.stop_nan = iwl_mld_stop_nan,
 	.nan_change_conf = iwl_mld_nan_change_config,
+	.nan_peer_sched_changed = iwl_mld_mac802111_nan_peer_sched_changed,
 };

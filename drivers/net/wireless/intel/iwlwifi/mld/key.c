@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
- * Copyright (C) 2024 Intel Corporation
+ * Copyright (C) 2024, 2026 Intel Corporation
  */
 #include "key.h"
 #include "iface.h"
@@ -12,7 +12,6 @@ static u32 iwl_mld_get_key_flags(struct iwl_mld *mld,
 				 struct ieee80211_sta *sta,
 				 struct ieee80211_key_conf *key)
 {
-	struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
 	bool pairwise = key->flags & IEEE80211_KEY_FLAG_PAIRWISE;
 	bool igtk = key->keyidx == 4 || key->keyidx == 5;
 	u32 flags = 0;
@@ -37,9 +36,6 @@ static u32 iwl_mld_get_key_flags(struct iwl_mld *mld,
 		flags |= IWL_SEC_KEY_FLAG_CIPHER_GCMP;
 		break;
 	}
-
-	if (!sta && vif->type == NL80211_IFTYPE_STATION)
-		sta = mld_vif->ap_sta;
 
 	/* If we are installing an iGTK (in AP or STA mode), we need to tell
 	 * the firmware this key will en/decrypt MGMT frames.
@@ -92,11 +88,7 @@ static u32 iwl_mld_get_key_sta_mask(struct iwl_mld *mld,
 		return BIT(link->mcast_sta.sta_id);
 	}
 
-	/* for client mode use the AP STA also for group keys */
-	if (!sta && vif->type == NL80211_IFTYPE_STATION)
-		sta = mld_vif->ap_sta;
-
-	/* STA should be non-NULL now */
+	/* STA should be non-NULL */
 	if (WARN_ON(!sta))
 		return 0;
 
@@ -178,34 +170,69 @@ static void iwl_mld_remove_key_from_fw(struct iwl_mld *mld, u32 sta_mask,
 	iwl_mld_send_cmd_pdu(mld, WIDE_ID(DATA_PATH_GROUP, SEC_KEY_CMD), &cmd);
 }
 
+static struct ieee80211_key_conf **
+iwl_mld_get_igtk_ptr(struct ieee80211_vif *vif,
+		     struct ieee80211_sta *sta,
+		     struct ieee80211_key_conf *key)
+{
+	struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
+	/* key's link ID is set to -1 for non-MLO */
+	int link_id = key->link_id < 0 ? 0 : key->link_id;
+	struct iwl_mld_link_sta *mld_ap_link_sta;
+	struct iwl_mld_link *mld_link;
+	struct iwl_mld_sta *mld_sta;
+
+	if (key->keyidx != 4 && key->keyidx != 5)
+		return NULL;
+
+	switch (vif->type) {
+	case NL80211_IFTYPE_STATION:
+		if (WARN_ON(!sta))
+			return NULL;
+
+		mld_sta = iwl_mld_sta_from_mac80211(sta);
+		mld_ap_link_sta = iwl_mld_link_sta_dereference_check(mld_sta,
+								     link_id);
+		if (WARN_ON(!mld_ap_link_sta))
+			return NULL;
+
+		return &mld_ap_link_sta->rx_igtk;
+	case NL80211_IFTYPE_NAN:
+		if (sta) {
+			mld_sta = iwl_mld_sta_from_mac80211(sta);
+
+			return &mld_sta->deflink.rx_igtk;
+		}
+
+		return &mld_vif->deflink.tx_igtk;
+	case NL80211_IFTYPE_AP:
+		mld_link = iwl_mld_link_dereference_check(mld_vif, link_id);
+		if (WARN_ON(!mld_link))
+			return NULL;
+
+		return &mld_link->tx_igtk;
+	default:
+		WARN_ONCE(1, "invalid iftype %d for IGTK\n", vif->type);
+		return NULL;
+	}
+}
+
 void iwl_mld_remove_key(struct iwl_mld *mld, struct ieee80211_vif *vif,
 			struct ieee80211_sta *sta,
 			struct ieee80211_key_conf *key)
 {
 	u32 sta_mask = iwl_mld_get_key_sta_mask(mld, vif, sta, key);
 	u32 key_flags = iwl_mld_get_key_flags(mld, vif, sta, key);
-	struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
+	struct ieee80211_key_conf **igtk_ptr;
 
 	lockdep_assert_wiphy(mld->wiphy);
 
 	if (!sta_mask)
 		return;
 
-	if (key->keyidx == 4 || key->keyidx == 5) {
-		struct iwl_mld_link *mld_link;
-		unsigned int link_id = 0;
-
-		/* set to -1 for non-MLO right now */
-		if (key->link_id >= 0)
-			link_id = key->link_id;
-
-		mld_link = iwl_mld_link_dereference_check(mld_vif, link_id);
-		if (WARN_ON(!mld_link))
-			return;
-
-		if (mld_link->igtk == key)
-			mld_link->igtk = NULL;
-
+	igtk_ptr = iwl_mld_get_igtk_ptr(vif, sta, key);
+	if (igtk_ptr && *igtk_ptr == key) {
+		*igtk_ptr = NULL;
 		mld->num_igtks--;
 	}
 
@@ -222,9 +249,7 @@ int iwl_mld_add_key(struct iwl_mld *mld,
 {
 	u32 sta_mask = iwl_mld_get_key_sta_mask(mld, vif, sta, key);
 	u32 key_flags = iwl_mld_get_key_flags(mld, vif, sta, key);
-	struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
-	struct iwl_mld_link *mld_link = NULL;
-	bool igtk = key->keyidx == 4 || key->keyidx == 5;
+	struct ieee80211_key_conf **igtk_ptr;
 	int ret;
 
 	lockdep_assert_wiphy(mld->wiphy);
@@ -232,36 +257,25 @@ int iwl_mld_add_key(struct iwl_mld *mld,
 	if (!sta_mask)
 		return -EINVAL;
 
-	if (igtk) {
-		if (mld->num_igtks == IWL_MAX_NUM_IGTKS)
+	igtk_ptr = iwl_mld_get_igtk_ptr(vif, sta, key);
+	if (igtk_ptr) {
+		if (mld->num_igtks == mld->fw->ucode_capa.num_mcast_key_entries)
 			return -EOPNOTSUPP;
 
-		u8 link_id = 0;
-
-		/* set to -1 for non-MLO right now */
-		if (key->link_id >= 0)
-			link_id = key->link_id;
-
-		mld_link = iwl_mld_link_dereference_check(mld_vif, link_id);
-
-		if (WARN_ON(!mld_link))
-			return -EINVAL;
-
-		if (mld_link->igtk) {
+		if (*igtk_ptr) {
 			IWL_DEBUG_MAC80211(mld, "remove old IGTK %d\n",
-					   mld_link->igtk->keyidx);
-			iwl_mld_remove_key(mld, vif, sta, mld_link->igtk);
+					   (*igtk_ptr)->keyidx);
+			iwl_mld_remove_key(mld, vif, sta, *igtk_ptr);
 		}
-
-		WARN_ON(mld_link->igtk);
 	}
 
 	ret = iwl_mld_add_key_to_fw(mld, sta_mask, key_flags, key);
 	if (ret)
 		return ret;
 
-	if (mld_link) {
-		mld_link->igtk = key;
+	if (igtk_ptr) {
+		WARN_ON(*igtk_ptr);
+		*igtk_ptr = key;
 		mld->num_igtks++;
 	}
 
