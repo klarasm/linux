@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
  * Copyright (C) 2017 Intel Deutschland GmbH
- * Copyright (C) 2018-2025 Intel Corporation
+ * Copyright (C) 2018-2026 Intel Corporation
  */
 #include "iwl-trans.h"
 #include "iwl-prph.h"
@@ -327,6 +327,13 @@ static void iwl_pcie_get_rf_name(struct iwl_trans *trans)
 		else
 			pos = scnprintf(buf, buflen, "WH");
 		break;
+	case CSR_HW_RFID_TYPE(CSR_HW_RF_ID_TYPE_PE):
+		if (SILICON_Z_STEP ==
+		    CSR_HW_RFID_STEP(trans->info.hw_rf_id))
+			pos = scnprintf(buf, buflen, "PETC");
+		else
+			pos = scnprintf(buf, buflen, "PE");
+		break;
 	default:
 		return;
 	}
@@ -398,9 +405,9 @@ void iwl_trans_pcie_gen2_fw_alive(struct iwl_trans *trans)
 	mutex_unlock(&trans_pcie->mutex);
 
 	if (trans->mac_cfg->device_family >= IWL_DEVICE_FAMILY_BZ)
-		trans->step_urm = !!(iwl_read_umac_prph(trans,
-							CNVI_PMU_STEP_FLOW) &
-					CNVI_PMU_STEP_FLOW_FORCE_URM);
+		trans->step_urm = !!(iwl_read_prph(trans,
+						   CNVI_PMU_STEP_FLOW) &
+				     CNVI_PMU_STEP_FLOW_FORCE_URM);
 }
 
 static bool iwl_pcie_set_ltr(struct iwl_trans *trans)
