@@ -63,6 +63,7 @@ unset fastclose
 unset fullmesh
 unset speed
 unset bind_addr
+unset ifaces_nr
 unset join_syn_rej
 unset join_csum_ns1
 unset join_csum_ns2
@@ -146,7 +147,7 @@ init_partial()
 	# ns1eth4    ns2eth4
 
 	local i
-	for i in $(seq 1 4); do
+	for i in $(seq 1 "${ifaces_nr:-4}"); do
 		ip link add ns1eth$i netns "$ns1" type veth peer name ns2eth$i netns "$ns2"
 		ip -net "$ns1" addr add 10.0.$i.1/24 dev ns1eth$i
 		ip -net "$ns1" addr add dead:beef:$i::1/64 dev ns1eth$i nodad
@@ -165,7 +166,7 @@ init_partial()
 init_shapers()
 {
 	local i
-	for i in $(seq 1 4); do
+	for i in $(seq 1 "${ifaces_nr:-4}"); do
 		tc -n $ns1 qdisc add dev ns1eth$i root netem rate 20mbit delay 1ms
 		tc -n $ns2 qdisc add dev ns2eth$i root netem rate 20mbit delay 1ms
 	done
@@ -508,6 +509,19 @@ reset_with_tcp_filter()
 			-p tcp \
 			-j "${target}"; then
 		mark_as_skipped "unable to set the filter rules"
+		return 1
+	fi
+}
+
+# For kernel supporting limits above 8
+# $1: title ; $2,4: addrs limit ns1,2 ; $3,5: subflows limit ns1,2
+reset_with_high_limits()
+{
+	reset "${1}" || return 1
+
+	if ! pm_nl_set_limits "${ns1}" "${2}" "${3}" 2>/dev/null ||
+	   ! pm_nl_set_limits "${ns2}" "${4}" "${5}" 2>/dev/null; then
+		mark_as_skipped "unable to set the limits to ${*:2}"
 		return 1
 	fi
 }
@@ -1823,6 +1837,22 @@ chk_add_tx_nr()
 		print_skip
 	elif [ "$count" != "$echo_tx_nr" ]; then
 		fail_test "got $count ADD_ADDR echo[s] TX, expected $echo_tx_nr"
+	else
+		print_ok
+	fi
+}
+
+chk_add_drop_tx_nr()
+{
+	local drop_tx_nr=$1
+	local count
+
+	print_check "add addr tx drop"
+	count=$(mptcp_lib_get_counter ${ns1} "MPTcpExtAddAddrTxDrop")
+	if [ -z "$count" ]; then
+		print_skip
+	elif [ "$count" != "$drop_tx_nr" ]; then
+		fail_test "got $count ADD_ADDR drop[s] TX, expected $drop_tx_nr"
 	else
 		print_ok
 	fi
@@ -3278,6 +3308,21 @@ add_addr_ports_tests()
 
 		chk_mpc_endp_attempt ${retl} 1
 	fi
+
+	# first signal address drops, second one still progresses
+	if reset "signal addr list progresses after tx drop"; then
+		pm_nl_set_limits $ns1 0 2
+		pm_nl_set_limits $ns2 1 0
+		ip netns exec $ns1 sysctl -q net.ipv4.tcp_timestamps=1
+		ip netns exec $ns2 sysctl -q net.ipv4.tcp_timestamps=1
+
+		pm_nl_add_endpoint $ns1 dead:beef:2::1 flags signal port 10100
+		pm_nl_add_endpoint $ns1 dead:beef:3::1 flags signal
+		run_tests $ns1 $ns2 dead:beef:1::1
+		chk_add_drop_tx_nr 1
+		chk_add_tx_nr 1 1
+		chk_add_nr 1 1 0
+	fi
 }
 
 bind_tests()
@@ -3669,6 +3714,21 @@ fullmesh_tests()
 		chk_prio_nr 0 1 1 0
 		chk_rm_nr 0 1
 	fi
+
+	# fullmesh in 8x8 to create 63 additional subflows
+	if ifaces_nr=8 reset_with_high_limits "fullmesh 8x8" 64 64 64 64; then
+		# higher chance to lose ADD_ADDR: allow retransmissions
+		ip netns exec $ns1 sysctl -q net.mptcp.add_addr_timeout=1
+		local i
+		for i in $(seq 1 8); do
+			pm_nl_add_endpoint $ns2 10.0.$i.2 flags subflow,fullmesh
+			pm_nl_add_endpoint $ns1 10.0.$i.1 flags signal
+		done
+		speed=slow \
+			run_tests $ns1 $ns2 10.0.1.1
+		chk_join_nr 63 63 63
+	fi
+
 }
 
 fastclose_tests()
