@@ -722,7 +722,7 @@ static u32 *it66121_bridge_atomic_get_input_bus_fmts(struct drm_bridge *bridge,
 }
 
 static void it66121_bridge_enable(struct drm_bridge *bridge,
-				  struct drm_atomic_state *state)
+				  struct drm_atomic_commit *state)
 {
 	struct it66121_ctx *ctx = container_of(bridge, struct it66121_ctx, bridge);
 
@@ -732,7 +732,7 @@ static void it66121_bridge_enable(struct drm_bridge *bridge,
 }
 
 static void it66121_bridge_disable(struct drm_bridge *bridge,
-				   struct drm_atomic_state *state)
+				   struct drm_atomic_commit *state)
 {
 	struct it66121_ctx *ctx = container_of(bridge, struct it66121_ctx, bridge);
 
@@ -1558,6 +1558,11 @@ static int it66121_probe(struct i2c_client *client)
 		dev_err(dev, "Failed to enable power supplies\n");
 		return ret;
 	}
+
+	ctx->gpio_reset = devm_gpiod_get(dev, "reset", GPIOD_OUT_LOW);
+	if (IS_ERR(ctx->gpio_reset))
+		return dev_err_probe(dev, PTR_ERR(ctx->gpio_reset),
+				     "Failed to get reset GPIO\n");
 
 	it66121_hw_reset(ctx);
 

@@ -489,7 +489,8 @@ static int cfg80211_set_encryption(struct cfg80211_registered_device *rdev,
 	if (addr)
 		tx_key = false;
 
-	if (cfg80211_validate_key_settings(rdev, params, idx, pairwise, addr))
+	if (cfg80211_validate_key_settings(rdev, wdev, params, idx,
+					   pairwise, addr))
 		return -EINVAL;
 
 	err = 0;
@@ -788,6 +789,8 @@ static int cfg80211_wext_siwfreq(struct net_device *dev,
 		chandef.center_freq1 = freq;
 		chandef.chan = ieee80211_get_channel(&rdev->wiphy, freq);
 		if (!chandef.chan)
+			return -EINVAL;
+		if (!cfg80211_chandef_valid(&chandef))
 			return -EINVAL;
 		return cfg80211_set_monitor_channel(rdev, dev, &chandef);
 	case NL80211_IFTYPE_MESH_POINT:
