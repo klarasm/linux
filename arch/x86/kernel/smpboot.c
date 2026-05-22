@@ -424,6 +424,21 @@ static const struct x86_cpu_id intel_cod_cpu[] = {
 	{}
 };
 
+/*
+ * Allows splitting the LLC by matching 'core_id % split_llc'.
+ *
+ * This is mostly a debug hack to emulate systems with multiple LLCs per node
+ * on systems that do not naturally have this.
+ */
+static unsigned int split_llc = 0;
+
+static int __init split_llc_setup(char *str)
+{
+	get_option(&str, &split_llc);
+	return 0;
+}
+early_param("split_llc", split_llc_setup);
+
 static bool match_llc(struct cpuinfo_x86 *c, struct cpuinfo_x86 *o)
 {
 	const struct x86_cpu_id *id = x86_match_cpu(intel_cod_cpu);
@@ -436,6 +451,11 @@ static bool match_llc(struct cpuinfo_x86 *c, struct cpuinfo_x86 *o)
 
 	/* Do not match if LLC id does not match: */
 	if (per_cpu_llc_id(cpu1) != per_cpu_llc_id(cpu2))
+		return false;
+
+	if (split_llc &&
+	    (per_cpu_core_id(cpu1) % split_llc) !=
+	    (per_cpu_core_id(cpu2) % split_llc))
 		return false;
 
 	/*
@@ -1256,6 +1276,7 @@ void __init native_smp_prepare_boot_cpu(void)
 		switch_gdt_and_percpu_base(me);
 
 	native_pv_lock_init();
+	native_pv_tlb_init();
 }
 
 void __init native_smp_cpus_done(unsigned int max_cpus)
