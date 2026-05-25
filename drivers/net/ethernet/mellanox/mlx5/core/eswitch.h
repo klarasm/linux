@@ -36,6 +36,7 @@
 #include <linux/if_ether.h>
 #include <linux/if_link.h>
 #include <linux/atomic.h>
+#include <linux/wait.h>
 #include <linux/xarray.h>
 #include <net/devlink.h>
 #include <linux/mlx5/device.h>
@@ -68,6 +69,14 @@ struct mlx5_mapped_obj {
 		} sample;
 		u32 int_port_metadata;
 	};
+};
+
+struct mlx5_esw_pf_info {
+	bool pf_not_exist;
+	bool pf_disabled;
+	u16 num_of_vfs;
+	u16 total_vfs;
+	u16 host_number;
 };
 
 #ifdef CONFIG_MLX5_ESWITCH
@@ -316,6 +325,7 @@ struct mlx5_esw_offload {
 	DECLARE_HASHTABLE(termtbl_tbl, 8);
 	struct mutex termtbl_mutex; /* protects termtbl hash */
 	struct xarray vhca_map;
+	struct mutex reps_lock; /* protects representor load/unload/register */
 	const struct mlx5_eswitch_rep_ops *rep_ops[NUM_REP_TYPES];
 	u8 inline_mode;
 	atomic64_t num_flows;
@@ -337,11 +347,11 @@ struct mlx5_host_work {
 	struct work_struct	work;
 	struct mlx5_eswitch	*esw;
 	int			work_gen;
+	void (*func)(struct mlx5_eswitch *esw);
 };
 
 struct mlx5_esw_functions {
 	struct mlx5_nb		nb;
-	atomic_t		generation;
 	bool			host_funcs_disabled;
 	u16			num_vfs;
 	u16			num_ec_vfs;
@@ -373,6 +383,7 @@ struct mlx5_eswitch {
 	struct dentry *debugfs_root;
 	struct workqueue_struct *work_queue;
 	struct xarray vports;
+	struct xarray vhca_type_map;
 	u32 flags;
 	int                     total_vports;
 	int                     enabled_vports;
@@ -386,6 +397,7 @@ struct mlx5_eswitch {
 	 */
 	struct rw_semaphore mode_lock;
 	atomic64_t user_count;
+	wait_queue_head_t work_queue_wait;
 
 	/* Protected with the E-Switch qos domain lock. */
 	struct {
@@ -411,6 +423,7 @@ struct mlx5_eswitch {
 	struct mlx5_devcom_comp_dev *devcom;
 	u16 enabled_ipsec_vf_count;
 	bool eswitch_operation_in_progress;
+	atomic_t generation;
 };
 
 void esw_offloads_disable(struct mlx5_eswitch *esw);
@@ -645,6 +658,8 @@ bool mlx5_esw_multipath_prereq(struct mlx5_core_dev *dev0,
 			       struct mlx5_core_dev *dev1);
 
 const u32 *mlx5_esw_query_functions(struct mlx5_core_dev *dev);
+struct mlx5_esw_pf_info mlx5_esw_get_host_pf_info(struct mlx5_core_dev *dev,
+						  const u32 *out);
 int mlx5_esw_host_pf_enable_hca(struct mlx5_core_dev *dev);
 int mlx5_esw_host_pf_disable_hca(struct mlx5_core_dev *dev);
 
@@ -685,7 +700,7 @@ static inline bool mlx5_esw_is_owner(struct mlx5_eswitch *esw, u16 vport_num,
 static inline u16 mlx5_eswitch_first_host_vport_num(struct mlx5_core_dev *dev)
 {
 	return mlx5_core_is_ecpf_esw_manager(dev) ?
-		MLX5_VPORT_PF : MLX5_VPORT_FIRST_VF;
+		MLX5_VPORT_HOST_PF : MLX5_VPORT_FIRST_HOST_VF;
 }
 
 static inline bool mlx5_eswitch_is_funcs_handler(const struct mlx5_core_dev *dev)
@@ -861,6 +876,7 @@ void mlx5_esw_vport_vhca_id_unmap(struct mlx5_eswitch *esw,
 				  struct mlx5_vport *vport);
 int mlx5_eswitch_vhca_id_to_vport(struct mlx5_eswitch *esw, u16 vhca_id, u16 *vport_num);
 bool mlx5_esw_vport_vhca_id(struct mlx5_eswitch *esw, u16 vportn, u16 *vhca_id);
+u16 mlx5_esw_vhca_id_to_func_type(struct mlx5_core_dev *dev, u16 vhca_id);
 
 void mlx5_esw_offloads_rep_remove(struct mlx5_eswitch *esw,
 				  const struct mlx5_vport *vport);
@@ -949,6 +965,8 @@ mlx5_esw_lag_demux_fg_create(struct mlx5_eswitch *esw,
 struct mlx5_flow_handle *
 mlx5_esw_lag_demux_rule_create(struct mlx5_eswitch *esw, u16 vport_num,
 			       struct mlx5_flow_table *lag_ft);
+void mlx5_esw_reps_block(struct mlx5_eswitch *esw);
+void mlx5_esw_reps_unblock(struct mlx5_eswitch *esw);
 #else  /* CONFIG_MLX5_ESWITCH */
 /* eswitch API stubs */
 static inline int  mlx5_eswitch_init(struct mlx5_core_dev *dev) { return 0; }
@@ -967,6 +985,12 @@ int mlx5_eswitch_set_vport_state(struct mlx5_eswitch *esw, u16 vport, int link_s
 static inline const u32 *mlx5_esw_query_functions(struct mlx5_core_dev *dev)
 {
 	return ERR_PTR(-EOPNOTSUPP);
+}
+
+static inline struct mlx5_esw_pf_info
+mlx5_esw_get_host_pf_info(struct mlx5_core_dev *dev, const u32 *out)
+{
+	return (struct mlx5_esw_pf_info) {};
 }
 
 static inline struct mlx5_flow_handle *
@@ -1026,10 +1050,19 @@ mlx5_esw_host_functions_enabled(const struct mlx5_core_dev *dev)
 	return true;
 }
 
+static inline void mlx5_esw_reps_block(struct mlx5_eswitch *esw) {}
+static inline void mlx5_esw_reps_unblock(struct mlx5_eswitch *esw) {}
+
 static inline bool
 mlx5_esw_vport_vhca_id(struct mlx5_eswitch *esw, u16 vportn, u16 *vhca_id)
 {
 	return false;
+}
+
+static inline u16
+mlx5_esw_vhca_id_to_func_type(struct mlx5_core_dev *dev, u16 vhca_id)
+{
+	return MLX5_FUNC_TYPE_NONE;
 }
 
 static inline void

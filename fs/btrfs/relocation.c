@@ -407,7 +407,7 @@ static noinline_for_stack struct btrfs_backref_node *build_backref_tree(
 			struct reloc_control *rc, struct btrfs_key *node_key,
 			int level, u64 bytenr)
 {
-	struct btrfs_backref_iter *iter;
+	struct btrfs_backref_iter iter;
 	struct btrfs_backref_cache *cache = &rc->backref_cache;
 	/* For searching parent of TREE_BLOCK_REF */
 	struct btrfs_path *path;
@@ -416,9 +416,9 @@ static noinline_for_stack struct btrfs_backref_node *build_backref_tree(
 	struct btrfs_backref_edge *edge;
 	int ret;
 
-	iter = btrfs_backref_iter_alloc(rc->extent_root->fs_info);
-	if (!iter)
-		return ERR_PTR(-ENOMEM);
+	ret = btrfs_backref_iter_init(&iter);
+	if (ret < 0)
+		return ERR_PTR(ret);
 	path = btrfs_alloc_path();
 	if (!path) {
 		ret = -ENOMEM;
@@ -435,7 +435,7 @@ static noinline_for_stack struct btrfs_backref_node *build_backref_tree(
 
 	/* Breadth-first search to build backref cache */
 	do {
-		ret = btrfs_backref_add_tree_node(trans, cache, path, iter,
+		ret = btrfs_backref_add_tree_node(trans, cache, path, &iter,
 						  node_key, cur);
 		if (ret < 0)
 			goto out;
@@ -460,8 +460,7 @@ static noinline_for_stack struct btrfs_backref_node *build_backref_tree(
 	if (handle_useless_nodes(rc, node))
 		node = NULL;
 out:
-	btrfs_free_path(iter->path);
-	kfree(iter);
+	btrfs_free_path(iter.path);
 	btrfs_free_path(path);
 	if (ret) {
 		btrfs_backref_error_cleanup(cache, node);
@@ -590,7 +589,7 @@ static struct btrfs_root *create_reloc_root(struct btrfs_trans_handle *trans,
 	struct btrfs_key root_key;
 	int ret = 0;
 
-	root_item = kmalloc(sizeof(*root_item), GFP_NOFS);
+	root_item = kmalloc_obj(*root_item, GFP_NOFS);
 	if (!root_item)
 		return ERR_PTR(-ENOMEM);
 
@@ -2944,7 +2943,7 @@ static int relocate_file_extent_cluster(struct reloc_control *rc)
 	if (!cluster->nr)
 		return 0;
 
-	ra = kzalloc(sizeof(*ra), GFP_NOFS);
+	ra = kzalloc_obj(*ra, GFP_NOFS);
 	if (!ra)
 		return -ENOMEM;
 
@@ -3863,7 +3862,7 @@ static int add_remap_tree_entries(struct btrfs_trans_handle *trans, struct btrfs
 
 	max_items = BTRFS_LEAF_DATA_SIZE(trans->fs_info) / sizeof(struct btrfs_item);
 
-	data_sizes = kzalloc(sizeof(u32) * min_t(u32, num_entries, max_items), GFP_NOFS);
+	data_sizes = kzalloc_objs(u32, min_t(u32, num_entries, max_items), GFP_NOFS);
 	if (!data_sizes)
 		return -ENOMEM;
 
@@ -4454,7 +4453,7 @@ static int create_remap_tree_entries(struct btrfs_trans_handle *trans,
 
 	btrfs_release_path(path);
 
-	space_runs = kmalloc(sizeof(*space_runs) * extent_count, GFP_NOFS);
+	space_runs = kmalloc_objs(*space_runs, extent_count, GFP_NOFS);
 	if (!space_runs) {
 		mutex_unlock(&bg->free_space_lock);
 		return -ENOMEM;
@@ -4543,7 +4542,7 @@ static int create_remap_tree_entries(struct btrfs_trans_handle *trans,
 	mutex_unlock(&bg->free_space_lock);
 
 	max_entries = extent_count + 2;
-	entries = kmalloc(sizeof(*entries) * max_entries, GFP_NOFS);
+	entries = kmalloc_objs(*entries, max_entries, GFP_NOFS);
 	if (!entries) {
 		ret = -ENOMEM;
 		goto out;
