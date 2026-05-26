@@ -1467,7 +1467,7 @@ struct gendisk *__alloc_disk_node(struct request_queue *q, int node_id,
 		goto out_free_bdi;
 
 	disk->node_id = node_id;
-	mutex_init(&disk->open_mutex);
+	mutex_init_with_key(&disk->open_mutex, &lkclass[1]);
 	xa_init(&disk->part_tbl);
 	if (xa_insert(&disk->part_tbl, 0, disk->part0, GFP_KERNEL))
 		goto out_destroy_part_tbl;
@@ -1482,7 +1482,7 @@ struct gendisk *__alloc_disk_node(struct request_queue *q, int node_id,
 	device_initialize(disk_to_dev(disk));
 	inc_diskseq(disk);
 	q->disk = disk;
-	lockdep_init_map(&disk->lockdep_map, "(bio completion)", lkclass, 0);
+	lockdep_init_map(&disk->lockdep_map, "(bio completion)", &lkclass[0], 0);
 #ifdef CONFIG_BLOCK_HOLDER_DEPRECATED
 	INIT_LIST_HEAD(&disk->slave_bdevs);
 #endif

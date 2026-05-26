@@ -63,7 +63,7 @@
 #include "dev.h"
 
 #define RTNL_MAX_TYPE		50
-#define RTNL_SLAVE_MAX_TYPE	44
+#define RTNL_SLAVE_MAX_TYPE	45
 
 struct rtnl_link {
 	rtnl_doit_func		doit;
@@ -750,12 +750,11 @@ static size_t rtnl_link_get_size(const struct net_device *dev)
 }
 
 static LIST_HEAD(rtnl_af_ops);
+static DEFINE_SPINLOCK(rtnl_af_ops_lock);
 
 static struct rtnl_af_ops *rtnl_af_lookup(const int family, int *srcu_index)
 {
 	struct rtnl_af_ops *ops;
-
-	ASSERT_RTNL();
 
 	rcu_read_lock();
 
@@ -791,9 +790,9 @@ int rtnl_af_register(struct rtnl_af_ops *ops)
 	if (err)
 		return err;
 
-	rtnl_lock();
+	spin_lock(&rtnl_af_ops_lock);
 	list_add_tail_rcu(&ops->list, &rtnl_af_ops);
-	rtnl_unlock();
+	spin_unlock(&rtnl_af_ops_lock);
 
 	return 0;
 }
@@ -805,9 +804,9 @@ EXPORT_SYMBOL_GPL(rtnl_af_register);
  */
 void rtnl_af_unregister(struct rtnl_af_ops *ops)
 {
-	rtnl_lock();
+	spin_lock(&rtnl_af_ops_lock);
 	list_del_rcu(&ops->list);
-	rtnl_unlock();
+	spin_unlock(&rtnl_af_ops_lock);
 
 	synchronize_rcu();
 	synchronize_srcu(&ops->srcu);
@@ -1264,11 +1263,11 @@ static size_t rtnl_devlink_port_size(const struct net_device *dev)
 	return size;
 }
 
-static size_t rtnl_dpll_pin_size(const struct net_device *dev)
+static size_t rtnl_dpll_pin_size(void)
 {
 	size_t size = nla_total_size(0); /* nest IFLA_DPLL_PIN */
 
-	size += dpll_netdev_pin_handle_size(dev);
+	size += dpll_netdev_pin_handle_size();
 
 	return size;
 }
@@ -1295,7 +1294,12 @@ static noinline size_t if_nlmsg_size(const struct net_device *dev,
 
 	size = NLMSG_ALIGN(sizeof(struct ifinfomsg))
 	       + nla_total_size(IFNAMSIZ) /* IFLA_IFNAME */
-	       + nla_total_size(IFALIASZ) /* IFLA_IFALIAS */
+	       + rtnl_prop_list_size(dev);
+
+	if (ext_filter_mask & RTEXT_FILTER_NAME_ONLY)
+		return size;
+
+	size += nla_total_size(IFALIASZ) /* IFLA_IFALIAS */
 	       + nla_total_size(IFNAMSIZ) /* IFLA_QDISC */
 	       + nla_total_size_64bit(sizeof(struct rtnl_link_ifmap))
 	       + nla_total_size(MAX_ADDR_LEN) /* IFLA_ADDRESS */
@@ -1342,10 +1346,9 @@ static noinline size_t if_nlmsg_size(const struct net_device *dev,
 	       + nla_total_size(4)  /* IFLA_CARRIER_DOWN_COUNT */
 	       + nla_total_size(4)  /* IFLA_MIN_MTU */
 	       + nla_total_size(4)  /* IFLA_MAX_MTU */
-	       + rtnl_prop_list_size(dev)
 	       + nla_total_size(MAX_ADDR_LEN) /* IFLA_PERM_ADDRESS */
 	       + rtnl_devlink_port_size(dev)
-	       + rtnl_dpll_pin_size(dev)
+	       + rtnl_dpll_pin_size()
 	       + nla_total_size(8)  /* IFLA_MAX_PACING_OFFLOAD_HORIZON */
 	       + nla_total_size(2)  /* IFLA_HEADROOM */
 	       + nla_total_size(2)  /* IFLA_TAILROOM */
@@ -1941,15 +1944,18 @@ static int rtnl_fill_alt_ifnames(struct sk_buff *skb,
 	struct netdev_name_node *name_node;
 	int count = 0;
 
+	rcu_read_lock();
 	list_for_each_entry_rcu(name_node, &dev->name_node->list, list) {
-		if (nla_put_string(skb, IFLA_ALT_IFNAME, name_node->name))
+		if (nla_put_string(skb, IFLA_ALT_IFNAME, name_node->name)) {
+			rcu_read_unlock();
 			return -EMSGSIZE;
+		}
 		count++;
 	}
+	rcu_read_unlock();
 	return count;
 }
 
-/* RCU protected. */
 static int rtnl_fill_prop_list(struct sk_buff *skb,
 			       const struct net_device *dev)
 {
@@ -2072,11 +2078,18 @@ static int rtnl_fill_ifinfo(struct sk_buff *skb,
 	ifm->ifi_flags = netif_get_flags(dev);
 	ifm->ifi_change = change;
 
-	if (tgt_netnsid >= 0 && nla_put_s32(skb, IFLA_TARGET_NETNSID, tgt_netnsid))
-		goto nla_put_failure;
-
 	netdev_copy_name(dev, devname);
 	if (nla_put_string(skb, IFLA_IFNAME, devname))
+		goto nla_put_failure;
+
+	if (rtnl_fill_prop_list(skb, dev))
+		goto nla_put_failure;
+
+	if (ext_filter_mask & RTEXT_FILTER_NAME_ONLY)
+		goto end;
+
+	if (tgt_netnsid >= 0 &&
+	    nla_put_s32(skb, IFLA_TARGET_NETNSID, tgt_netnsid))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, IFLA_TXQLEN, READ_ONCE(dev->tx_queue_len)) ||
@@ -2191,8 +2204,6 @@ static int rtnl_fill_ifinfo(struct sk_buff *skb,
 		goto nla_put_failure_rcu;
 	if (rtnl_fill_link_ifmap(skb, dev))
 		goto nla_put_failure_rcu;
-	if (rtnl_fill_prop_list(skb, dev))
-		goto nla_put_failure_rcu;
 	rcu_read_unlock();
 
 	if (dev->dev.parent &&
@@ -2211,6 +2222,7 @@ static int rtnl_fill_ifinfo(struct sk_buff *skb,
 	if (rtnl_fill_dpll_pin(skb, dev))
 		goto nla_put_failure;
 
+end:
 	nlmsg_end(skb, nlh);
 	return 0;
 

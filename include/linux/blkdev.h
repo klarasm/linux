@@ -990,9 +990,9 @@ struct gendisk *__blk_alloc_disk(struct queue_limits *lim, int node,
  */
 #define blk_alloc_disk(lim, node_id)					\
 ({									\
-	static struct lock_class_key __key;				\
+	static struct lock_class_key __key[2];				\
 									\
-	__blk_alloc_disk(lim, node_id, &__key);				\
+	__blk_alloc_disk(lim, node_id, __key);				\
 })
 
 int __register_blkdev(unsigned int major, const char *name,
@@ -1040,7 +1040,6 @@ extern const char *blk_op_str(enum req_op op);
 
 int blk_status_to_errno(blk_status_t status);
 blk_status_t errno_to_blk_status(int errno);
-const char *blk_status_to_str(blk_status_t status);
 
 /* only poll the hardware once, don't continue until a completion was found */
 #define BLK_POLL_ONESHOT		(1 << 0)

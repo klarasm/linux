@@ -60,6 +60,7 @@
 #include "verity.h"
 #include "super.h"
 #include "extent-tree.h"
+#include "tree-log.h"
 #define CREATE_TRACE_POINTS
 #include <trace/events/btrfs.h>
 
@@ -1633,8 +1634,7 @@ static inline int btrfs_calc_avail_data_space(struct btrfs_fs_info *fs_info,
 		}
 	}
 
-	devices_info = kmalloc_array(nr_devices, sizeof(*devices_info),
-			       GFP_KERNEL);
+	devices_info = kmalloc_objs(*devices_info, nr_devices);
 	if (!devices_info)
 		return -ENOMEM;
 
@@ -1873,6 +1873,7 @@ static int btrfs_get_tree_super(struct fs_context *fc)
 	fs_info->fs_devices = fs_devices;
 	mutex_unlock(&uuid_mutex);
 
+	fc->sb_flags |= SB_NOSEC;
 
 	sb = sget_fc(fc, btrfs_fc_test_super, set_anon_super_fc);
 	if (IS_ERR(sb)) {
@@ -2604,6 +2605,9 @@ static const struct init_sequence mod_init_seq[] = {
 	}, {
 		.init_func = btrfs_init_compress,
 		.exit_func = btrfs_exit_compress,
+	}, {
+		.init_func = btrfs_init_block_group,
+		.exit_func = btrfs_exit_block_group,
 	}, {
 		.init_func = btrfs_init_cachep,
 		.exit_func = btrfs_destroy_cachep,
