@@ -34,6 +34,7 @@
 
 #include <asm/microcode.h>
 #include <asm/processor.h>
+#include <asm/cpuid/api.h>
 #include <asm/cmdline.h>
 #include <asm/setup.h>
 #include <asm/cpu.h>
@@ -322,7 +323,7 @@ static u32 get_patch_level(void)
 {
 	u32 rev, dummy __always_unused;
 
-	if (IS_ENABLED(CONFIG_MICROCODE_DBG) && hypervisor_present) {
+	if (IS_ENABLED(CONFIG_MICROCODE_DBG) && x86_hypervisor_present) {
 		int cpu = smp_processor_id();
 
 		if (!microcode_rev[cpu]) {
@@ -714,7 +715,7 @@ static bool __apply_microcode_amd(struct microcode_amd *mc, u32 *cur_rev,
 			invlpg(p_addr_end);
 	}
 
-	if (IS_ENABLED(CONFIG_MICROCODE_DBG) && hypervisor_present)
+	if (IS_ENABLED(CONFIG_MICROCODE_DBG) && x86_hypervisor_present)
 		microcode_rev[smp_processor_id()] = mc->hdr.patch_id;
 
 	/* verify patch application was successful */
