@@ -385,7 +385,7 @@ int btrfs_get_extent_inline_ref_type(const struct extent_buffer *eb,
 					return type;
 			}
 		} else {
-			ASSERT(is_data == BTRFS_REF_TYPE_ANY);
+			ASSERT(is_data == BTRFS_REF_TYPE_ANY, "is_data=%d", is_data);
 			return type;
 		}
 	}
@@ -2108,7 +2108,8 @@ static noinline int __btrfs_run_delayed_refs(struct btrfs_trans_handle *trans,
 			locked_ref = btrfs_select_ref_head(fs_info, delayed_refs);
 			if (IS_ERR_OR_NULL(locked_ref)) {
 				if (PTR_ERR(locked_ref) == -EAGAIN) {
-					continue;
+					count++;
+					goto again;
 				} else {
 					break;
 				}
@@ -2156,7 +2157,7 @@ static noinline int __btrfs_run_delayed_refs(struct btrfs_trans_handle *trans,
 		 * Either success case or btrfs_run_delayed_refs_for_head
 		 * returned -EAGAIN, meaning we need to select another head
 		 */
-
+again:
 		locked_ref = NULL;
 		cond_resched();
 	} while ((min_bytes != U64_MAX && bytes_processed < min_bytes) ||
@@ -2531,8 +2532,11 @@ int btrfs_cross_ref_exist(struct btrfs_inode *inode, u64 offset,
 				struct btrfs_key key;
 
 				btrfs_item_key_to_cpu(leaf, &key, path->slots[0]);
-				ASSERT(key.objectid == bytenr);
-				ASSERT(key.type == BTRFS_EXTENT_ITEM_KEY);
+				ASSERT(key.objectid == bytenr,
+				       "key.objectid=%llu bytenr=%llu",
+				       key.objectid, bytenr);
+				ASSERT(key.type == BTRFS_EXTENT_ITEM_KEY, "key.type=%u",
+				       key.type);
 			}
 		}
 
@@ -4598,10 +4602,12 @@ static noinline int find_free_extent(struct btrfs_root *root,
 		/* Use dedicated sub-space_info for dedicated block group users. */
 		if (ffe_ctl->for_data_reloc) {
 			space_info = space_info->sub_group[0];
-			ASSERT(space_info->subgroup_id == BTRFS_SUB_GROUP_DATA_RELOC);
+			ASSERT(space_info->subgroup_id == BTRFS_SUB_GROUP_DATA_RELOC,
+			       "space_info->subgroup_id=%d", space_info->subgroup_id);
 		} else if (ffe_ctl->for_treelog) {
 			space_info = space_info->sub_group[0];
-			ASSERT(space_info->subgroup_id == BTRFS_SUB_GROUP_TREELOG);
+			ASSERT(space_info->subgroup_id == BTRFS_SUB_GROUP_TREELOG,
+			       "space_info->subgroup_id=%d", space_info->subgroup_id);
 		}
 	}
 	if (!space_info) {
@@ -5781,16 +5787,21 @@ static int check_next_block_uptodate(struct btrfs_trans_handle *trans,
 
 	generation = btrfs_node_ptr_generation(path->nodes[level], path->slots[level]);
 
-	if (btrfs_buffer_uptodate(next, generation, NULL))
-		return 0;
-
 	check.level = level - 1;
 	check.transid = generation;
 	check.owner_root = btrfs_root_id(root);
 	check.has_first_key = true;
 	btrfs_node_key_to_cpu(path->nodes[level], &check.first_key, path->slots[level]);
 
+	ret = btrfs_buffer_uptodate(next, generation, &check);
+	if (ret > 0)
+		return 0;
 	btrfs_tree_unlock(next);
+	if (ret < 0) {
+		free_extent_buffer(next);
+		return ret;
+	}
+
 	if (level == 1)
 		reada_walk_down(trans, root, wc, path);
 	ret = btrfs_read_extent_buffer(next, &check);
@@ -6645,7 +6656,7 @@ static int btrfs_trim_free_extents_throttle(struct btrfs_device *device,
 		start = max(start, cur_start);
 
 		/* Check if there are any CHUNK_* bits left */
-		if (start > device->total_bytes) {
+		if (unlikely(start > device->total_bytes)) {
 			DEBUG_WARN();
 			btrfs_warn(fs_info,
 "ignoring attempt to trim beyond device size: offset %llu length %llu device %s device size %llu",

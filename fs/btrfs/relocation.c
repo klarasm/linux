@@ -407,7 +407,7 @@ static noinline_for_stack struct btrfs_backref_node *build_backref_tree(
 			struct reloc_control *rc, struct btrfs_key *node_key,
 			int level, u64 bytenr)
 {
-	struct btrfs_backref_iter *iter;
+	struct btrfs_backref_iter iter;
 	struct btrfs_backref_cache *cache = &rc->backref_cache;
 	/* For searching parent of TREE_BLOCK_REF */
 	struct btrfs_path *path;
@@ -416,9 +416,9 @@ static noinline_for_stack struct btrfs_backref_node *build_backref_tree(
 	struct btrfs_backref_edge *edge;
 	int ret;
 
-	iter = btrfs_backref_iter_alloc(rc->extent_root->fs_info);
-	if (!iter)
-		return ERR_PTR(-ENOMEM);
+	ret = btrfs_backref_iter_init(&iter);
+	if (ret < 0)
+		return ERR_PTR(ret);
 	path = btrfs_alloc_path();
 	if (!path) {
 		ret = -ENOMEM;
@@ -435,7 +435,7 @@ static noinline_for_stack struct btrfs_backref_node *build_backref_tree(
 
 	/* Breadth-first search to build backref cache */
 	do {
-		ret = btrfs_backref_add_tree_node(trans, cache, path, iter,
+		ret = btrfs_backref_add_tree_node(trans, cache, path, &iter,
 						  node_key, cur);
 		if (ret < 0)
 			goto out;
@@ -460,8 +460,7 @@ static noinline_for_stack struct btrfs_backref_node *build_backref_tree(
 	if (handle_useless_nodes(rc, node))
 		node = NULL;
 out:
-	btrfs_free_path(iter->path);
-	kfree(iter);
+	btrfs_free_path(iter.path);
 	btrfs_free_path(path);
 	if (ret) {
 		btrfs_backref_error_cleanup(cache, node);
@@ -590,7 +589,7 @@ static struct btrfs_root *create_reloc_root(struct btrfs_trans_handle *trans,
 	struct btrfs_key root_key;
 	int ret = 0;
 
-	root_item = kmalloc(sizeof(*root_item), GFP_NOFS);
+	root_item = kmalloc_obj(*root_item, GFP_NOFS);
 	if (!root_item)
 		return ERR_PTR(-ENOMEM);
 
@@ -814,6 +813,7 @@ static int get_new_location(struct inode *reloc_inode, u64 *new_bytenr,
 			    u64 bytenr, u64 num_bytes)
 {
 	struct btrfs_root *root = BTRFS_I(reloc_inode)->root;
+	struct btrfs_fs_info *fs_info = root->fs_info;
 	BTRFS_PATH_AUTO_FREE(path);
 	struct btrfs_file_extent_item *fi;
 	struct extent_buffer *leaf;
@@ -835,10 +835,23 @@ static int get_new_location(struct inode *reloc_inode, u64 *new_bytenr,
 	fi = btrfs_item_ptr(leaf, path->slots[0],
 			    struct btrfs_file_extent_item);
 
-	BUG_ON(btrfs_file_extent_offset(leaf, fi) ||
-	       btrfs_file_extent_compression(leaf, fi) ||
-	       btrfs_file_extent_encryption(leaf, fi) ||
-	       btrfs_file_extent_other_encoding(leaf, fi));
+	/*
+	 * The cluster-boundary key searched above is always written by
+	 * relocation with offset 0: either by insert_prealloc_file_extent()
+	 * (memsets the stack item to 0) or by the front portion of a partial
+	 * writeback (offset=0 by construction). A non-zero value here means
+	 * the on-disk leaf does not match what relocation wrote, i.e.
+	 * corruption. The other encoding fields are caught earlier by
+	 * tree-checker's check_extent_data_item().
+	 */
+	if (unlikely(btrfs_file_extent_offset(leaf, fi))) {
+		btrfs_print_leaf(leaf);
+		btrfs_err(fs_info,
+"unexpected non-zero offset in file extent item for data reloc inode %llu key offset %llu offset %llu",
+			  btrfs_ino(BTRFS_I(reloc_inode)), bytenr,
+			  btrfs_file_extent_offset(leaf, fi));
+		return -EUCLEAN;
+	}
 
 	if (num_bytes != btrfs_file_extent_disk_num_bytes(leaf, fi))
 		return -EINVAL;
@@ -2944,7 +2957,7 @@ static int relocate_file_extent_cluster(struct reloc_control *rc)
 	if (!cluster->nr)
 		return 0;
 
-	ra = kzalloc(sizeof(*ra), GFP_NOFS);
+	ra = kzalloc_obj(*ra, GFP_NOFS);
 	if (!ra)
 		return -ENOMEM;
 
@@ -3863,7 +3876,7 @@ static int add_remap_tree_entries(struct btrfs_trans_handle *trans, struct btrfs
 
 	max_items = BTRFS_LEAF_DATA_SIZE(trans->fs_info) / sizeof(struct btrfs_item);
 
-	data_sizes = kzalloc(sizeof(u32) * min_t(u32, num_entries, max_items), GFP_NOFS);
+	data_sizes = kzalloc_objs(u32, min_t(u32, num_entries, max_items), GFP_NOFS);
 	if (!data_sizes)
 		return -ENOMEM;
 
@@ -4454,7 +4467,7 @@ static int create_remap_tree_entries(struct btrfs_trans_handle *trans,
 
 	btrfs_release_path(path);
 
-	space_runs = kmalloc(sizeof(*space_runs) * extent_count, GFP_NOFS);
+	space_runs = kmalloc_objs(*space_runs, extent_count, GFP_NOFS);
 	if (!space_runs) {
 		mutex_unlock(&bg->free_space_lock);
 		return -ENOMEM;
@@ -4543,7 +4556,7 @@ static int create_remap_tree_entries(struct btrfs_trans_handle *trans,
 	mutex_unlock(&bg->free_space_lock);
 
 	max_entries = extent_count + 2;
-	entries = kmalloc(sizeof(*entries) * max_entries, GFP_NOFS);
+	entries = kmalloc_objs(*entries, max_entries, GFP_NOFS);
 	if (!entries) {
 		ret = -ENOMEM;
 		goto out;

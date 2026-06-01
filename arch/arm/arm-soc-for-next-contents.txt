@@ -1,0 +1,82 @@
+soc/arm
+	patch
+		ARM: select legacy gpiolib interfaces where used
+		arm64: Kconfig: drop unneeded dependency on OF_GPIO for ARCH_MVEBU
+	pxa/gpio
+		git://git.kernel.org/pub/scm/linux/kernel/git/brgl/linux tags/soc-pxa-gpio-for-v7.2
+	zx/soc
+		https://gitlab.com/stefandoesinger/zx297520-kernel tags/zx29-plat-for-7.2
+
+soc/dt
+	patch
+		arm64: dts: realtek: Add pinctrl support for RTD1625
+		ARM: dts: ixp4xx: use phandle-based GPIOs in mi424wr
+	pxa1908/dt
+		https://codeberg.org/pxa1908-mainline/linux tags/pxa1908-dt-for-7.2
+	renesas/dt
+		git://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dts-for-v7.2-tag1
+		contains renesas/fixes-1
+	xz/dt
+		https://gitlab.com/stefandoesinger/zx297520-kernel tags/zx29-dts-for-7.2
+
+soc/drivers
+	fsl/soc-driver
+		https://git.kernel.org/pub/scm/linux/kernel/git/chleroy/linux tags/soc_fsl-7.1-2
+	renesas/drivers
+		git://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-drivers-for-v7.2-tag1
+	qcom/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-drivers-for-7.2
+	firmware/scmi
+		git://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/scmi-updates-7.2
+	firmware/ffa
+		git://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/ffa-updates-7.2
+		contains ffa/fixes-2
+	firmware/amdtee
+		git://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/amdtee-for-v7.2
+	firmware/optee
+		git://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/optee-for-v7.2
+
+soc/defconfig
+	patch
+		arm64: defconfig: Move entries to match savedefconfig
+		arm64: defconfig: Drop unused legacy netfilter options
+		arm64: defconfig: Drop default or selected drivers
+		arm64: defconfig: Drop unused Ethernet vendors
+		arm64: defconfig: Switch Ethernet drivers to modules
+	defconfig/pinctrl
+		git://git.kernel.org/pub/scm/linux/kernel/git/linusw/linux-pinctrl tags/v7.2-qcom-pinctrl-defconfigs
+	patch
+		ARM: multi_v7_defconfig: Move entries to match savedefconfig
+		ARM: configs: Drop redundant I2C_DESIGNWARE_PLATFORM
+		ARM: configs: Drop redundant SND_ATMEL_SOC
+		ARM: multi_v7_defconfig: Cleanup redundant options
+		ARM: multi_v7_defconfig: Correct QCOM_RPMH and QCOM_RPMHPD
+		arm64: defconfig: Enable PCI M.2 power sequencing driver
+	cix/defconfig
+		git://git.kernel.org/pub/scm/linux/kernel/git/peter.chen/cix tags/cix-defconfig-v7.2-rc1
+
+soc/late
+
+arm/fixes
+	tee/fixes
+		git://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/tee-fixes-for-v7.1
+	optee/fix
+		git://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/optee-fix-for-v7.1
+	<no branch> (471c18323dfdfe7844e193b896a9267ae23a1026)
+		git://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/qcomtee-fix-for-v7.1
+	qcom/fixes
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-drivers-fixes-for-7.1
+	qcom/dt-fixes
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-fixes-for-7.1
+	<no branch> (b73953af9bbd5c721c9d92b805a8aea8b0db74b1)
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-defconfig-fixes-for-7.1
+	patch
+		ARM: dts: gemini: Fix partition offsets
+	imx/fixes
+imx/fixes-2
+		git://git.kernel.org/pub/scm/linux/kernel/git/frank.li/linux tags/imx-soc-fixes-for-v7.1
+	samsung/fixes
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux tags/samsung-drivers-fixes-7.1-2
+	memory/fixes
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux-mem-ctrl tags/memory-controller-drv-fixes-7.1
+

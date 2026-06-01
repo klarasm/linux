@@ -63,6 +63,7 @@ static int realloc_insn_buf(struct bpf_gen *gen, __u32 size)
 		gen->error = -ENOMEM;
 		free(gen->insn_start);
 		gen->insn_start = NULL;
+		gen->insn_cur = NULL;
 		return -ENOMEM;
 	}
 	gen->insn_start = insn_start;
@@ -86,6 +87,7 @@ static int realloc_data_buf(struct bpf_gen *gen, __u32 size)
 		gen->error = -ENOMEM;
 		free(gen->data_start);
 		gen->data_start = NULL;
+		gen->data_cur = NULL;
 		return -ENOMEM;
 	}
 	gen->data_start = data_start;
@@ -293,7 +295,6 @@ static void emit_check_err(struct bpf_gen *gen)
 		emit(gen, BPF_JMP_IMM(BPF_JSLT, BPF_REG_7, 0, off));
 	} else {
 		gen->error = -ERANGE;
-		emit(gen, BPF_JMP_IMM(BPF_JA, 0, 0, -1));
 	}
 }
 
@@ -398,12 +399,11 @@ int bpf_gen__finish(struct bpf_gen *gen, int nr_progs, int nr_maps)
 			      blob_fd_array_off(gen, i));
 	emit(gen, BPF_MOV64_IMM(BPF_REG_0, 0));
 	emit(gen, BPF_EXIT_INSN());
-	if (OPTS_GET(gen->opts, gen_hash, false))
-		compute_sha_update_offsets(gen);
-
-	pr_debug("gen: finish %s\n", errstr(gen->error));
 	if (!gen->error) {
 		struct gen_loader_opts *opts = gen->opts;
+
+		if (OPTS_GET(opts, gen_hash, false))
+			compute_sha_update_offsets(gen);
 
 		opts->insns = gen->insn_start;
 		opts->insns_sz = gen->insn_cur - gen->insn_start;
@@ -419,6 +419,7 @@ int bpf_gen__finish(struct bpf_gen *gen, int nr_progs, int nr_maps)
 				bpf_insn_bswap(insn++);
 		}
 	}
+	pr_debug("gen: finish %s\n", errstr(gen->error));
 	return gen->error;
 }
 
@@ -1053,7 +1054,7 @@ void bpf_gen__prog_load(struct bpf_gen *gen,
 		 prog_idx, prog_type, insns_off, insn_cnt, license_off);
 
 	/* convert blob insns to target endianness */
-	if (gen->swapped_endian) {
+	if (gen->swapped_endian && !gen->error) {
 		struct bpf_insn *insn = gen->data_start + insns_off;
 		int i;
 
@@ -1091,7 +1092,7 @@ void bpf_gen__prog_load(struct bpf_gen *gen,
 		 sizeof(struct bpf_core_relo));
 
 	/* convert all info blobs to target endianness */
-	if (gen->swapped_endian)
+	if (gen->swapped_endian && !gen->error)
 		info_blob_bswap(gen, func_info, line_info, core_relos, load_attr);
 
 	libbpf_strlcpy(attr.prog_name, prog_name, sizeof(attr.prog_name));

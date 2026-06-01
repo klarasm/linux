@@ -32,6 +32,8 @@
 #include "amdgpu_dm_ism.h"
 #include "amdgpu_dm_crtc.h"
 #include "amdgpu_dm_trace.h"
+#include "amdgpu_dm_kunit_helpers.h"
+
 
 /**
  * dm_ism_next_state - Get next state based on current state and event
@@ -42,9 +44,10 @@
  * This function defines the idle state management FSM. Invalid transitions
  * are ignored and will not progress the FSM.
  */
-static bool dm_ism_next_state(enum amdgpu_dm_ism_state current_state,
-			      enum amdgpu_dm_ism_event event,
-			      enum amdgpu_dm_ism_state *next_state)
+STATIC_IFN_KUNIT
+bool dm_ism_next_state(enum amdgpu_dm_ism_state current_state,
+		       enum amdgpu_dm_ism_event event,
+		       enum amdgpu_dm_ism_state *next_state)
 {
 	switch (STATE_EVENT(current_state, event)) {
 	case STATE_EVENT(DM_ISM_STATE_FULL_POWER_RUNNING,
@@ -125,8 +128,10 @@ static bool dm_ism_next_state(enum amdgpu_dm_ism_state current_state,
 	}
 	return true;
 }
+EXPORT_IF_KUNIT(dm_ism_next_state);
 
-static uint64_t dm_ism_get_sso_delay(const struct amdgpu_dm_ism *ism,
+STATIC_IFN_KUNIT
+uint64_t dm_ism_get_sso_delay(const struct amdgpu_dm_ism *ism,
 				     const struct dc_stream_state *stream)
 {
 	const struct amdgpu_dm_ism_config *config = &ism->config;
@@ -148,6 +153,7 @@ static uint64_t dm_ism_get_sso_delay(const struct amdgpu_dm_ism *ism,
 
 	return sso_delay_ns;
 }
+EXPORT_IF_KUNIT(dm_ism_get_sso_delay);
 
 /**
  * dm_ism_get_idle_allow_delay - Calculate hysteresis-based idle allow delay
@@ -157,8 +163,9 @@ static uint64_t dm_ism_get_sso_delay(const struct amdgpu_dm_ism *ism,
  * Calculates the delay before allowing idle optimizations based on recent
  * idle history and the current stream timing.
  */
-static uint64_t dm_ism_get_idle_allow_delay(const struct amdgpu_dm_ism *ism,
-					    const struct dc_stream_state *stream)
+STATIC_IFN_KUNIT
+uint64_t dm_ism_get_idle_allow_delay(const struct amdgpu_dm_ism *ism,
+				     const struct dc_stream_state *stream)
 {
 	const struct amdgpu_dm_ism_config *config = &ism->config;
 	uint32_t v_total, h_total;
@@ -217,6 +224,7 @@ static uint64_t dm_ism_get_idle_allow_delay(const struct amdgpu_dm_ism *ism,
 
 	return ret_ns;
 }
+EXPORT_IF_KUNIT(dm_ism_get_idle_allow_delay);
 
 /**
  * dm_ism_insert_record - Insert a record into the circular history buffer
@@ -291,24 +299,16 @@ static void dm_ism_commit_idle_optimization_state(struct amdgpu_dm_ism *ism,
 	 */
 	if (stream && stream->link) {
 		/*
-		 * If allow_panel_sso is true when disabling vblank, allow
-		 * deeper panel sleep states such as PSR1 and Replay static
-		 * screen optimization.
+		 * If the OS requires vblank events (or vblank is otherwise enabled),
+		 * do not allow static screen optimizations.
+		 *
+		 * Keep ism->allow_static_screen_optimizations unchanged so the
+		 * hysteresis-based decision can be reused once vblank is disabled.
 		 */
-		if (!vblank_enabled && allow_panel_sso) {
-			amdgpu_dm_crtc_set_panel_sr_feature(
-				dm, acrtc, stream, false,
-				acrtc->dm_irq_params.allow_sr_entry);
-		} else if (vblank_enabled) {
-			/* Make sure to exit SSO on vblank enable */
-			amdgpu_dm_crtc_set_panel_sr_feature(
-				dm, acrtc, stream, true,
-				acrtc->dm_irq_params.allow_sr_entry);
-		}
-		/*
-		 * Else, vblank_enabled == false and allow_panel_sso == false;
-		 * do nothing here.
-		 */
+		allow_panel_sso = allow_panel_sso && !vblank_enabled;
+		amdgpu_dm_crtc_set_static_screen_optimze(
+			dm, stream, allow_panel_sso,
+			acrtc->dm_irq_params.allow_sr_entry);
 	}
 
 	/*
@@ -383,7 +383,7 @@ static enum amdgpu_dm_ism_event dm_ism_dispatch_power_state(
 		}
 
 		/* Schedule worker */
-		mod_delayed_work(system_unbound_wq, &ism->delayed_work,
+		mod_delayed_work(system_dfl_wq, &ism->delayed_work,
 				 nsecs_to_jiffies(delay_ns));
 
 		break;
@@ -399,14 +399,14 @@ static enum amdgpu_dm_ism_event dm_ism_dispatch_power_state(
 			 * have a negative power impact. Skip idle allow here,
 			 * and let the sso_delayed_work handle it.
 			 */
-			mod_delayed_work(system_unbound_wq,
+			mod_delayed_work(system_dfl_wq,
 					 &ism->sso_delayed_work,
 					 nsecs_to_jiffies(sso_delay_ns));
 		} else {
 			/* Enable idle optimization without SSO */
 			dm_ism_commit_idle_optimization_state(
 				ism, acrtc_state->stream, false, false);
-			mod_delayed_work(system_unbound_wq,
+			mod_delayed_work(system_dfl_wq,
 					 &ism->sso_delayed_work,
 					 nsecs_to_jiffies(sso_delay_ns));
 		}
@@ -459,8 +459,8 @@ void amdgpu_dm_ism_commit_event(struct amdgpu_dm_ism *ism,
 	struct amdgpu_display_manager *dm = &adev->dm;
 	struct dm_crtc_state *acrtc_state = to_dm_crtc_state(acrtc->base.state);
 
-	/* ISM transitions must be called with mutex acquired */
-	ASSERT(mutex_is_locked(&dm->dc_lock));
+	/* ISM transitions must be called with dc_lock held */
+	lockdep_assert_held(&dm->dc_lock);
 
 	/* ISM should not run after dc is destroyed */
 	ASSERT(dm->dc);
@@ -524,13 +524,20 @@ static void dm_ism_sso_delayed_work_func(struct work_struct *work)
 }
 
 /**
- * amdgpu_dm_ism_disable - Disable the ISM
+ * amdgpu_dm_ism_disable - Quiesce ISM workers
  *
  * @dm: The amdgpu display manager
  *
- * Disable the idle state manager by disabling any ISM work, canceling pending
- * work, and waiting for in-progress work to finish. After disabling, the system
- * is left in DM_ISM_STATE_FULL_POWER_RUNNING state.
+ * Cancels and disables any pending or in-flight ISM delayed work and waits
+ * for in-progress work to finish. After this returns, no ISM worker can run
+ * and subsequent mod_delayed_work() calls become no-ops via
+ * clear_pending_if_disabled().
+ *
+ * Must NOT be called with dc_lock held: the workers themselves take dc_lock,
+ * so a synchronous wait under dc_lock would deadlock.
+ *
+ * The caller is responsible for driving the FSM back to FULL_POWER_RUNNING
+ * (under dc_lock) by calling amdgpu_dm_ism_force_full_power().
  */
 void amdgpu_dm_ism_disable(struct amdgpu_display_manager *dm)
 {
@@ -538,21 +545,54 @@ void amdgpu_dm_ism_disable(struct amdgpu_display_manager *dm)
 	struct amdgpu_crtc *acrtc;
 	struct amdgpu_dm_ism *ism;
 
-	ASSERT(mutex_is_locked(&dm->dc_lock));
+	/*
+	 * Caller must NOT hold dc_lock: the ISM delayed work handlers
+	 * acquire dc_lock themselves, so waiting for them via
+	 * disable_delayed_work_sync() while holding dc_lock would
+	 * self-deadlock against an in-flight worker.
+	 */
+	lockdep_assert_not_held(&dm->dc_lock);
 
 	drm_for_each_crtc(crtc, dm->ddev) {
 		acrtc = to_amdgpu_crtc(crtc);
 		ism = &acrtc->ism;
 
-		/* Cancel and disable any pending work */
 		disable_delayed_work_sync(&ism->delayed_work);
 		disable_delayed_work_sync(&ism->sso_delayed_work);
+	}
+}
+
+/**
+ * amdgpu_dm_ism_force_full_power - Force every CRTC's ISM FSM to FULL_POWER
+ *
+ * @dm: The amdgpu display manager
+ *
+ * Sends DM_ISM_EVENT_EXIT_IDLE_REQUESTED to every CRTC's ISM, leaving each
+ * FSM in FULL_POWER_RUNNING. Intended to be paired with
+ * amdgpu_dm_ism_disable(): callers should first quiesce workers (without
+ * dc_lock), then take dc_lock and call this helper.
+ *
+ * Must be called with dc_lock held.
+ */
+void amdgpu_dm_ism_force_full_power(struct amdgpu_display_manager *dm)
+{
+	struct drm_crtc *crtc;
+	struct amdgpu_crtc *acrtc;
+
+	/*
+	 * Caller must hold dc_lock: commit_event() drives the FSM and
+	 * may touch dc state via dc_allow_idle_optimizations() etc.
+	 */
+	lockdep_assert_held(&dm->dc_lock);
+
+	drm_for_each_crtc(crtc, dm->ddev) {
+		acrtc = to_amdgpu_crtc(crtc);
 
 		/*
 		 * When disabled, leave in FULL_POWER_RUNNING state.
-		 * EXIT_IDLE will not queue any work
+		 * EXIT_IDLE will not queue any work.
 		 */
-		amdgpu_dm_ism_commit_event(ism,
+		amdgpu_dm_ism_commit_event(&acrtc->ism,
 					   DM_ISM_EVENT_EXIT_IDLE_REQUESTED);
 	}
 }
