@@ -157,7 +157,7 @@ static uint8_t bios_parser_get_connectors_number(struct dc_bios *dcb)
 
 		break;
 	}
-	return count;
+	return (uint8_t)count;
 }
 
 static struct graphics_object_id bios_parser_get_connector_id(
@@ -401,7 +401,7 @@ static enum bp_result bios_parser_get_i2c_info(struct dc_bios *dcb,
 		return BP_RESULT_BADINPUT;
 
 	if (id.type == OBJECT_TYPE_GENERIC) {
-		dummy_record.i2c_id = id.id;
+		dummy_record.i2c_id = (uint8_t)id.id;
 
 		if (get_gpio_i2c_info(bp, &dummy_record, info) == BP_RESULT_OK)
 			return BP_RESULT_OK;
@@ -1237,7 +1237,7 @@ static enum bp_result get_disp_caps_v4_1(
 	if (!disp_cntl_tbl)
 		return BP_RESULT_BADBIOSTABLE;
 
-	*dce_caps = disp_cntl_tbl->display_caps;
+	*dce_caps = (uint8_t)disp_cntl_tbl->display_caps;
 
 	return result;
 }
@@ -1261,7 +1261,7 @@ static enum bp_result get_disp_caps_v4_2(
 	if (!disp_cntl_tbl)
 		return BP_RESULT_BADBIOSTABLE;
 
-	*dce_caps = disp_cntl_tbl->display_caps;
+	*dce_caps = (uint8_t)disp_cntl_tbl->display_caps;
 
 	return result;
 }
@@ -1285,7 +1285,7 @@ static enum bp_result get_disp_caps_v4_3(
 	if (!disp_cntl_tbl)
 		return BP_RESULT_BADBIOSTABLE;
 
-	*dce_caps = disp_cntl_tbl->display_caps;
+	*dce_caps = (uint8_t)disp_cntl_tbl->display_caps;
 
 	return result;
 }
@@ -1309,7 +1309,7 @@ static enum bp_result get_disp_caps_v4_4(
 	if (!disp_cntl_tbl)
 		return BP_RESULT_BADBIOSTABLE;
 
-	*dce_caps = disp_cntl_tbl->display_caps;
+	*dce_caps = (uint8_t)disp_cntl_tbl->display_caps;
 
 	return result;
 }
@@ -1333,7 +1333,7 @@ static enum bp_result get_disp_caps_v4_5(
 	if (!disp_cntl_tbl)
 		return BP_RESULT_BADBIOSTABLE;
 
-	*dce_caps = disp_cntl_tbl->display_caps;
+	*dce_caps = (uint8_t)disp_cntl_tbl->display_caps;
 
 	return result;
 }
@@ -2594,7 +2594,7 @@ static enum bp_result get_integrated_info_v11(
 		info->ext_disp_conn_info.path[i].channel_mapping.raw =
 			info_v11->extdispconninfo.path[i].channelmapping;
 		info->ext_disp_conn_info.path[i].caps =
-				le16_to_cpu(info_v11->extdispconninfo.path[i].caps);
+				(unsigned short)le16_to_cpu(info_v11->extdispconninfo.path[i].caps);
 	}
 	info->ext_disp_conn_info.checksum =
 	info_v11->extdispconninfo.checksum;
@@ -2670,15 +2670,6 @@ static enum bp_result get_integrated_info_v11(
 									* 10;
 	info->dentist_vco_freq = le32_to_cpu(info_v11->ulDentistVCOFreq) * 10;
 	info->boot_up_uma_clock = le32_to_cpu(info_v8->ulBootUpUMAClock) * 10;
-
-	for (i = 0; i < NUMBER_OF_DISP_CLK_VOLTAGE; ++i) {
-		/* Convert [10KHz] into [KHz] */
-		info->disp_clk_voltage[i].max_supported_clk =
-		le32_to_cpu(info_v11->sDISPCLK_Voltage[i].
-			ulMaximumSupportedCLK) * 10;
-		info->disp_clk_voltage[i].voltage_index =
-		le32_to_cpu(info_v11->sDISPCLK_Voltage[i].ulVoltageIndex);
-	}
 
 	info->boot_up_req_display_vector =
 			le32_to_cpu(info_v11->ulBootUpReqDisplayVector);
@@ -2799,7 +2790,7 @@ static enum bp_result get_integrated_info_v2_1(
 		info->ext_disp_conn_info.path[i].channel_mapping.raw =
 			info_v2_1->extdispconninfo.path[i].channelmapping;
 		info->ext_disp_conn_info.path[i].caps =
-				le16_to_cpu(info_v2_1->extdispconninfo.path[i].caps);
+				(unsigned short)le16_to_cpu(info_v2_1->extdispconninfo.path[i].caps);
 	}
 
 	info->ext_disp_conn_info.checksum =
@@ -2963,7 +2954,7 @@ static enum bp_result get_integrated_info_v2_2(
 		info->ext_disp_conn_info.path[i].channel_mapping.raw =
 			info_v2_2->extdispconninfo.path[i].channelmapping;
 		info->ext_disp_conn_info.path[i].caps =
-				le16_to_cpu(info_v2_2->extdispconninfo.path[i].caps);
+				(unsigned short)le16_to_cpu(info_v2_2->extdispconninfo.path[i].caps);
 	}
 
 	info->ext_disp_conn_info.checksum =
@@ -2986,6 +2977,7 @@ static enum bp_result get_integrated_info_v2_2(
 	info->edp1_info.edp_panel_bpc =
 		info_v2_2->edp1_info.edp_panel_bpc;
 	info->edp1_info.edp_bootup_bl_level =
+		info_v2_2->edp1_info.edp_bootup_bl_level;
 
 	info->edp2_info.edp_backlight_pwm_hz =
 	le16_to_cpu(info_v2_2->edp2_info.edp_backlight_pwm_hz);
@@ -3031,7 +3023,6 @@ static enum bp_result construct_integrated_info(
 	struct atom_data_revision revision;
 
 	int32_t i;
-	int32_t j;
 
 	if (!info)
 		return result;
@@ -3131,14 +3122,6 @@ static enum bp_result construct_integrated_info(
 		if (bp->base.ctx->dc->config.force_bios_fixed_vs && info->ext_disp_conn_info.fixdpvoltageswing == 0) {
 			info->ext_disp_conn_info.fixdpvoltageswing = bp->base.ctx->dc->config.force_bios_fixed_vs & 0xF;
 			DC_LOG_BIOS("driver forced fixdpvoltageswing = %d\n", info->ext_disp_conn_info.fixdpvoltageswing);
-		}
-	}
-	/* Sort voltage table from low to high*/
-	for (i = 1; i < NUMBER_OF_DISP_CLK_VOLTAGE; ++i) {
-		for (j = i; j > 0; --j) {
-			if (info->disp_clk_voltage[j].max_supported_clk <
-			    info->disp_clk_voltage[j-1].max_supported_clk)
-				swap(info->disp_clk_voltage[j-1], info->disp_clk_voltage[j]);
 		}
 	}
 
