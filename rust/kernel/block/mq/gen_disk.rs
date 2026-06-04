@@ -11,7 +11,6 @@ use crate::{
     error::{self, from_err_ptr, Result},
     fmt::{self, Write},
     prelude::*,
-    static_lock_class,
     str::NullTerminatedFormatter,
     sync::Arc,
     types::{ForeignOwnable, ScopeGuard},
@@ -36,6 +35,43 @@ impl Default for GenDiskBuilder {
             capacity_sectors: 0,
         }
     }
+}
+
+/// A wrapper type for safely passing "struct gendisk_lkclass" argument.
+///
+/// This type can only be instantiated via the [`my_gendisk_lkclass!`] macro.
+pub struct GenDiskLockClass(pub(crate) *mut bindings::gendisk_lkclass);
+
+impl GenDiskLockClass {
+    /// Retrieve the underlying raw pointer.
+    pub(crate) fn as_ptr(&self) -> *mut bindings::gendisk_lkclass {
+        self.0
+    }
+}
+
+#[doc(hidden)]
+pub mod __internal {
+    use super::*;
+
+    /// Internal constructor used ONLY by the `my_gendisk_lkclass!` macro.
+    ///
+    /// SAFETY: `ptr` must point to a valid static `gendisk_lkclass` instance.
+    pub const unsafe fn new_lock_class(ptr: *mut bindings::gendisk_lkclass) -> GenDiskLockClass {
+        GenDiskLockClass(ptr)
+    }
+}
+
+/// Helper macro to generate a unique caller-local static lock class struct
+#[macro_export]
+macro_rules! my_gendisk_lkclass {
+    () => {{
+        static mut LKCLASS: $crate::bindings::gendisk_lkclass = $crate::bindings::gendisk_lkclass {
+            bio_lkclass: const { unsafe { ::core::mem::zeroed() } },
+            open_mutex_lkclass: const { unsafe { ::core::mem::zeroed() } },
+        };
+
+        unsafe { $crate::block::mq::gen_disk::__internal::new_lock_class(&raw mut LKCLASS) }
+    }};
 }
 
 impl GenDiskBuilder {
@@ -100,6 +136,7 @@ impl GenDiskBuilder {
         name: fmt::Arguments<'_>,
         tagset: Arc<TagSet<T>>,
         queue_data: T::QueueData,
+        lkclass: GenDiskLockClass,
     ) -> Result<GenDisk<T>> {
         let data = queue_data.into_foreign();
         let recover_data = ScopeGuard::new(|| {
@@ -121,7 +158,7 @@ impl GenDiskBuilder {
                 tagset.raw_tag_set(),
                 &mut lim,
                 data,
-                static_lock_class!().as_ptr(),
+                lkclass.as_ptr(),
             )
         })?;
 
@@ -150,6 +187,19 @@ impl GenDiskBuilder {
         // SAFETY: `gendisk` is a valid pointer as we initialized it above
         unsafe { (*gendisk).fops = &TABLE };
 
+        let cleanup_failure = ScopeGuard::new_with_data((gendisk, data), |(gendisk, data)| {
+            // SAFETY: `gendisk` came from `__blk_mq_alloc_disk()` above and
+            // has not been added to the VFS on this cleanup path.
+            unsafe { bindings::put_disk(gendisk) };
+            // SAFETY: `data` came from `into_foreign()` above and has not been
+            // converted back on this cleanup path.
+            drop(unsafe { T::QueueData::from_foreign(data) });
+        });
+
+        // The failure guard now owns both pieces of cleanup; the early guard
+        // must not run on this path anymore.
+        recover_data.dismiss();
+
         let mut writer = NullTerminatedFormatter::new(
             // SAFETY: `gendisk` points to a valid and initialized instance. We
             // have exclusive access, since the disk is not added to the VFS
@@ -172,7 +222,7 @@ impl GenDiskBuilder {
             },
         )?;
 
-        recover_data.dismiss();
+        cleanup_failure.dismiss();
 
         // INVARIANT: `gendisk` was initialized above.
         // INVARIANT: `gendisk` was added to the VFS via `device_add_disk` above.
@@ -214,6 +264,11 @@ impl<T: Operations> Drop for GenDisk<T> {
         // initialized instance of `struct gendisk`, and it was previously added
         // to the VFS.
         unsafe { bindings::del_gendisk(self.gendisk) };
+
+        // SAFETY: By type invariant, `self.gendisk` was added to the VFS, so
+        // `put_disk()` must follow `del_gendisk()` to drop the final gendisk
+        // reference and trigger the remaining release path.
+        unsafe { bindings::put_disk(self.gendisk) };
 
         // SAFETY: `queue.queuedata` was created by `GenDiskBuilder::build` with
         // a call to `ForeignOwnable::into_foreign` to create `queuedata`.

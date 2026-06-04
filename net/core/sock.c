@@ -2676,8 +2676,12 @@ void sock_wfree(struct sk_buff *skb)
 	int old;
 
 	if (!sock_flag(sk, SOCK_USE_WRITE_QUEUE)) {
+		void (*sk_write_space)(struct sock *sk);
+
+		sk_write_space = READ_ONCE(sk->sk_write_space);
+
 		if (sock_flag(sk, SOCK_RCU_FREE) &&
-		    sk->sk_write_space == sock_def_write_space) {
+		    sk_write_space == sock_def_write_space) {
 			rcu_read_lock();
 			free = __refcount_sub_and_test(len, &sk->sk_wmem_alloc,
 						       &old);
@@ -2693,7 +2697,7 @@ void sock_wfree(struct sk_buff *skb)
 		 * after sk_write_space() call
 		 */
 		WARN_ON(refcount_sub_and_test(len - 1, &sk->sk_wmem_alloc));
-		sk->sk_write_space(sk);
+		sk_write_space(sk);
 		len = 1;
 	}
 	/*
@@ -2708,6 +2712,7 @@ EXPORT_SYMBOL(sock_wfree);
 /* This variant of sock_wfree() is used by TCP,
  * since it sets SOCK_USE_WRITE_QUEUE.
  */
+#ifdef CONFIG_INET
 void __sock_wfree(struct sk_buff *skb)
 {
 	struct sock *sk = skb->sk;
@@ -2715,6 +2720,8 @@ void __sock_wfree(struct sk_buff *skb)
 	if (refcount_sub_and_test(skb->truesize, &sk->sk_wmem_alloc))
 		__sk_free(sk);
 }
+EXPORT_SYMBOL_GPL(__sock_wfree);
+#endif
 
 void skb_set_owner_w(struct sk_buff *skb, struct sock *sk)
 {

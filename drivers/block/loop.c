@@ -342,23 +342,19 @@ static int lo_rw_aio(struct loop_device *lo, struct loop_cmd *cmd,
 {
 	struct iov_iter iter;
 	struct req_iterator rq_iter;
-	struct bio_vec *bvec;
 	struct request *rq = blk_mq_rq_from_pdu(cmd);
-	struct bio *bio = rq->bio;
 	struct file *file = lo->lo_backing_file;
-	struct bio_vec tmp;
-	unsigned int offset;
 	unsigned int nr_bvec;
 	int ret;
 
 	nr_bvec = blk_rq_nr_bvec(rq);
 
 	if (rq->bio != rq->biotail) {
+		struct bio_vec tmp, *bvec;
 
-		bvec = kmalloc_objs(struct bio_vec, nr_bvec, GFP_NOIO);
-		if (!bvec)
+		cmd->bvec = kmalloc_objs(*cmd->bvec, nr_bvec, GFP_NOIO);
+		if (!cmd->bvec)
 			return -EIO;
-		cmd->bvec = bvec;
 
 		/*
 		 * The bios of the request may be started from the middle of
@@ -366,25 +362,25 @@ static int lo_rw_aio(struct loop_device *lo, struct loop_cmd *cmd,
 		 * copy bio->bi_iov_vec to new bvec. The rq_for_each_bvec
 		 * API will take care of all details for us.
 		 */
+		bvec = cmd->bvec;
 		rq_for_each_bvec(tmp, rq, rq_iter) {
 			*bvec = tmp;
 			bvec++;
 		}
-		bvec = cmd->bvec;
-		offset = 0;
+		iov_iter_bvec(&iter, rw, cmd->bvec, nr_bvec, blk_rq_bytes(rq));
+		iter.iov_offset = 0;
 	} else {
 		/*
 		 * Same here, this bio may be started from the middle of the
 		 * 'bvec' because of bio splitting, so offset from the bvec
 		 * must be passed to iov iterator
 		 */
-		offset = bio->bi_iter.bi_bvec_done;
-		bvec = __bvec_iter_bvec(bio->bi_io_vec, bio->bi_iter);
+		iov_iter_bvec(&iter, rw,
+			__bvec_iter_bvec(rq->bio->bi_io_vec, rq->bio->bi_iter),
+			nr_bvec, blk_rq_bytes(rq));
+		iter.iov_offset = rq->bio->bi_iter.bi_bvec_done;
 	}
 	atomic_set(&cmd->ref, 2);
-
-	iov_iter_bvec(&iter, rw, bvec, nr_bvec, blk_rq_bytes(rq));
-	iter.iov_offset = offset;
 
 	cmd->iocb.ki_pos = pos;
 	cmd->iocb.ki_filp = file;
@@ -1747,8 +1743,45 @@ static void lo_release(struct gendisk *disk)
 	need_clear = (lo->lo_state == Lo_rundown);
 	mutex_unlock(&lo->lo_mutex);
 
-	if (need_clear)
+	if (need_clear) {
+		/*
+		 * Temporarily drop disk->open_mutex in order to flush pending I/O
+		 * requests before clearing the backing device. The Lo_rundown state
+		 * guarantees that lo_open() will fail with -ENXIO.
+		 */
+		mutex_unlock(&lo->lo_disk->open_mutex);
+		/*
+		 * Now that loop_queue_rq() sees lo->lo_state != Lo_bound,
+		 * wait for already started loop_queue_rq() to complete.
+		 */
+		synchronize_rcu();
+		/*
+		 * Now that no more works are scheduled by loop_queue_rq(),
+		 * wait for already scheduled works to complete.
+		 */
+		drain_workqueue(lo->workqueue);
+		/*
+		 * Now that no more AIO requests are scheduled by lo_rw_aio(),
+		 * wait for already started AIO to complete.
+		 *
+		 * Due to synchronize_rcu() + drain_workqueue() sequence above,
+		 * calling blk_mq_unfreeze_queue() immediately after blk_mq_freeze_queue()
+		 * returns becomes safe, for loop_queue_rq() no longer schedules new
+		 * lo_rw_aio() works and lo_rw_aio() no longer submits new AIO requests.
+		 *
+		 * Even if we defer blk_mq_unfreeze_queue() to after we clear the
+		 * backing device, a NULL pointer dereference or UAF will happen if
+		 * loop_queue_rq() by error scheduled new lo_rw_aio() works or
+		 * lo_rw_aio() by error submitted new AIO requests, for the backing
+		 * device will be already cleared the refcount for the backing device
+		 * will be already dropped. In other words, there is no difference
+		 * between calling blk_mq_unfreeze_queue() immediately or later.
+		 */
+		blk_mq_unfreeze_queue(lo->lo_queue, blk_mq_freeze_queue(lo->lo_queue));
+		/* Perform remaining cleanup, with open_mutex held. */
+		mutex_lock(&lo->lo_disk->open_mutex);
 		__loop_clr_fd(lo);
+	}
 }
 
 static void lo_free_disk(struct gendisk *disk)
@@ -1857,8 +1890,15 @@ static blk_status_t loop_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 	blk_mq_start_request(rq);
 
-	if (data_race(READ_ONCE(lo->lo_state)) != Lo_bound)
+	if (data_race(READ_ONCE(lo->lo_state)) != Lo_bound) {
+		/* Can this happen? */
+		if (READ_ONCE(lo->lo_state) == Lo_rundown) {
+			pr_err("BUG: Someone is doing I/O request on loop%d with Lo_rundown state.\n",
+			       lo->lo_number);
+			dump_stack();
+		}
 		return BLK_STS_IOERR;
+	}
 
 	switch (req_op(rq)) {
 	case REQ_OP_FLUSH:
