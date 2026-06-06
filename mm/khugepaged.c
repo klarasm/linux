@@ -100,28 +100,6 @@ static DEFINE_READ_MOSTLY_HASHTABLE(mm_slots_hash, MM_SLOTS_HASH_BITS);
 static struct kmem_cache *mm_slot_cache __ro_after_init;
 
 #define KHUGEPAGED_MIN_MTHP_ORDER	2
-/*
- * mthp_collapse() does an iterative DFS over a binary tree, from
- * HPAGE_PMD_ORDER down to KHUGEPAGED_MIN_MTHP_ORDER. The max stack
- * size needed for a DFS on a binary tree is height + 1, where
- * height = HPAGE_PMD_ORDER - KHUGEPAGED_MIN_MTHP_ORDER.
- *
- * ilog2 is used in place of HPAGE_PMD_ORDER because some architectures
- * (e.g. ppc64le) do not define HPAGE_PMD_ORDER until after build time.
- */
-#define MTHP_STACK_SIZE	(ilog2(MAX_PTRS_PER_PTE) - KHUGEPAGED_MIN_MTHP_ORDER + 1)
-
-/*
- * Defines a range of PTE entries in a PTE page table which are being
- * considered for mTHP collapse.
- *
- * @offset: the offset of the first PTE entry in a PMD range.
- * @order: the order of the PTE entries being considered for collapse.
- */
-struct mthp_range {
-	u16 offset;
-	u8 order;
-};
 
 struct collapse_control {
 	bool is_khugepaged;
@@ -136,10 +114,7 @@ struct collapse_control {
 	nodemask_t alloc_nmask;
 
 	/* Each bit represents a single occupied (!none/zero) page. */
-	DECLARE_BITMAP(mthp_bitmap, MAX_PTRS_PER_PTE);
-	/* A mask of the current range being considered for mTHP collapse. */
-	DECLARE_BITMAP(mthp_bitmap_mask, MAX_PTRS_PER_PTE);
-	struct mthp_range mthp_bitmap_stack[MTHP_STACK_SIZE];
+	DECLARE_BITMAP(mthp_present_ptes, MAX_PTRS_PER_PTE);
 };
 
 /**
@@ -590,8 +565,11 @@ void __khugepaged_enter(struct mm_struct *mm)
 		wake_up_interruptible(&khugepaged_wait);
 }
 
-/* Check what orders are allowed based on the vma and collapse type */
-static unsigned long collapse_allowable_orders(struct vm_area_struct *vma,
+/*
+ * Check what orders are possible based on the vma and collapse type.
+ * This is used to determine if mTHP collapse is a viable option.
+ */
+static unsigned long collapse_possible_orders(struct vm_area_struct *vma,
 		vm_flags_t vm_flags, enum tva_type tva_flags)
 {
 	unsigned long orders;
@@ -605,11 +583,17 @@ static unsigned long collapse_allowable_orders(struct vm_area_struct *vma,
 	return thp_vma_allowable_orders(vma, vm_flags, tva_flags, orders);
 }
 
+static bool collapse_possible(struct vm_area_struct *vma,
+		vm_flags_t vm_flags, enum tva_type tva_flags)
+{
+	return collapse_possible_orders(vma, vm_flags, tva_flags);
+}
+
 void khugepaged_enter_vma(struct vm_area_struct *vma,
 			  vm_flags_t vm_flags)
 {
 	if (!mm_flags_test(MMF_VM_HUGEPAGE, vma->vm_mm) && hugepage_enabled()
-	    && collapse_allowable_orders(vma, vm_flags, TVA_KHUGEPAGED))
+	    && collapse_possible(vma, vm_flags, TVA_KHUGEPAGED))
 		__khugepaged_enter(vma->vm_mm);
 }
 
@@ -850,7 +834,7 @@ static void __collapse_huge_page_copy_succeeded(pte_t *pte,
 		struct list_head *compound_pagelist)
 {
 	const unsigned long nr_pages = 1UL << order;
-	unsigned long end = address + (PAGE_SIZE << order);
+	unsigned long end = address + (PAGE_SIZE * nr_pages);
 	struct folio *src, *tmp;
 	pte_t pteval;
 	pte_t *_pte;
@@ -1080,7 +1064,13 @@ static enum scan_result hugepage_vma_revalidate(struct mm_struct *mm, unsigned l
 	if (!vma)
 		return SCAN_VMA_NULL;
 
-	/* Always check the PMD order to ensure its not shared by another VMA */
+	/*
+	 * We cannot collapse VMA regions that do not span the full PMD. This is
+	 * due to the potential of the PMD being shared by another VMA leaving
+	 * us vulnerable to a race condition. Always check the PMD order here to
+	 * ensure its not shared by another VMA. We'd need to lock all VMAs in
+	 * the PMD range to support this.
+	 */
 	if (!thp_vma_suitable_order(vma, address, PMD_ORDER))
 		return SCAN_ADDRESS_RANGE;
 	if (!thp_vma_allowable_orders(vma, vma->vm_flags, type, BIT(order)))
@@ -1396,7 +1386,7 @@ static enum scan_result collapse_huge_page(struct mm_struct *mm, unsigned long s
 
 	if (unlikely(result != SCAN_SUCCEED)) {
 		spin_lock(pmd_ptl);
-		WARN_ON_ONCE(!pmd_none(*pmd));
+		VM_WARN_ON_ONCE(!pmd_none(*pmd));
 		/*
 		 * We can only use set_pmd_at when establishing
 		 * hugepmds and never for establishing regular pmds that
@@ -1439,13 +1429,18 @@ static enum scan_result collapse_huge_page(struct mm_struct *mm, unsigned long s
 		map_anon_folio_pmd_nopf(folio, pmd, vma, pmd_addr);
 	} else {
 		/*
-		 * set_ptes is called in map_anon_folio_pte_nopf with the
-		 * pmd_ptl lock still held; this is safe as the PMD is expected
-		 * to be none. The pmd entry is then repopulated below.
+		 * Some architectures (e.g. MIPS) walk the live page table in
+		 * their implementation. update_mmu_cache_range() must be called
+		 * with a valid page table hierarchy and the PTE lock held.
+		 * Acquire it nested inside pmd_ptl when they are distinct locks.
 		 */
-		map_anon_folio_pte_nopf(folio, pte, vma, start_addr, /*uffd_wp=*/ false);
-		smp_wmb(); /* make PTEs visible before PMD. See pmd_install() */
+		if (pte_ptl != pmd_ptl)
+			spin_lock_nested(pte_ptl, SINGLE_DEPTH_NESTING);
 		pmd_populate(mm, pmd, pmd_pgtable(_pmd));
+		map_anon_folio_pte_nopf(folio, pte, vma, start_addr,
+					  /*uffd_wp=*/ false);
+		if (pte_ptl != pmd_ptl)
+			spin_unlock(pte_ptl);
 	}
 	spin_unlock(pmd_ptl);
 
@@ -1465,58 +1460,23 @@ out_nolock:
 	return result;
 }
 
-static void collapse_mthp_stack_push(struct collapse_control *cc, int *stack_size,
-				     u16 offset, u8 order)
+/* Return the highest naturally aligned order that fits at @offset within a PMD. */
+static unsigned int max_order_from_offset(unsigned int offset)
 {
-	const int size = *stack_size;
-	struct mthp_range *stack = &cc->mthp_bitmap_stack[size];
+	if (offset == 0)
+		return HPAGE_PMD_ORDER;
 
-	VM_WARN_ON_ONCE(size >= MTHP_STACK_SIZE);
-	stack->order = order;
-	stack->offset = offset;
-	(*stack_size)++;
-}
-
-static struct mthp_range collapse_mthp_stack_pop(struct collapse_control *cc,
-						 int *stack_size)
-{
-	const int size = *stack_size;
-
-	VM_WARN_ON_ONCE(size <= 0);
-	(*stack_size)--;
-	return cc->mthp_bitmap_stack[size - 1];
-}
-
-static unsigned int collapse_mthp_count_present(struct collapse_control *cc,
-						u16 offset, unsigned int nr_ptes)
-{
-	bitmap_zero(cc->mthp_bitmap_mask, MAX_PTRS_PER_PTE);
-	bitmap_set(cc->mthp_bitmap_mask, offset, nr_ptes);
-	return bitmap_weight_and(cc->mthp_bitmap, cc->mthp_bitmap_mask, MAX_PTRS_PER_PTE);
+	return min_t(unsigned int, __ffs(offset), HPAGE_PMD_ORDER);
 }
 
 /*
  * mthp_collapse() consumes the bitmap that is generated during
  * collapse_scan_pmd() to determine what regions and mTHP orders fit best.
  *
- * Each bit in cc->mthp_bitmap represents a single occupied (!none/zero) page.
- * A stack structure cc->mthp_bitmap_stack is used to check different regions
- * of the bitmap for collapse eligibility. The stack maintains a pair of
- * variables (offset, order), indicating the number of PTEs from the start of
- * the PMD, and the order of the potential collapse candidate respectively. We
- * start at the PMD order and check if it is eligible for collapse; if not, we
- * add two entries to the stack at a lower order to represent the left and right
- * halves of the PTE page table we are examining.
- *
- *                         offset       mid_offset
- *                         |         |
- *                         |         |
- *                         v         v
- *      --------------------------------------
- *      |          cc->mthp_bitmap            |
- *      --------------------------------------
- *                         <-------><------->
- *                          order-1  order-1
+ * Each bit in cc->mthp_present_ptes represents a single occupied (!none/zero)
+ * page. We start at the PMD order and check if it is eligible for collapse;
+ * if not, we check the left and right halves of the PTE page table we are
+ * examining at a lower order.
  *
  * For each of these, we determine how many PTE entries are occupied in the
  * range of PTE entries we propose to collapse, then we compare this to a
@@ -1526,35 +1486,30 @@ static unsigned int collapse_mthp_count_present(struct collapse_control *cc,
  * If a collapse is permitted, we attempt to collapse the PTE range into a
  * mTHP.
  */
-static int mthp_collapse(struct mm_struct *mm, unsigned long address,
-		int referenced, int unmapped, struct collapse_control *cc,
-		unsigned long enabled_orders)
+static enum scan_result mthp_collapse(struct mm_struct *mm,
+		unsigned long address, int referenced, int unmapped,
+		struct collapse_control *cc, unsigned long enabled_orders)
 {
 	unsigned int nr_occupied_ptes, nr_ptes, max_ptes_none;
-	int collapsed = 0, stack_size = 0;
+	enum scan_result last_result = SCAN_FAIL;
+	int collapsed = 0;
+	bool alloc_failed = false;
 	unsigned long collapse_address;
-	struct mthp_range range;
-	u16 offset;
-	u8 order;
+	unsigned int offset = 0;
+	unsigned int order = HPAGE_PMD_ORDER;
 
-	collapse_mthp_stack_push(cc, &stack_size, 0, HPAGE_PMD_ORDER);
-
-	while (stack_size) {
-		range = collapse_mthp_stack_pop(cc, &stack_size);
-		order = range.order;
-		offset = range.offset;
+	while (offset < HPAGE_PMD_NR) {
 		nr_ptes = 1UL << order;
 
 		if (!test_bit(order, &enabled_orders))
 			goto next_order;
 
 		max_ptes_none = collapse_max_ptes_none(cc, NULL, order);
-
-		nr_occupied_ptes = collapse_mthp_count_present(cc, offset,
-							       nr_ptes);
+		nr_occupied_ptes = bitmap_weight_from(cc->mthp_present_ptes, offset,
+						      offset + nr_ptes);
 
 		if (nr_occupied_ptes >= nr_ptes - max_ptes_none) {
-			int ret;
+			enum scan_result ret;
 
 			collapse_address = address + offset * PAGE_SIZE;
 			ret = collapse_huge_page(mm, collapse_address, referenced,
@@ -1566,8 +1521,11 @@ static int mthp_collapse(struct mm_struct *mm, unsigned long address,
 				collapsed += nr_ptes;
 				fallthrough;
 			case SCAN_PTE_MAPPED_HUGEPAGE:
-				continue;
+				goto next_offset;
 			/* Cases where lower orders might still succeed */
+			case SCAN_ALLOC_HUGE_PAGE_FAIL:
+				alloc_failed = true;
+				fallthrough;
 			case SCAN_LACK_REFERENCED_PAGE:
 			case SCAN_EXCEED_NONE_PTE:
 			case SCAN_EXCEED_SWAP_PTE:
@@ -1578,27 +1536,48 @@ static int mthp_collapse(struct mm_struct *mm, unsigned long address,
 			case SCAN_DEL_PAGE_LRU:
 			case SCAN_PTE_NON_PRESENT:
 			case SCAN_PTE_UFFD_WP:
-			case SCAN_ALLOC_HUGE_PAGE_FAIL:
 			case SCAN_PAGE_LAZYFREE:
+				last_result = ret;
 				goto next_order;
 			/* Cases where no further collapse is possible */
+			case SCAN_PMD_MAPPED:
+				fallthrough;
 			default:
-				return collapsed;
+				last_result = ret;
+				goto done;
 			}
 		}
 
 next_order:
-		if ((BIT(order) - 1) & enabled_orders) {
-			const u8 next_order = order - 1;
-			const u16 mid_offset = offset + (nr_ptes / 2);
-
-			collapse_mthp_stack_push(cc, &stack_size, mid_offset,
-						 next_order);
-			collapse_mthp_stack_push(cc, &stack_size, offset,
-						 next_order);
+		/*
+		 * Continue with the next smaller order if there is still
+		 * any smaller order enabled. When at the smallest order
+		 * we must always move to the next offset.
+		 */
+		if (order > KHUGEPAGED_MIN_MTHP_ORDER &&
+			(enabled_orders & GENMASK(order - 1, 0))) {
+			order--;
+			continue;
 		}
+next_offset:
+		/*
+		 * Advance past the region we just processed and determine the
+		 * highest order we can attempt next. Since huge pages must be
+		 * naturally aligned, the max order we can attempt next is
+		 * limited by the alignment of the new offset.
+		 * E.g. if we collapsed a order-2 mTHP at offset 0, offset
+		 * becomes 4 and __ffs(4) == 2, so the next attempt starts at
+		 * order 2.
+		 */
+		offset += nr_ptes;
+		order = max_order_from_offset(offset);
 	}
-	return collapsed;
+done:
+	if (collapsed)
+		return SCAN_SUCCEED;
+	if (alloc_failed)
+		return SCAN_ALLOC_HUGE_PAGE_FAIL;
+	return last_result;
 }
 
 static enum scan_result collapse_scan_pmd(struct mm_struct *mm,
@@ -1612,7 +1591,7 @@ static enum scan_result collapse_scan_pmd(struct mm_struct *mm,
 	pmd_t *pmd;
 	pte_t *pte, *_pte, pteval;
 	int i;
-	int none_or_zero = 0, shared = 0, nr_collapsed = 0, referenced = 0;
+	int none_or_zero = 0, shared = 0, referenced = 0;
 	enum scan_result result = SCAN_FAIL;
 	struct page *page = NULL;
 	struct folio *folio = NULL;
@@ -1629,11 +1608,11 @@ static enum scan_result collapse_scan_pmd(struct mm_struct *mm,
 		goto out;
 	}
 
-	bitmap_zero(cc->mthp_bitmap, MAX_PTRS_PER_PTE);
+	bitmap_zero(cc->mthp_present_ptes, MAX_PTRS_PER_PTE);
 	memset(cc->node_load, 0, sizeof(cc->node_load));
 	nodes_clear(cc->alloc_nmask);
 
-	enabled_orders = collapse_allowable_orders(vma, vma->vm_flags, tva_flags);
+	enabled_orders = collapse_possible_orders(vma, vma->vm_flags, tva_flags);
 
 	/*
 	 * If PMD is the only enabled order, enforce max_ptes_none, otherwise
@@ -1736,7 +1715,7 @@ static enum scan_result collapse_scan_pmd(struct mm_struct *mm,
 		}
 
 		/* Set bit for occupied pages */
-		__set_bit(i, cc->mthp_bitmap);
+		__set_bit(i, cc->mthp_present_ptes);
 		/*
 		 * Record which node the original page is from and save this
 		 * information to cc->node_load[].
@@ -1795,11 +1774,10 @@ out_unmap:
 	if (result == SCAN_SUCCEED) {
 		/* collapse_huge_page expects the lock to be dropped before calling */
 		mmap_read_unlock(mm);
-		nr_collapsed = mthp_collapse(mm, start_addr, referenced,
-					     unmapped, cc, enabled_orders);
+		result = mthp_collapse(mm, start_addr, referenced,
+				       unmapped, cc, enabled_orders);
 		/* mmap_lock was released above, set lock_dropped */
 		*lock_dropped = true;
-		result = nr_collapsed ? SCAN_SUCCEED : SCAN_FAIL;
 	}
 out:
 	trace_mm_khugepaged_scan_pmd(mm, folio, referenced,
@@ -2899,7 +2877,7 @@ static void collapse_scan_mm_slot(unsigned int progress_max,
 			cc->progress++;
 			break;
 		}
-		if (!collapse_allowable_orders(vma, vma->vm_flags, TVA_KHUGEPAGED)) {
+		if (!collapse_possible(vma, vma->vm_flags, TVA_KHUGEPAGED)) {
 			cc->progress++;
 			continue;
 		}
@@ -3209,7 +3187,7 @@ int madvise_collapse(struct vm_area_struct *vma, unsigned long start,
 	BUG_ON(vma->vm_start > start);
 	BUG_ON(vma->vm_end < end);
 
-	if (!collapse_allowable_orders(vma, vma->vm_flags, TVA_FORCED_COLLAPSE))
+	if (!collapse_possible(vma, vma->vm_flags, TVA_FORCED_COLLAPSE))
 		return -EINVAL;
 
 	hstart = ALIGN(start, HPAGE_PMD_SIZE);
