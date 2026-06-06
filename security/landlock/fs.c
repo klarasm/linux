@@ -1278,7 +1278,7 @@ static void hook_sb_delete(struct super_block *const sb)
 		struct landlock_object *object;
 
 		/* Only handles referenced inodes. */
-		if (!icount_read(inode))
+		if (!icount_read_once(inode))
 			continue;
 
 		/*
@@ -1907,6 +1907,18 @@ static bool control_current_fowner(struct fown_struct *const fown)
 	guard(rcu)();
 	p = pid_task(fown->pid, fown->pid_type);
 	if (!p)
+		return true;
+
+	/*
+	 * For PIDTYPE_PGID and PIDTYPE_SID, signal delivery fans out to
+	 * every member of the group at SIGIO time. Even when pid_task()
+	 * resolves to current itself (e.g., current is the pgid hlist
+	 * head post-fork), non-current members of the group are still
+	 * valid targets that must be checked by hook_file_send_sigiotask().
+	 * Always capture the current subject for those types so the
+	 * consumer scope check runs against the live fown_subject.
+	 */
+	if (fown->pid_type == PIDTYPE_PGID || fown->pid_type == PIDTYPE_SID)
 		return true;
 
 	return !same_thread_group(p, current);

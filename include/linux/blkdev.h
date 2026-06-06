@@ -49,6 +49,11 @@ extern const struct device_type disk_type;
 extern const struct device_type part_type;
 extern const struct class block_class;
 
+struct gendisk_lkclass {
+	struct lock_class_key bio_lkclass;
+	struct lock_class_key open_mutex_lkclass;
+};
+
 /*
  * Maximum number of blkcg policies allowed to be registered concurrently.
  * Defined here to simplify include dependency.
@@ -974,7 +979,7 @@ int bdev_disk_changed(struct gendisk *disk, bool invalidate);
 
 void put_disk(struct gendisk *disk);
 struct gendisk *__blk_alloc_disk(struct queue_limits *lim, int node,
-		struct lock_class_key *lkclass);
+		struct gendisk_lkclass *lkclass);
 
 /**
  * blk_alloc_disk - allocate a gendisk structure
@@ -990,7 +995,7 @@ struct gendisk *__blk_alloc_disk(struct queue_limits *lim, int node,
  */
 #define blk_alloc_disk(lim, node_id)					\
 ({									\
-	static struct lock_class_key __key;				\
+	static struct gendisk_lkclass __key;				\
 									\
 	__blk_alloc_disk(lim, node_id, &__key);				\
 })
@@ -1040,7 +1045,6 @@ extern const char *blk_op_str(enum req_op op);
 
 int blk_status_to_errno(blk_status_t status);
 blk_status_t errno_to_blk_status(int errno);
-const char *blk_status_to_str(blk_status_t status);
 
 /* only poll the hardware once, don't continue until a completion was found */
 #define BLK_POLL_ONESHOT		(1 << 0)

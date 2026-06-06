@@ -24,11 +24,12 @@ int netdev_debug_event(struct notifier_block *nb, unsigned long event,
 	case NETDEV_CHANGE:
 	case NETDEV_REGISTER:
 	case NETDEV_UP:
-		netdev_ops_assert_locked(dev);
+		netdev_assert_locked_ops_compat(dev);
 		fallthrough;
 	case NETDEV_DOWN:
 	case NETDEV_REBOOT:
 	case NETDEV_UNREGISTER:
+	case NETDEV_DEBUG_UNREGISTER:
 	case NETDEV_CHANGEMTU:
 	case NETDEV_CHANGEADDR:
 	case NETDEV_PRE_CHANGEADDR:
@@ -65,6 +66,7 @@ int netdev_debug_event(struct notifier_block *nb, unsigned long event,
 		break;
 
 	case NETDEV_CHANGENAME:
+		netdev_assert_locked_ops(dev);
 		ASSERT_RTNL_NET(net);
 		break;
 	}
