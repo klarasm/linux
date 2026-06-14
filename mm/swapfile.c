@@ -3524,7 +3524,6 @@ static unsigned long find_next_to_unuse(struct swap_info_struct *si,
 static int try_to_unuse(unsigned int type)
 {
 	struct swap_cluster_info *pci;
-	struct mempolicy mpol = { .mode = MPOL_DEFAULT };
 	struct mm_struct *prev_mm;
 	struct mm_struct *mm;
 	struct list_head *p;
@@ -3571,7 +3570,7 @@ retry:
 		if (!folio) {
 			folio = swap_cache_alloc_folio(vswap_entry,
 						      GFP_KERNEL, BIT(0), NULL,
-						      &mpol, NO_INTERLEAVE_INDEX);
+						      NULL, NO_INTERLEAVE_INDEX);
 			if (IS_ERR(folio))
 				continue;
 			swap_read_folio(folio, NULL);
