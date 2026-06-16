@@ -237,10 +237,17 @@ int intel_panel_compute_config(struct intel_connector *connector,
 
 	drm_mode_copy(adjusted_mode, fixed_mode);
 
-	if (is_vrr && fixed_mode_vrefresh != vrefresh)
+	if (is_vrr && fixed_mode_vrefresh != vrefresh) {
+		int vsync_start_offset = adjusted_mode->vtotal - adjusted_mode->vsync_start;
+		int vsync_end_offset = adjusted_mode->vtotal - adjusted_mode->vsync_end;
+
 		adjusted_mode->vtotal =
 			DIV_ROUND_CLOSEST(adjusted_mode->clock * 1000,
 					  adjusted_mode->htotal * vrefresh);
+
+		adjusted_mode->vsync_start = adjusted_mode->vtotal - vsync_start_offset;
+		adjusted_mode->vsync_end = adjusted_mode->vtotal - vsync_end_offset;
+	}
 
 	drm_mode_set_crtcinfo(adjusted_mode, 0);
 
@@ -396,10 +403,14 @@ intel_panel_detect(struct drm_connector *connector, bool force)
 
 enum drm_mode_status
 intel_panel_mode_valid(struct intel_connector *connector,
-		       const struct drm_display_mode *mode)
+		       const struct drm_display_mode *mode,
+		       int *target_clock)
 {
 	const struct drm_display_mode *fixed_mode =
 		intel_panel_fixed_mode(connector, mode);
+
+	if (target_clock)
+		*target_clock = mode->clock;
 
 	if (!fixed_mode)
 		return MODE_OK;
@@ -412,6 +423,9 @@ intel_panel_mode_valid(struct intel_connector *connector,
 
 	if (drm_mode_vrefresh(mode) != drm_mode_vrefresh(fixed_mode))
 		return MODE_PANEL;
+
+	if (target_clock)
+		*target_clock = fixed_mode->clock;
 
 	return MODE_OK;
 }
