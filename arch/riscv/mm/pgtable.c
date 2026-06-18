@@ -9,19 +9,41 @@ int ptep_set_access_flags(struct vm_area_struct *vma,
 			  unsigned long address, pte_t *ptep,
 			  pte_t entry, int dirty)
 {
-	if (riscv_has_extension_unlikely(RISCV_ISA_EXT_SVVPTC)) {
-		if (!pte_same(ptep_get(ptep), entry)) {
-			__set_pte_at(vma->vm_mm, ptep, entry);
-			/* Here only not svadu is impacted */
-			flush_tlb_page(vma, address);
-			return true;
-		}
+	pte_t raw_pte;
 
+	entry = pte_mknonnapot(entry, address);
+	raw_pte = READ_ONCE(*ptep);
+	if (riscv_pte_present_napot(raw_pte))
+		return napotpte_ptep_set_access_flags(vma, address, ptep, entry,
+					      dirty);
+
+	return __ptep_set_access_flags(vma, address, ptep, entry, dirty);
+}
+
+int __ptep_set_access_flags(struct vm_area_struct *vma,
+			    unsigned long address, pte_t *ptep,
+			    pte_t entry, int dirty)
+{
+	pte_t raw_pte;
+	bool changed;
+
+	entry = pte_mknonnapot(entry, address);
+	raw_pte = READ_ONCE(*ptep);
+	if (riscv_pte_present_napot(raw_pte))
 		return false;
+
+	changed = !pte_same(raw_pte, entry);
+	if (!changed)
+		return false;
+
+	__set_pte_at(vma->vm_mm, ptep, entry);
+
+	if (riscv_has_extension_unlikely(RISCV_ISA_EXT_SVVPTC)) {
+		/* Here only not svadu is impacted */
+		flush_tlb_page(vma, address);
+		return true;
 	}
 
-	if (!pte_same(ptep_get(ptep), entry))
-		__set_pte_at(vma->vm_mm, ptep, entry);
 	/*
 	 * update_mmu_cache will unconditionally execute, handling both
 	 * the case that the PTE changed and the spurious fault case.
@@ -32,11 +54,25 @@ int ptep_set_access_flags(struct vm_area_struct *vma,
 bool ptep_test_and_clear_young(struct vm_area_struct *vma,
 		unsigned long address, pte_t *ptep)
 {
-	if (!pte_young(ptep_get(ptep)))
-		return false;
-	return test_and_clear_bit(_PAGE_ACCESSED_OFFSET, &pte_val(*ptep));
+	pte_t raw_pte;
+
+	raw_pte = READ_ONCE(*ptep);
+	if (riscv_pte_present_napot(raw_pte))
+		return napotpte_ptep_test_and_clear_young(vma, address, ptep);
+
+	return __ptep_test_and_clear_young(vma, address, ptep);
 }
 EXPORT_SYMBOL_GPL(ptep_test_and_clear_young);
+
+bool __ptep_test_and_clear_young(struct vm_area_struct *vma,
+				 unsigned long address, pte_t *ptep)
+{
+	if (!pte_young(__ptep_get(ptep)))
+		return false;
+
+	return test_and_clear_bit(_PAGE_ACCESSED_OFFSET, &pte_val(*ptep));
+}
+EXPORT_SYMBOL_GPL(__ptep_test_and_clear_young);
 
 #ifdef CONFIG_64BIT
 pud_t *pud_offset(p4d_t *p4d, unsigned long address)
