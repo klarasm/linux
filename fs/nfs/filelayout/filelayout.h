@@ -39,7 +39,6 @@
  * RFC 5661 multipath_list4 structures.
  */
 #define NFS4_PNFS_MAX_STRIPE_CNT 4096
-#define NFS4_PNFS_MAX_MULTI_CNT  256 /* 256 fit into a u8 stripe_index */
 
 enum stripetype4 {
 	STRIPE_SPARSE = 1,
