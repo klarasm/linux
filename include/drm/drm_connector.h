@@ -921,6 +921,12 @@ struct drm_display_info {
 	 * @amd_vsdb: AMD-specific VSDB information.
 	 */
 	struct drm_amd_vsdb_info amd_vsdb;
+
+	/**
+	 * @panel_type: Panel type from DisplayID Display Parameters
+	 * Data Block (tag 0x21). Uses DRM_MODE_PANEL_TYPE_* constants.
+	 */
+	u8 panel_type;
 };
 
 int drm_display_info_set_bus_formats(struct drm_display_info *info,
@@ -2608,13 +2614,13 @@ struct drm_tile_group {
 	struct kref refcount;
 	struct drm_device *dev;
 	int id;
-	u8 group_data[8];
+	u8 group_data[9];
 };
 
 struct drm_tile_group *drm_mode_create_tile_group(struct drm_device *dev,
-						  const char topology[8]);
+						  const char topology_id[9]);
 struct drm_tile_group *drm_mode_get_tile_group(struct drm_device *dev,
-					       const char topology[8]);
+					       const char topology_id[9]);
 void drm_mode_put_tile_group(struct drm_device *dev,
 			     struct drm_tile_group *tg);
 
