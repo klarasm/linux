@@ -27,6 +27,7 @@
 #include <linux/zswap.h>
 #include "swap.h"
 #include "swap_table.h"
+#include "vswap.h"
 
 static void __end_swap_bio_write(struct bio *bio)
 {
@@ -207,14 +208,19 @@ static void swap_zeromap_folio_set(struct folio *folio)
 	struct obj_cgroup *objcg = get_obj_cgroup_from_folio(folio);
 	int nr_pages = folio_nr_pages(folio);
 	struct swap_cluster_info *ci;
+	unsigned int voff, i;
 	swp_entry_t entry;
-	unsigned int i;
 
 	VM_WARN_ON_ONCE_FOLIO(!folio_test_swapcache(folio), folio);
 	VM_WARN_ON_ONCE_FOLIO(!folio_test_locked(folio), folio);
 
 	ci = swap_cluster_get_and_lock(folio);
-	for (i = 0; i < folio_nr_pages(folio); i++) {
+	if (is_vswap_entry(folio->swap)) {
+		/* Free any prior backing (e.g. ZSWAP entry from earlier swapout) */
+		voff = swp_cluster_offset(folio->swap);
+		__vswap_release_backing(ci, voff, nr_pages);
+	}
+	for (i = 0; i < nr_pages; i++) {
 		entry = page_swap_entry(folio_page(folio, i));
 		__swap_table_set_zero(ci, swp_cluster_offset(entry));
 	}
@@ -250,6 +256,7 @@ static void swap_zeromap_folio_clear(struct folio *folio)
  */
 int swap_writeout(struct folio *folio, struct swap_iocb **swap_plug)
 {
+	swp_entry_t phys;
 	int ret = 0;
 
 	if (folio_free_swap(folio))
@@ -282,6 +289,15 @@ int swap_writeout(struct folio *folio, struct swap_iocb **swap_plug)
 	 */
 	swap_zeromap_folio_clear(folio);
 
+	/*
+	 * For vswap: release stale non-swapfile backings (e.g. ZSWAP from a
+	 * previous swapout cycle) so zswap_store or folio_realloc_swap
+	 * starts on clean slots. Contiguous PHYS backing is preserved for
+	 * reuse by folio_realloc_swap.
+	 */
+	if (is_vswap_entry(folio->swap))
+		folio_release_non_phys_swap_backing(folio);
+
 	if (zswap_store(folio)) {
 		count_mthp_stat(folio_order(folio), MTHP_STAT_ZSWPOUT);
 		goto out_unlock;
@@ -295,8 +311,23 @@ int swap_writeout(struct folio *folio, struct swap_iocb **swap_plug)
 	}
 	rcu_read_unlock();
 
-	__swap_writepage(folio, swap_plug);
-	return 0;
+	if (is_vswap_entry(folio->swap)) {
+		/*
+		 * zswap_store rolled back any partial vtable state on
+		 * failure (see folio_release_non_phys_swap_backing call in
+		 * zswap_store's check_old path), so any contiguous PHYS
+		 * backing from a prior cycle is preserved and reused here.
+		 */
+		phys = folio_realloc_swap(folio);
+		if (!phys.val) {
+			folio_mark_dirty(folio);
+			return AOP_WRITEPAGE_ACTIVATE;
+		}
+		__swap_writepage_phys(folio, swap_plug, phys);
+		return 0;
+	}
+
+	return __swap_writepage(folio, swap_plug);
 out_unlock:
 	folio_unlock(folio);
 	return ret;
@@ -390,12 +421,12 @@ static void sio_write_complete(struct kiocb *iocb, long ret)
 	mempool_free(sio, sio_pool);
 }
 
-static void swap_writepage_fs(struct folio *folio, struct swap_iocb **swap_plug)
+static void swap_writepage_fs(struct folio *folio,
+			      struct swap_info_struct *sis, loff_t pos,
+			      struct swap_iocb **swap_plug)
 {
 	struct swap_iocb *sio = swap_plug ? *swap_plug : NULL;
-	struct swap_info_struct *sis = __swap_entry_to_info(folio->swap);
 	struct file *swap_file = sis->swap_file;
-	loff_t pos = swap_dev_pos(folio->swap);
 
 	count_swpout_vm_event(folio);
 	folio_start_writeback(folio);
@@ -427,13 +458,13 @@ static void swap_writepage_fs(struct folio *folio, struct swap_iocb **swap_plug)
 }
 
 static void swap_writepage_bdev_sync(struct folio *folio,
-		struct swap_info_struct *sis)
+		struct swap_info_struct *sis, sector_t sector)
 {
 	struct bio_vec bv;
 	struct bio bio;
 
 	bio_init(&bio, sis->bdev, &bv, 1, REQ_OP_WRITE | REQ_SWAP);
-	bio.bi_iter.bi_sector = swap_folio_sector(folio);
+	bio.bi_iter.bi_sector = sector;
 	bio_add_folio_nofail(&bio, folio, folio_size(folio), 0);
 
 	bio_associate_blkg_from_page(&bio, folio);
@@ -463,27 +494,66 @@ static void swap_writepage_bdev_async(struct folio *folio,
 	submit_bio(bio);
 }
 
-void __swap_writepage(struct folio *folio, struct swap_iocb **swap_plug)
+#ifdef CONFIG_VSWAP
+void __swap_writepage_phys(struct folio *folio, struct swap_iocb **swap_plug,
+			   swp_entry_t phys_entry)
+{
+	struct swap_info_struct *sis = __swap_entry_to_info(phys_entry);
+	sector_t sector = swap_entry_sector(phys_entry);
+	struct bio *bio;
+
+	VM_BUG_ON_FOLIO(!folio_test_swapcache(folio), folio);
+	VM_WARN_ON(swap_is_vswap(sis));
+
+	if (data_race(sis->flags & SWP_FS_OPS)) {
+		swap_writepage_fs(folio, sis, swap_dev_pos(phys_entry),
+				  swap_plug);
+		return;
+	}
+
+	if (data_race(sis->flags & SWP_SYNCHRONOUS_IO)) {
+		swap_writepage_bdev_sync(folio, sis, sector);
+		return;
+	}
+
+	bio = bio_alloc(sis->bdev, 1, REQ_OP_WRITE | REQ_SWAP, GFP_NOIO);
+	bio->bi_iter.bi_sector = sector;
+	bio->bi_end_io = end_swap_bio_write;
+	bio_add_folio_nofail(bio, folio, folio_size(folio), 0);
+
+	bio_associate_blkg_from_page(bio, folio);
+	count_swpout_vm_event(folio);
+	folio_start_writeback(folio);
+	folio_unlock(folio);
+	submit_bio(bio);
+}
+#endif
+
+int __swap_writepage(struct folio *folio, struct swap_iocb **swap_plug)
 {
 	struct swap_info_struct *sis = __swap_entry_to_info(folio->swap);
 
 	VM_BUG_ON_FOLIO(!folio_test_swapcache(folio), folio);
+
+	if (sis->flags & SWP_VSWAP) {
+		/* Prevent the page from getting reclaimed. */
+		folio_set_dirty(folio);
+		return AOP_WRITEPAGE_ACTIVATE;
+	}
+
 	/*
 	 * ->flags can be updated non-atomically,
 	 * but that will never affect SWP_FS_OPS, so the data_race
 	 * is safe.
 	 */
 	if (data_race(sis->flags & SWP_FS_OPS))
-		swap_writepage_fs(folio, swap_plug);
-	/*
-	 * ->flags can be updated non-atomically,
-	 * but that will never affect SWP_SYNCHRONOUS_IO, so the data_race
-	 * is safe.
-	 */
+		swap_writepage_fs(folio, sis, swap_dev_pos(folio->swap),
+				  swap_plug);
 	else if (data_race(sis->flags & SWP_SYNCHRONOUS_IO))
-		swap_writepage_bdev_sync(folio, sis);
+		swap_writepage_bdev_sync(folio, sis, swap_folio_sector(folio));
 	else
 		swap_writepage_bdev_async(folio, sis);
+	return 0;
 }
 
 void swap_write_unplug(struct swap_iocb *sio)
@@ -535,23 +605,26 @@ static void sio_read_complete(struct kiocb *iocb, long ret)
 static int swap_zeromap_batch(swp_entry_t entry, int max_nr,
 			      bool *is_zerop)
 {
-	int i;
-	bool is_zero;
-	unsigned int ci_start = swp_cluster_offset(entry);
 	struct swap_cluster_info *ci = __swap_entry_to_cluster(entry);
+	unsigned int ci_start = swp_cluster_offset(entry), ci_off, ci_end;
+	bool is_zero;
 
 	VM_WARN_ON_ONCE(ci_start + max_nr > SWAPFILE_CLUSTER);
 
+	ci_off = ci_start;
+	ci_end = ci_off + max_nr;
+
 	rcu_read_lock();
-	is_zero = __swap_table_test_zero(ci, ci_start);
-	for (i = 1; i < max_nr; i++)
-		if (is_zero != __swap_table_test_zero(ci, ci_start + i))
-			break;
-	rcu_read_unlock();
+	is_zero = __swap_table_test_zero(ci, ci_off);
 	if (is_zerop)
 		*is_zerop = is_zero;
+	while (++ci_off < ci_end) {
+		if (is_zero != __swap_table_test_zero(ci, ci_off))
+			break;
+	}
+	rcu_read_unlock();
 
-	return i;
+	return ci_off - ci_start;
 }
 
 static bool swap_read_folio_zeromap(struct folio *folio)
@@ -587,11 +660,11 @@ static bool swap_read_folio_zeromap(struct folio *folio)
 	return true;
 }
 
-static void swap_read_folio_fs(struct folio *folio, struct swap_iocb **plug)
+static void swap_read_folio_fs(struct folio *folio,
+			       struct swap_info_struct *sis, loff_t pos,
+			       struct swap_iocb **plug)
 {
-	struct swap_info_struct *sis = __swap_entry_to_info(folio->swap);
 	struct swap_iocb *sio = NULL;
-	loff_t pos = swap_dev_pos(folio->swap);
 
 	if (plug)
 		sio = *plug;
@@ -622,13 +695,13 @@ static void swap_read_folio_fs(struct folio *folio, struct swap_iocb **plug)
 }
 
 static void swap_read_folio_bdev_sync(struct folio *folio,
-		struct swap_info_struct *sis)
+		struct swap_info_struct *sis, sector_t sector)
 {
 	struct bio_vec bv;
 	struct bio bio;
 
 	bio_init(&bio, sis->bdev, &bv, 1, REQ_OP_READ);
-	bio.bi_iter.bi_sector = swap_folio_sector(folio);
+	bio.bi_iter.bi_sector = sector;
 	bio_add_folio_nofail(&bio, folio, folio_size(folio), 0);
 	/*
 	 * Keep this task valid during swap readpage because the oom killer may
@@ -644,18 +717,34 @@ static void swap_read_folio_bdev_sync(struct folio *folio,
 }
 
 static void swap_read_folio_bdev_async(struct folio *folio,
-		struct swap_info_struct *sis)
+		struct swap_info_struct *sis, sector_t sector)
 {
 	struct bio *bio;
 
 	bio = bio_alloc(sis->bdev, 1, REQ_OP_READ, GFP_KERNEL);
-	bio->bi_iter.bi_sector = swap_folio_sector(folio);
+	bio->bi_iter.bi_sector = sector;
 	bio->bi_end_io = end_swap_bio_read;
 	bio_add_folio_nofail(bio, folio, folio_size(folio), 0);
 	count_mthp_stat(folio_order(folio), MTHP_STAT_SWPIN);
 	count_memcg_folio_events(folio, PSWPIN, folio_nr_pages(folio));
 	count_vm_events(PSWPIN, folio_nr_pages(folio));
 	submit_bio(bio);
+}
+
+static void swap_read_folio_phys(struct folio *folio, swp_entry_t phys_entry,
+				struct swap_iocb **plug)
+{
+	struct swap_info_struct *sis = __swap_entry_to_info(phys_entry);
+	sector_t sector = swap_entry_sector(phys_entry);
+
+	zswap_folio_swapin(folio);
+
+	if (data_race(sis->flags & SWP_FS_OPS))
+		swap_read_folio_fs(folio, sis, swap_dev_pos(phys_entry), plug);
+	else if (data_race(sis->flags & SWP_SYNCHRONOUS_IO))
+		swap_read_folio_bdev_sync(folio, sis, sector);
+	else
+		swap_read_folio_bdev_async(folio, sis, sector);
 }
 
 void swap_read_folio(struct folio *folio, struct swap_iocb **plug)
@@ -665,6 +754,7 @@ void swap_read_folio(struct folio *folio, struct swap_iocb **plug)
 	bool workingset = folio_test_workingset(folio);
 	unsigned long pflags;
 	bool in_thrashing;
+	swp_entry_t phys;
 
 	VM_BUG_ON_FOLIO(!folio_test_swapcache(folio) && !synchronous, folio);
 	VM_BUG_ON_FOLIO(!folio_test_locked(folio), folio);
@@ -689,15 +779,15 @@ void swap_read_folio(struct folio *folio, struct swap_iocb **plug)
 	if (zswap_load(folio) != -ENOENT)
 		goto finish;
 
-	/* We have to read from slower devices. Increase zswap protection. */
-	zswap_folio_swapin(folio);
-
-	if (data_race(sis->flags & SWP_FS_OPS)) {
-		swap_read_folio_fs(folio, plug);
-	} else if (synchronous) {
-		swap_read_folio_bdev_sync(folio, sis);
+	if (swap_is_vswap(sis)) {
+		phys = vswap_to_phys(folio->swap);
+		if (!phys.val) {
+			folio_unlock(folio);
+			goto finish;
+		}
+		swap_read_folio_phys(folio, phys, plug);
 	} else {
-		swap_read_folio_bdev_async(folio, sis);
+		swap_read_folio_phys(folio, folio->swap, plug);
 	}
 
 finish:
