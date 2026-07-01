@@ -6913,15 +6913,15 @@ static void __free_contig_range_common(unsigned long pfn, unsigned long nr_pages
 			continue;
 		}
 
-		if (start && memdesc_section(page->flags) != start_sec) {
+		if (start && memdesc_section(&page->flags) != start_sec) {
 			free_prepared_contig_range(start, i - nr_start);
 			start = page;
 			nr_start = i;
-			start_sec = memdesc_section(page->flags);
+			start_sec = memdesc_section(&page->flags);
 		} else if (!start) {
 			start = page;
 			nr_start = i;
-			start_sec = memdesc_section(page->flags);
+			start_sec = memdesc_section(&page->flags);
 		}
 	}
 
@@ -7244,9 +7244,11 @@ int alloc_contig_frozen_range_noprof(unsigned long start, unsigned long end,
 		check_new_pages(head, order);
 		prep_new_page(head, order, gfp_mask, 0);
 	} else {
+		release_free_list(cc.freepages);
 		ret = -EINVAL;
-		WARN(true, "PFN range: requested [%lu, %lu), allocated [%lu, %lu)\n",
-		     start, end, outer_start, outer_end);
+		WARN(true,
+		     "PFN range: allocated [%lu, %lu) does not match requested [%lu, %lu), freeing allocated PFNs\n",
+		     outer_start, outer_end, start, end);
 	}
 done:
 	undo_isolate_page_range(start, end);

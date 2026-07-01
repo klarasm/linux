@@ -828,6 +828,7 @@ static inline void clear_zone_contiguous(struct zone *zone)
 }
 
 extern int __isolate_free_page(struct page *page, unsigned int order);
+extern unsigned long release_free_list(struct list_head *freepages);
 extern void __putback_isolated_page(struct page *page, unsigned int order,
 				    int mt);
 extern void memblock_free_pages(unsigned long pfn, unsigned int order);
@@ -1954,5 +1955,18 @@ static inline int get_sysctl_max_map_count(void)
 
 bool may_expand_vm(struct mm_struct *mm, const vma_flags_t *vma_flags,
 		   unsigned long npages);
+
+/*
+ * Ensure @mm is on the init_mm.mmlist so swapoff can find it.
+ */
+static inline void mm_prepare_for_swap_entries(struct mm_struct *mm)
+{
+	if (list_empty(&mm->mmlist)) {
+		spin_lock(&mmlist_lock);
+		if (list_empty(&mm->mmlist))
+			list_add(&mm->mmlist, &init_mm.mmlist);
+		spin_unlock(&mmlist_lock);
+	}
+}
 
 #endif	/* __MM_INTERNAL_H */
