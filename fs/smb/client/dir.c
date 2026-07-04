@@ -645,7 +645,7 @@ out_free_xid:
  * hashed-positive by calling d_instantiate().
  */
 int cifs_create(struct mnt_idmap *idmap, struct inode *dir,
-		struct dentry *direntry, umode_t mode, bool excl)
+		struct dentry *direntry, umode_t mode)
 {
 	struct cifs_sb_info *cifs_sb = CIFS_SB(dir);
 	int rc;
@@ -875,6 +875,9 @@ cifs_d_revalidate(struct inode *dir, const struct qstr *name,
 {
 	if (flags & LOOKUP_RCU)
 		return -ECHILD;
+
+	/* Wait for pending rename/unlink */
+	wait_var_event(&direntry->d_fsdata, direntry->d_fsdata == NULL);
 
 	if (d_really_is_positive(direntry)) {
 		int rc;
