@@ -836,13 +836,13 @@ static enum scan_result __collapse_huge_page_isolate(struct vm_area_struct *vma,
 	     _pte++, addr += PAGE_SIZE) {
 		pteval = ptep_get(_pte);
 		pte_check = collapse_check_pte(pteval, addr, &ctx);
+		folio = ctx.folio;
 		if (pte_check == PTE_CHECK_FAIL) {
 			result = ctx.result;
 			goto out;
 		}
 		if (pte_check == PTE_CHECK_CONTINUE)
 			continue;
-		folio = ctx.folio;
 
 		/*
 		 * TODO: In some cases of partially-mapped folios, we'd actually
