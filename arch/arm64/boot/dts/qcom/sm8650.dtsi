@@ -4397,6 +4397,9 @@
 			qcom,smem-state-names = "ipa-clock-enabled-valid",
 						"ipa-clock-enabled";
 
+			qcom,gsi-loader = "self";
+			memory-region = <&ipa_fw_mem>;
+
 			sram = <&ipa_modem_tables>;
 
 			status = "disabled";
@@ -7091,8 +7094,8 @@
 
 			ranges = <0 0 0x14680000 0x2c000>;
 
-			ipa_modem_tables: modem-tables@8000 {
-				reg = <0x8000 0x2000>;
+			ipa_modem_tables: modem-tables@3000 {
+				reg = <0x3000 0x2000>;
 			};
 		};
 
