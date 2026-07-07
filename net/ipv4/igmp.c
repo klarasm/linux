@@ -1473,6 +1473,7 @@ int inet_fill_ifmcaddr(struct sk_buff *skb, struct net_device *dev,
 	ci.ifa_valid = INFINITY_LIFE_TIME;
 
 	if (nla_put_in_addr(skb, IFA_MULTICAST, im->multiaddr) < 0 ||
+	    nla_put_u32(skb, IFA_MC_USERS, READ_ONCE(im->users)) < 0 ||
 	    nla_put(skb, IFA_CACHEINFO, sizeof(ci), &ci) < 0) {
 		nlmsg_cancel(skb, nlh);
 		return -EMSGSIZE;
@@ -1494,6 +1495,7 @@ static void inet_ifmcaddr_notify(struct net_device *dev,
 
 	skb = nlmsg_new(NLMSG_ALIGN(sizeof(struct ifaddrmsg)) +
 			nla_total_size(sizeof(__be32)) +
+			nla_total_size(sizeof(u32)) +
 			nla_total_size(sizeof(struct ifa_cacheinfo)),
 			GFP_KERNEL);
 	if (!skb)
@@ -1922,6 +1924,7 @@ void ip_mc_destroy_dev(struct in_device *in_dev)
 #endif
 
 	while ((i = rtnl_dereference(in_dev->mc_list)) != NULL) {
+		ip_mc_hash_remove(in_dev, i);
 		in_dev->mc_list = i->next_rcu;
 		WRITE_ONCE(in_dev->mc_count, in_dev->mc_count - 1);
 		ip_mc_clear_src(i);

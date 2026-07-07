@@ -21,6 +21,7 @@
 #include "xe_guc_ads.h"
 #include "xe_hw_engine.h"
 #include "xe_mmio.h"
+#include "xe_pcode.h"
 #include "xe_pm.h"
 #include "xe_psmi.h"
 #include "xe_pxp_debugfs.h"
@@ -117,7 +118,6 @@ static int info(struct seq_file *m, void *data)
 	drm_printf(&p, "revid %d\n", xe->info.revid);
 	drm_printf(&p, "tile_count %d\n", xe->info.tile_count);
 	drm_printf(&p, "vm_max_level %d\n", xe->info.vm_max_level);
-	drm_printf(&p, "force_execlist %s\n", str_yes_no(xe->info.force_execlist));
 	drm_printf(&p, "has_flat_ccs %s\n", str_yes_no(xe->info.has_flat_ccs));
 	drm_printf(&p, "has_usm %s\n", str_yes_no(xe->info.has_usm));
 	drm_printf(&p, "skip_guc_pc %s\n", str_yes_no(xe->info.skip_guc_pc));
@@ -158,6 +158,22 @@ static int workaround_info(struct seq_file *m, void *data)
 	struct drm_printer p = drm_seq_file_printer(m);
 
 	workarounds(xe, &p);
+	return 0;
+}
+
+static int pcode_info(struct seq_file *m, void *data)
+{
+	struct xe_device *xe = node_to_xe(m->private);
+	struct drm_printer p = drm_seq_file_printer(m);
+	struct xe_pcode_version version;
+	int ret = 0;
+
+	ret = xe_get_pcode_version(xe, &version);
+	if (ret)
+		return ret;
+
+	drm_printf(&p, "pcode version: %u.%u.%u\n", version.major,
+		   version.minor, version.engg);
 	return 0;
 }
 
@@ -219,6 +235,10 @@ static const struct drm_info_list debugfs_list[] = {
 	{"info", info, 0},
 	{ .name = "sriov_info", .show = sriov_info, },
 	{ .name = "workarounds", .show = workaround_info, },
+};
+
+static const struct drm_info_list pcode_info_debugfs[] = {
+	{ .name = "pcode_info", .show = pcode_info, },
 };
 
 static const struct drm_info_list debugfs_residencies[] = {
@@ -566,6 +586,18 @@ void xe_debugfs_register(struct xe_device *xe)
 		fault_create_debugfs_attr("inject_csc_hw_error", root,
 					  &inject_csc_hw_error);
 	}
+
+	/*
+	 * Pcode version read from PMT is currently only supported on CRI and BMG platforms in PF
+	 * mode, as both platforms support the necessary telemetry read mechanism and have a fixed
+	 * PUNIT_VERSION_OFFSET.
+	 * Attempting this access on other platforms must be verified before enabling support.
+	 */
+	if (!IS_SRIOV_VF(xe) &&
+	    (xe->info.platform == XE_CRESCENTISLAND || xe->info.platform == XE_BATTLEMAGE))
+		drm_debugfs_create_files(pcode_info_debugfs,
+					 ARRAY_SIZE(pcode_info_debugfs),
+					 root, minor);
 
 	debugfs_create_file("forcewake_all", 0400, root, xe,
 			    &forcewake_all_fops);

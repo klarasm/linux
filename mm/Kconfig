@@ -703,7 +703,7 @@ config DEVICE_MIGRATION
 config ARCH_ENABLE_HUGEPAGE_MIGRATION
 	bool
 
-config ARCH_ENABLE_THP_MIGRATION
+config ARCH_HAS_PMD_SOFTLEAVES
 	bool
 
 config HUGETLB_PAGE_SIZE_VARIABLE
@@ -1356,7 +1356,7 @@ config MEMFD_CREATE
 config SECRETMEM
 	default y
 	bool "Enable memfd_secret() system call" if EXPERT
-	depends on ARCH_HAS_SET_DIRECT_MAP
+	depends on ARCH_HAS_SET_DIRECT_MAP && !HIGHMEM
 	help
 	  Enable the memfd_secret() system call with the ability to create
 	  memory areas visible only in the context of the owning process and

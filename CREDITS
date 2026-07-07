@@ -1503,6 +1503,10 @@ N: Andy Gross
 E: agross@kernel.org
 D: Qualcomm SoC subsystem and drivers
 
+N: Mark Gross
+E: markgross@kernel.org
+D: x86/mellanox platform maintenance and various x86 specific drivers
+
 N: Grant Grundler
 E: grantgrundler@gmail.com
 W: http://obmouse.sourceforge.net/
@@ -3095,6 +3099,10 @@ S: Germany
 N: Jens Osterkamp
 E: jens@de.ibm.com
 D: Maintainer of Spidernet network driver for Cell
+
+N: Kent Overstreet
+E: kent.overstreet@linux.dev
+D: Co-authored and contributed to Memory Allocation Profiling
 
 N: Gadi Oxman
 E: gadio@netvision.net.il
