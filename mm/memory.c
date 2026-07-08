@@ -4174,6 +4174,9 @@ static bool __wp_can_reuse_large_anon_folio(struct folio *folio,
 static bool wp_can_reuse_anon_folio(struct folio *folio,
 				    struct vm_area_struct *vma)
 {
+	const bool in_lru_cache = !folio_test_lru(folio);
+	const bool in_swapcache = folio_test_swapcache(folio);
+
 	if (IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE) && folio_test_large(folio))
 		return __wp_can_reuse_large_anon_folio(folio, vma);
 
@@ -4184,15 +4187,16 @@ static bool wp_can_reuse_anon_folio(struct folio *folio,
 	 *
 	 * KSM doesn't necessarily raise the folio refcount.
 	 */
-	if (folio_test_ksm(folio) || folio_ref_count(folio) > 3)
+	if (folio_test_ksm(folio) ||
+	    folio_ref_count(folio) > 1 + in_lru_cache + in_swapcache)
 		return false;
-	if (!folio_test_lru(folio))
+	if (in_lru_cache)
 		/*
 		 * We cannot easily detect+handle references from
 		 * remote LRU caches or references to LRU folios.
 		 */
 		lru_add_drain();
-	if (folio_ref_count(folio) > 1 + folio_test_swapcache(folio))
+	if (folio_ref_count(folio) > 1 + in_swapcache)
 		return false;
 	if (!folio_trylock(folio))
 		return false;
@@ -4505,7 +4509,7 @@ static vm_fault_t remove_device_exclusive_entry(struct vm_fault *vmf)
 static inline bool should_try_to_free_swap(struct swap_info_struct *si,
 					   struct folio *folio,
 					   struct vm_area_struct *vma,
-					   unsigned int extra_refs,
+					   bool exclusive,
 					   unsigned int fault_flags)
 {
 	if (!folio_test_swapcache(folio))
@@ -4521,14 +4525,12 @@ static inline bool should_try_to_free_swap(struct swap_info_struct *si,
 	if (mem_cgroup_swap_full(folio) || (vma->vm_flags & VM_LOCKED) ||
 	    folio_test_mlocked(folio))
 		return true;
+
 	/*
-	 * If we want to map a page that's in the swapcache writable, we
-	 * have to detect via the refcount if we're really the exclusive
-	 * user. Try freeing the swapcache to get rid of the swapcache
-	 * reference only in case it's likely that we'll be the exclusive user.
+	 * Free the swapcache only if we are the exclusive user and
+	 * this is a write fault.
 	 */
-	return (fault_flags & FAULT_FLAG_WRITE) && !folio_test_ksm(folio) &&
-		folio_ref_count(folio) == (extra_refs + folio_nr_pages(folio));
+	return (fault_flags & FAULT_FLAG_WRITE) && exclusive;
 }
 
 static vm_fault_t pte_marker_clear(struct vm_fault *vmf)
@@ -4890,16 +4892,6 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	} else if (folio != swapcache)
 		page = folio_page(folio, 0);
 
-	/*
-	 * If we want to map a page that's in the swapcache writable, we
-	 * have to detect via the refcount if we're really the exclusive
-	 * owner. Try removing the extra reference from the local LRU
-	 * caches if required.
-	 */
-	if ((vmf->flags & FAULT_FLAG_WRITE) &&
-	    !folio_test_ksm(folio) && !folio_test_lru(folio))
-		lru_add_drain();
-
 	folio_throttle_swaprate(folio, GFP_KERNEL);
 
 	/*
@@ -5035,20 +5027,15 @@ check_folio:
 		pte = pte_mkuffd_wp(pte);
 
 	/*
-	 * Same logic as in do_wp_page(); however, optimize for pages that are
-	 * certainly not shared either because we just allocated them without
-	 * exposing them to the swapcache or because the swap entry indicates
-	 * exclusivity.
+	 * Similar logic as in do_wp_page(); however, optimize for pages that
+	 * are certainly exclusive.
 	 */
-	if (!folio_test_ksm(folio) &&
-	    (exclusive || folio_ref_count(folio) == 1)) {
+	if (exclusive) {
 		if ((vma->vm_flags & VM_WRITE) && !userfaultfd_pte_wp(vma, pte) &&
 		    !pte_needs_soft_dirty_wp(vma, pte)) {
 			pte = pte_mkwrite(pte, vma);
-			if (vmf->flags & FAULT_FLAG_WRITE) {
+			if (vmf->flags & FAULT_FLAG_WRITE)
 				pte = pte_mkdirty(pte);
-				vmf->flags &= ~FAULT_FLAG_WRITE;
-			}
 		}
 		rmap_flags |= RMAP_EXCLUSIVE;
 	}
@@ -5088,7 +5075,7 @@ check_folio:
 	 * Do it after mapping, so raced page faults will likely see the folio
 	 * in swap cache and wait on the folio lock.
 	 */
-	if (should_try_to_free_swap(si, folio, vma, nr_pages, vmf->flags))
+	if (should_try_to_free_swap(si, folio, vma, exclusive, vmf->flags))
 		folio_free_swap(folio);
 
 	folio_unlock(folio);
@@ -5105,7 +5092,7 @@ check_folio:
 		folio_put(swapcache);
 	}
 
-	if (vmf->flags & FAULT_FLAG_WRITE) {
+	if ((vmf->flags & FAULT_FLAG_WRITE) && !pte_write(pte)) {
 		ret |= do_wp_page(vmf);
 		if (ret & VM_FAULT_ERROR)
 			ret &= VM_FAULT_ERROR;
