@@ -911,7 +911,7 @@ pgd_t __pti_set_user_pgtbl(pgd_t *pgdp, pgd_t pgd);
  */
 static inline pgd_t pti_set_user_pgtbl(pgd_t *pgdp, pgd_t pgd)
 {
-	if (!static_cpu_has(X86_FEATURE_PTI))
+	if (!cpu_feature_enabled(X86_FEATURE_PTI))
 		return pgd;
 	return __pti_set_user_pgtbl(pgdp, pgd);
 }
@@ -1471,7 +1471,7 @@ static inline void clone_pgd_range(pgd_t *dst, pgd_t *src, int count)
 {
 	memcpy(dst, src, count * sizeof(pgd_t));
 #ifdef CONFIG_MITIGATION_PAGE_TABLE_ISOLATION
-	if (!static_cpu_has(X86_FEATURE_PTI))
+	if (!cpu_feature_enabled(X86_FEATURE_PTI))
 		return;
 	/* Clone the user space pgd as well */
 	memcpy(kernel_to_user_pgdp(dst), kernel_to_user_pgdp(src),
@@ -1545,7 +1545,7 @@ static inline pte_t pte_swp_clear_soft_dirty(pte_t pte)
 	return pte_clear_flags(pte, _PAGE_SWP_SOFT_DIRTY);
 }
 
-#ifdef CONFIG_ARCH_ENABLE_THP_MIGRATION
+#ifdef CONFIG_ARCH_HAS_PMD_SOFTLEAVES
 static inline pmd_t pmd_swp_mksoft_dirty(pmd_t pmd)
 {
 	return pmd_set_flags(pmd, _PAGE_SWP_SOFT_DIRTY);

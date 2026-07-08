@@ -1035,6 +1035,9 @@ unsigned long do_mmap(struct file *file,
 	if (ret < 0)
 		return ret;
 
+	if (current->mm->map_count >= get_sysctl_max_map_count())
+		return -ENOMEM;
+
 	/* we ignore the address hint */
 	addr = 0;
 	len = PAGE_ALIGN(len);
@@ -1367,6 +1370,10 @@ static int split_vma(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	setup_vma_to_mm(vma, mm);
 	setup_vma_to_mm(new, mm);
 	vma_iter_store_new(vmi, new);
+
+	/* vmi should point lower address */
+	if (new_below)
+		vma_next(vmi);
 	mm->map_count++;
 	return 0;
 

@@ -172,12 +172,12 @@ int rtw_ch_set_search_ch(struct rt_channel_info *ch_set, const u32 ch)
 {
 	int i;
 
-	for (i = 0; ch_set[i].ChannelNum != 0; i++) {
-		if (ch == ch_set[i].ChannelNum)
+	for (i = 0; ch_set[i].channel_num != 0; i++) {
+		if (ch == ch_set[i].channel_num)
 			break;
 	}
 
-	if (i >= ch_set[i].ChannelNum)
+	if (i >= ch_set[i].channel_num)
 		return -1;
 	return i;
 }
@@ -262,7 +262,7 @@ static int has_channel(struct rt_channel_info *channel_set,
 	int i;
 
 	for (i = 0; i < chanset_size; i++)
-		if (channel_set[i].ChannelNum == chan)
+		if (channel_set[i].channel_num == chan)
 			return 1;
 
 	return 0;
@@ -324,7 +324,7 @@ static u8 init_channel_set(struct adapter *padapter, u8 ChannelPlan, struct rt_c
 	u8 b2_4GBand = false;
 	u8 Index2G = 0;
 
-	memset(channel_set, 0, sizeof(struct rt_channel_info)*MAX_CHANNEL_NUM);
+	memset(channel_set, 0, sizeof(struct rt_channel_info) * MAX_CHANNEL_NUM);
 
 	if (ChannelPlan >= RT_CHANNEL_DOMAIN_MAX && ChannelPlan != RT_CHANNEL_DOMAIN_REALTEK_DEFINE)
 		return chanset_size;
@@ -339,22 +339,25 @@ static u8 init_channel_set(struct adapter *padapter, u8 ChannelPlan, struct rt_c
 
 	if (b2_4GBand) {
 		for (index = 0; index < RTW_ChannelPlan2G[Index2G].Len; index++) {
-			channel_set[chanset_size].ChannelNum = RTW_ChannelPlan2G[Index2G].Channel[index];
+			channel_set[chanset_size].channel_num =
+				RTW_ChannelPlan2G[Index2G].Channel[index];
 
 			if ((ChannelPlan == RT_CHANNEL_DOMAIN_GLOBAL_DOAMIN) ||/* Channel 1~11 is active, and 12~14 is passive */
 				(ChannelPlan == RT_CHANNEL_DOMAIN_GLOBAL_NULL)) {
-				if (channel_set[chanset_size].ChannelNum >= 1 && channel_set[chanset_size].ChannelNum <= 11)
-					channel_set[chanset_size].ScanType = SCAN_ACTIVE;
-				else if ((channel_set[chanset_size].ChannelNum  >= 12 && channel_set[chanset_size].ChannelNum  <= 14))
-					channel_set[chanset_size].ScanType  = SCAN_PASSIVE;
+				if (channel_set[chanset_size].channel_num >= 1 &&
+				    channel_set[chanset_size].channel_num <= 11)
+					channel_set[chanset_size].scan_type = SCAN_ACTIVE;
+				else if (channel_set[chanset_size].channel_num  >= 12 &&
+					 channel_set[chanset_size].channel_num  <= 14)
+					channel_set[chanset_size].scan_type  = SCAN_PASSIVE;
 			} else if (ChannelPlan == RT_CHANNEL_DOMAIN_WORLD_WIDE_13 ||
 				 Index2G == RT_CHANNEL_DOMAIN_2G_WORLD) { /*  channel 12~13, passive scan */
-				if (channel_set[chanset_size].ChannelNum <= 11)
-					channel_set[chanset_size].ScanType = SCAN_ACTIVE;
+				if (channel_set[chanset_size].channel_num <= 11)
+					channel_set[chanset_size].scan_type = SCAN_ACTIVE;
 				else
-					channel_set[chanset_size].ScanType = SCAN_PASSIVE;
+					channel_set[chanset_size].scan_type = SCAN_PASSIVE;
 			} else
-				channel_set[chanset_size].ScanType = SCAN_ACTIVE;
+				channel_set[chanset_size].scan_type = SCAN_ACTIVE;
 
 			chanset_size++;
 		}
@@ -454,12 +457,12 @@ void mgt_dispatcher(struct adapter *padapter, union recv_frame *precv_frame)
 
 	if (psta) {
 		if (GetRetry(pframe)) {
-			if (precv_frame->u.hdr.attrib.seq_num == psta->RxMgmtFrameSeqNum) {
+			if (precv_frame->u.hdr.attrib.seq_num == psta->rx_mgmt_frame_seq_num) {
 				/* drop the duplicate management frame */
 				return;
 			}
 		}
-		psta->RxMgmtFrameSeqNum = precv_frame->u.hdr.attrib.seq_num;
+		psta->rx_mgmt_frame_seq_num = precv_frame->u.hdr.attrib.seq_num;
 	}
 
 	switch (GetFrameSubType(pframe)) {
@@ -677,9 +680,12 @@ unsigned int OnAuth(struct adapter *padapter, union recv_frame *precv_frame)
 	if ((pmlmeinfo->state&0x03) != WIFI_FW_AP_STATE)
 		return _FAIL;
 
+	if (len < WLAN_HDR_A3_LEN)
+		return _FAIL;
+
 	sa = GetAddr2Ptr(pframe);
 
-	auth_mode = psecuritypriv->dot11AuthAlgrthm;
+	auth_mode = psecuritypriv->dot11_auth_algrthm;
 
 	if (GetPrivacy(pframe)) {
 		u8 *iv;
@@ -687,6 +693,9 @@ unsigned int OnAuth(struct adapter *padapter, union recv_frame *precv_frame)
 
 		prxattrib->hdrlen = WLAN_HDR_A3_LEN;
 		prxattrib->encrypt = _WEP40_;
+
+		if (len < WLAN_HDR_A3_LEN + 8)
+			return _FAIL;
 
 		iv = pframe+prxattrib->hdrlen;
 		prxattrib->key_index = ((iv[3]>>6)&0x3);
@@ -787,7 +796,7 @@ unsigned int OnAuth(struct adapter *padapter, union recv_frame *precv_frame)
 			p = rtw_get_ie(pframe + WLAN_HDR_A3_LEN + 4 + _AUTH_IE_OFFSET_, WLAN_EID_CHALLENGE, (int *)&ie_len,
 					len - WLAN_HDR_A3_LEN - _AUTH_IE_OFFSET_ - 4);
 
-			if (!p || ie_len <= 0) {
+			if (!p || ie_len != 128) {
 				status = WLAN_STATUS_CHALLENGE_FAIL;
 				goto auth_fail;
 			}
@@ -1365,7 +1374,11 @@ unsigned int OnAssocRsp(struct adapter *padapter, union recv_frame *precv_frame)
 	/* to handle HT, WMM, rate adaptive, update MAC reg */
 	/* for not to handle the synchronous IO in the tasklet */
 	for (i = (6 + WLAN_HDR_A3_LEN); i < pkt_len;) {
+		if (i + sizeof(*pIE) > pkt_len)
+			break;
 		pIE = (struct ndis_80211_var_ie *)(pframe + i);
+		if (i + sizeof(*pIE) + pIE->length > pkt_len)
+			break;
 
 		switch (pIE->element_id) {
 		case WLAN_EID_VENDOR_SPECIFIC:
@@ -2855,7 +2868,11 @@ void issue_assocreq(struct adapter *padapter)
 
 	/* vendor specific IE, such as WPA, WMM, WPS */
 	for (i = sizeof(struct ndis_802_11_fix_ie); i < pmlmeinfo->network.ie_length;) {
+		if (i + sizeof(*pIE) > pmlmeinfo->network.ie_length)
+			break;
 		pIE = (struct ndis_80211_var_ie *)(pmlmeinfo->network.ies + i);
+		if (i + sizeof(*pIE) + pIE->length > pmlmeinfo->network.ie_length)
+			break;
 
 		switch (pIE->element_id) {
 		case WLAN_EID_VENDOR_SPECIFIC:
@@ -3686,7 +3703,7 @@ unsigned int send_beacon(struct adapter *padapter)
 void site_survey(struct adapter *padapter)
 {
 	unsigned char survey_channel = 0, val8;
-	enum rt_scan_type	ScanType = SCAN_PASSIVE;
+	enum rt_scan_type	scan_type = SCAN_PASSIVE;
 	struct mlme_ext_priv *pmlmeext = &padapter->mlmeextpriv;
 	struct mlme_ext_info *pmlmeinfo = &pmlmeext->mlmext_info;
 	u32 initialgain = 0;
@@ -3698,7 +3715,8 @@ void site_survey(struct adapter *padapter)
 		if (pmlmeext->sitesurvey_res.channel_idx < pmlmeext->sitesurvey_res.ch_num) {
 			ch = &pmlmeext->sitesurvey_res.ch[pmlmeext->sitesurvey_res.channel_idx];
 			survey_channel = ch->hw_value;
-			ScanType = (ch->flags & RTW_IEEE80211_CHAN_PASSIVE_SCAN) ? SCAN_PASSIVE : SCAN_ACTIVE;
+			scan_type = (ch->flags & RTW_IEEE80211_CHAN_PASSIVE_SCAN) ?
+				SCAN_PASSIVE : SCAN_ACTIVE;
 		}
 	}
 
@@ -3709,7 +3727,7 @@ void site_survey(struct adapter *padapter)
 		else
 			r8723bs_select_channel(padapter, survey_channel);
 
-		if (ScanType == SCAN_ACTIVE) { /* obey the channel plan setting... */
+		if (scan_type == SCAN_ACTIVE) { /* obey the channel plan setting... */
 			{
 				int i;
 
@@ -3869,8 +3887,6 @@ u8 collect_bss_info(struct adapter *padapter, union recv_frame *precv_frame, str
 		memcpy(bssid->supported_rates + i, (p + 2), len);
 	}
 
-	bssid->network_type_in_use = Ndis802_11OFDM24;
-
 	if (bssid->ie_length < 12)
 		return _FAIL;
 
@@ -3901,10 +3917,10 @@ u8 collect_bss_info(struct adapter *padapter, union recv_frame *precv_frame, str
 	val16 = rtw_get_capability((struct wlan_bssid_ex *)bssid);
 
 	if (val16 & BIT(0)) {
-		bssid->infrastructure_mode = Ndis802_11Infrastructure;
+		bssid->infrastructure_mode = NL80211_IFTYPE_STATION;
 		memcpy(bssid->mac_address, GetAddr2Ptr(pframe), ETH_ALEN);
 	} else {
-		bssid->infrastructure_mode = Ndis802_11IBSS;
+		bssid->infrastructure_mode = NL80211_IFTYPE_ADHOC;
 		memcpy(bssid->mac_address, GetAddr3Ptr(pframe), ETH_ALEN);
 	}
 
@@ -4173,27 +4189,27 @@ static void process_80211d(struct adapter *padapter, struct wlan_bssid_ex *bssid
 		if (pregistrypriv->wireless_mode & WIRELESS_11G) {
 			do {
 				if ((i == MAX_CHANNEL_NUM) ||
-					(chplan_sta[i].ChannelNum == 0) ||
-					(chplan_sta[i].ChannelNum > 14))
+					(chplan_sta[i].channel_num == 0) ||
+					(chplan_sta[i].channel_num > 14))
 					break;
 
 				if ((j == chplan_ap.Len) || (chplan_ap.Channel[j] > 14))
 					break;
 
-				if (chplan_sta[i].ChannelNum == chplan_ap.Channel[j]) {
-					chplan_new[k].ChannelNum = chplan_ap.Channel[j];
-					chplan_new[k].ScanType = SCAN_ACTIVE;
+				if (chplan_sta[i].channel_num == chplan_ap.Channel[j]) {
+					chplan_new[k].channel_num = chplan_ap.Channel[j];
+					chplan_new[k].scan_type = SCAN_ACTIVE;
 					i++;
 					j++;
 					k++;
-				} else if (chplan_sta[i].ChannelNum < chplan_ap.Channel[j]) {
-					chplan_new[k].ChannelNum = chplan_sta[i].ChannelNum;
-					chplan_new[k].ScanType = SCAN_PASSIVE;
+				} else if (chplan_sta[i].channel_num < chplan_ap.Channel[j]) {
+					chplan_new[k].channel_num = chplan_sta[i].channel_num;
+					chplan_new[k].scan_type = SCAN_PASSIVE;
 					i++;
 					k++;
-				} else if (chplan_sta[i].ChannelNum > chplan_ap.Channel[j]) {
-					chplan_new[k].ChannelNum = chplan_ap.Channel[j];
-					chplan_new[k].ScanType = SCAN_ACTIVE;
+				} else if (chplan_sta[i].channel_num > chplan_ap.Channel[j]) {
+					chplan_new[k].channel_num = chplan_ap.Channel[j];
+					chplan_new[k].scan_type = SCAN_ACTIVE;
 					j++;
 					k++;
 				}
@@ -4201,28 +4217,28 @@ static void process_80211d(struct adapter *padapter, struct wlan_bssid_ex *bssid
 
 			/*  change AP not support channel to Passive scan */
 			while ((i < MAX_CHANNEL_NUM) &&
-				(chplan_sta[i].ChannelNum != 0) &&
-				(chplan_sta[i].ChannelNum <= 14)) {
-				chplan_new[k].ChannelNum = chplan_sta[i].ChannelNum;
-				chplan_new[k].ScanType = SCAN_PASSIVE;
+				(chplan_sta[i].channel_num != 0) &&
+				(chplan_sta[i].channel_num <= 14)) {
+				chplan_new[k].channel_num = chplan_sta[i].channel_num;
+				chplan_new[k].scan_type = SCAN_PASSIVE;
 				i++;
 				k++;
 			}
 
 			/*  add channel AP supported */
 			while ((j < chplan_ap.Len) && (chplan_ap.Channel[j] <= 14)) {
-				chplan_new[k].ChannelNum = chplan_ap.Channel[j];
-				chplan_new[k].ScanType = SCAN_ACTIVE;
+				chplan_new[k].channel_num = chplan_ap.Channel[j];
+				chplan_new[k].scan_type = SCAN_ACTIVE;
 				j++;
 				k++;
 			}
 		} else {
 			/*  keep original STA 2.4G channel plan */
 			while ((i < MAX_CHANNEL_NUM) &&
-				(chplan_sta[i].ChannelNum != 0) &&
-				(chplan_sta[i].ChannelNum <= 14)) {
-				chplan_new[k].ChannelNum = chplan_sta[i].ChannelNum;
-				chplan_new[k].ScanType = chplan_sta[i].ScanType;
+				(chplan_sta[i].channel_num != 0) &&
+				(chplan_sta[i].channel_num <= 14)) {
+				chplan_new[k].channel_num = chplan_sta[i].channel_num;
+				chplan_new[k].scan_type = chplan_sta[i].scan_type;
 				i++;
 				k++;
 			}
@@ -4239,10 +4255,10 @@ static void process_80211d(struct adapter *padapter, struct wlan_bssid_ex *bssid
 	channel = bssid->configuration.ds_config;
 	chplan_new = pmlmeext->channel_set;
 	i = 0;
-	while ((i < MAX_CHANNEL_NUM) && (chplan_new[i].ChannelNum != 0)) {
-		if (chplan_new[i].ChannelNum == channel) {
-			if (chplan_new[i].ScanType == SCAN_PASSIVE)
-				chplan_new[i].ScanType = SCAN_ACTIVE;
+	while ((i < MAX_CHANNEL_NUM) && (chplan_new[i].channel_num != 0)) {
+		if (chplan_new[i].channel_num == channel) {
+			if (chplan_new[i].scan_type == SCAN_PASSIVE)
+				chplan_new[i].scan_type = SCAN_ACTIVE;
 			break;
 		}
 		i++;
@@ -5039,15 +5055,15 @@ u8 setopmode_hdl(struct adapter *padapter, u8 *pbuf)
 	struct mlme_ext_info *pmlmeinfo = &pmlmeext->mlmext_info;
 	struct setopmode_parm *psetop = (struct setopmode_parm *)pbuf;
 
-	if (psetop->mode == Ndis802_11APMode) {
+	if (psetop->mode == NL80211_IFTYPE_AP) {
 		pmlmeinfo->state = WIFI_FW_AP_STATE;
 		type = _HW_STATE_AP_;
 		/* start_ap_mode(padapter); */
-	} else if (psetop->mode == Ndis802_11Infrastructure) {
+	} else if (psetop->mode == NL80211_IFTYPE_STATION) {
 		pmlmeinfo->state &= ~(BIT(0) | BIT(1));/*  clear state */
 		pmlmeinfo->state |= WIFI_FW_STATION_STATE;/* set to	STATION_STATE */
 		type = _HW_STATE_STATION_;
-	} else if (psetop->mode == Ndis802_11IBSS) {
+	} else if (psetop->mode == NL80211_IFTYPE_ADHOC) {
 		type = _HW_STATE_ADHOC_;
 	} else {
 		type = _HW_STATE_NOLINK_;
@@ -5056,7 +5072,7 @@ u8 setopmode_hdl(struct adapter *padapter, u8 *pbuf)
 	rtw_hal_set_hwreg(padapter, HW_VAR_SET_OPMODE, (u8 *)(&type));
 	/* set_msr(padapter, type); */
 
-	if (psetop->mode == Ndis802_11APMode) {
+	if (psetop->mode == NL80211_IFTYPE_AP) {
 		/*  Do this after port switch to */
 		/*  prevent from downloading rsvd page to wrong port */
 		rtw_btcoex_media_status_notify(padapter, 1); /* connect */
@@ -5079,7 +5095,7 @@ u8 createbss_hdl(struct adapter *padapter, u8 *pbuf)
 	}
 
 	/* below is for ad-hoc master */
-	if (pparm->network.infrastructure_mode == Ndis802_11IBSS) {
+	if (pparm->network.infrastructure_mode == NL80211_IFTYPE_ADHOC) {
 		rtw_joinbss_reset(padapter);
 
 		pmlmeext->cur_bwmode = CHANNEL_WIDTH_20;
@@ -5183,7 +5199,11 @@ u8 join_cmd_hdl(struct adapter *padapter, u8 *pbuf)
 
 	/* sizeof(struct ndis_802_11_fix_ie) */
 	for (i = _FIXED_IE_LENGTH_; i < pnetwork->ie_length;) {
+		if (i + sizeof(*pIE) > pnetwork->ie_length)
+			break;
 		pIE = (struct ndis_80211_var_ie *)(pnetwork->ies + i);
+		if (i + sizeof(*pIE) + pIE->length > pnetwork->ie_length)
+			break;
 
 		switch (pIE->element_id) {
 		case WLAN_EID_VENDOR_SPECIFIC:/* Get WMM IE. */
@@ -5312,7 +5332,7 @@ static int rtw_scan_ch_decision(struct adapter *padapter, struct rtw_ieee80211_c
 
 			memcpy(&out[j], &in[i], sizeof(struct rtw_ieee80211_channel));
 
-			if (pmlmeext->channel_set[set_idx].ScanType == SCAN_PASSIVE)
+			if (pmlmeext->channel_set[set_idx].scan_type == SCAN_PASSIVE)
 				out[j].flags |= RTW_IEEE80211_CHAN_PASSIVE_SCAN;
 
 			j++;
@@ -5332,9 +5352,9 @@ static int rtw_scan_ch_decision(struct adapter *padapter, struct rtw_ieee80211_c
 				break;
 			}
 
-			out[j].hw_value = pmlmeext->channel_set[i].ChannelNum;
+			out[j].hw_value = pmlmeext->channel_set[i].channel_num;
 
-			if (pmlmeext->channel_set[i].ScanType == SCAN_PASSIVE)
+			if (pmlmeext->channel_set[i].scan_type == SCAN_PASSIVE)
 				out[j].flags |= RTW_IEEE80211_CHAN_PASSIVE_SCAN;
 
 			j++;
@@ -5605,34 +5625,32 @@ exit:
 }
 
 static struct fwevent wlanevents[] = {
-	{0, rtw_dummy_event_callback},	/*0*/
-	{0, NULL},
-	{0, NULL},
-	{0, NULL},
-	{0, NULL},
-	{0, NULL},
-	{0, NULL},
-	{0, NULL},
-	{0, &rtw_survey_event_callback},		/*8*/
-	{sizeof(struct surveydone_event), &rtw_surveydone_event_callback},	/*9*/
-
-	{0, &rtw_joinbss_event_callback},		/*10*/
-	{sizeof(struct stassoc_event), &rtw_stassoc_event_callback},
-	{sizeof(struct stadel_event), &rtw_stadel_event_callback},
-	{0, &rtw_atimdone_event_callback},
-	{0, rtw_dummy_event_callback},
-	{0, NULL},	/*15*/
-	{0, NULL},
-	{0, NULL},
-	{0, NULL},
-	{0, rtw_fwdbg_event_callback},
-	{0, NULL},	 /*20*/
-	{0, NULL},
-	{0, NULL},
-	{0, &rtw_cpwm_event_callback},
-	{0, NULL},
-	{0, &rtw_wmm_event_callback},
-
+	{0, rtw_dummy_event_callback},						/*  0 */
+	{0, NULL},								/*  1 */
+	{0, NULL},								/*  2 */
+	{0, NULL},								/*  3 */
+	{0, NULL},								/*  4 */
+	{0, NULL},								/*  5 */
+	{0, NULL},								/*  6 */
+	{0, NULL},								/*  7 */
+	{0, rtw_survey_event_callback},						/*  8 */
+	{sizeof(struct surveydone_event), rtw_surveydone_event_callback},	/*  9 */
+	{0, rtw_joinbss_event_callback},					/* 10 */
+	{sizeof(struct stassoc_event), rtw_stassoc_event_callback},		/* 11 */
+	{sizeof(struct stadel_event), rtw_stadel_event_callback},		/* 12 */
+	{0, rtw_dummy_event_callback},						/* 13 */
+	{0, rtw_dummy_event_callback},						/* 14 */
+	{0, NULL},								/* 15 */
+	{0, NULL},								/* 16 */
+	{0, NULL},								/* 17 */
+	{0, NULL},								/* 18 */
+	{0, rtw_fwdbg_event_callback},						/* 19 */
+	{0, NULL},								/* 20 */
+	{0, NULL},								/* 21 */
+	{0, NULL},								/* 22 */
+	{0, rtw_cpwm_event_callback},						/* 23 */
+	{0, NULL},								/* 24 */
+	{0, rtw_wmm_event_callback},						/* 25 */
 };
 
 u8 mlme_evt_hdl(struct adapter *padapter, unsigned char *pbuf)
