@@ -495,9 +495,16 @@ impl Thread {
         Ok(())
     }
 
+    pub(crate) fn clear_extended_error(&self, debug_id: usize) {
+        self.inner.lock().extended_error = ExtendedError::new(debug_id as u32, BR_OK, 0);
+    }
+
     pub(crate) fn get_extended_error(&self, data: UserSlice) -> Result {
         let mut writer = data.writer();
-        let ee = self.inner.lock().extended_error;
+        let mut inner = self.inner.lock();
+        let ee = inner.extended_error;
+        inner.extended_error = ExtendedError::new(0, BR_OK, 0);
+        drop(inner);
         writer.write(&ee)?;
         Ok(())
     }
@@ -666,9 +673,9 @@ impl Thread {
                 let strong = obj.hdr.type_ == BINDER_TYPE_BINDER;
                 // SAFETY: `binder` is a `binder_uintptr_t`; any bit pattern is a valid
                 // representation.
-                let ptr = unsafe { obj.__bindgen_anon_1.binder } as _;
-                let cookie = obj.cookie as _;
-                let flags = obj.flags as _;
+                let ptr = unsafe { obj.__bindgen_anon_1.binder };
+                let cookie = obj.cookie;
+                let flags = obj.flags;
                 let node = self
                     .process
                     .as_arc_borrow()
@@ -679,7 +686,7 @@ impl Thread {
             BinderObjectRef::Handle(obj) => {
                 let strong = obj.hdr.type_ == BINDER_TYPE_HANDLE;
                 // SAFETY: `handle` is a `u32`; any bit pattern is a valid representation.
-                let handle = unsafe { obj.__bindgen_anon_1.handle } as _;
+                let handle = unsafe { obj.__bindgen_anon_1.handle };
                 let node = self.process.get_node_from_handle(handle, strong)?;
                 security::binder_transfer_binder(&self.process.cred, &view.alloc.process.cred)?;
                 view.transfer_binder_object(offset, obj, strong, node)?;
@@ -736,7 +743,7 @@ impl Thread {
                     ScatterGatherEntry {
                         obj_index,
                         offset: alloc_offset,
-                        sender_uaddr: obj.buffer as _,
+                        sender_uaddr: obj.buffer as usize,
                         length: obj_length,
                         pointer_fixups: KVec::new(),
                         fixup_min_offset: 0,
@@ -843,7 +850,7 @@ impl Thread {
                     .ok_or(EINVAL)?;
 
                 let mut fda_bytes = KVec::new();
-                UserSlice::new(UserPtr::from_addr(fda_uaddr as _), fds_len)
+                UserSlice::new(UserPtr::from_addr(fda_uaddr as usize), fds_len)
                     .read_all(&mut fda_bytes, GFP_KERNEL)?;
 
                 if fds_len != fda_bytes.len() {
@@ -1109,7 +1116,10 @@ impl Thread {
             inner.pop_transaction_to_reply(thread.as_ref())
         } {
             let reply = Err(BR_DEAD_REPLY);
-            if !transaction.from.deliver_single_reply(reply, &transaction) {
+            if !transaction
+                .from
+                .deliver_single_reply(reply, &transaction, None)
+            {
                 break;
             }
 
@@ -1121,8 +1131,9 @@ impl Thread {
         &self,
         reply: Result<DLArc<Transaction>, u32>,
         transaction: &DArc<Transaction>,
+        extended_error: Option<ExtendedError>,
     ) {
-        if self.deliver_single_reply(reply, transaction) {
+        if self.deliver_single_reply(reply, transaction, extended_error) {
             transaction.from.unwind_transaction_stack();
         }
     }
@@ -1136,6 +1147,7 @@ impl Thread {
         &self,
         reply: Result<DLArc<Transaction>, u32>,
         transaction: &DArc<Transaction>,
+        extended_error: Option<ExtendedError>,
     ) -> bool {
         if let Ok(transaction) = &reply {
             crate::trace::trace_transaction(true, transaction, Some(&self.task));
@@ -1150,6 +1162,12 @@ impl Thread {
 
             if inner.is_dead {
                 return true;
+            }
+
+            if let Some(ee) = extended_error {
+                if inner.extended_error.command == BR_OK {
+                    inner.extended_error = ee;
+                }
             }
 
             match reply {
@@ -1222,6 +1240,9 @@ impl Thread {
         info.buffers_size = td.buffers_size as usize;
         // SAFETY: Above `read` call initializes all bytes, so this union read is ok.
         info.target_handle = unsafe { td.transaction_data.target.handle };
+
+        info.debug_id = super::next_debug_id();
+
         Ok(())
     }
 
@@ -1229,6 +1250,8 @@ impl Thread {
     fn transaction(self: &Arc<Self>, cmd: u32, reader: &mut UserSliceReader) -> Result<()> {
         let mut info = TransactionInfo::zeroed();
         self.read_transaction_info(cmd, reader, &mut info)?;
+
+        self.clear_extended_error(info.debug_id);
 
         let ret = if info.is_reply {
             self.reply_inner(&mut info)
@@ -1239,23 +1262,21 @@ impl Thread {
         };
 
         if let Err(err) = ret {
+            self.push_return_work(err.reply);
             if err.reply != BR_TRANSACTION_COMPLETE {
                 info.reply = err.reply;
-            }
+                if let Some(source) = &err.source {
+                    info.errno = source.to_errno();
 
-            self.push_return_work(err.reply);
-            if let Some(source) = &err.source {
-                info.errno = source.to_errno();
-                info.reply = err.reply;
-
-                {
-                    let mut ee = self.inner.lock().extended_error;
-                    ee.command = err.reply;
-                    ee.param = source.to_errno();
+                    {
+                        let mut inner = self.inner.lock();
+                        inner.extended_error =
+                            ExtendedError::new(info.debug_id as u32, err.reply, source.to_errno());
+                    }
                 }
 
                 pr_warn!(
-                    "{}:{} transaction to {} failed: {source:?}",
+                    "{}:{} transaction to {} failed: {err:?}",
                     info.from_pid,
                     info.from_tid,
                     info.to_pid
@@ -1320,18 +1341,24 @@ impl Thread {
             let allow_fds = orig.flags & TF_ACCEPT_FDS != 0;
             let reply = Transaction::new_reply(self, process, info, allow_fds)?;
             self.inner.lock().push_work(completion);
-            orig.from.deliver_reply(Ok(reply), &orig);
+            orig.from.deliver_reply(Ok(reply), &orig, None);
             Ok(())
         })()
         .map_err(|mut err| {
             // At this point we only return `BR_TRANSACTION_COMPLETE` to the caller, and we must let
             // the sender know that the transaction has completed (with an error in this case).
+
             pr_warn!(
-                "Failure {:?} during reply - delivering BR_FAILED_REPLY to sender.",
-                err
+                "{}:{} reply to {} failed: {err:?}",
+                info.from_pid,
+                info.from_tid,
+                info.to_pid
             );
-            let reply = Err(BR_FAILED_REPLY);
-            orig.from.deliver_reply(reply, &orig);
+
+            let param = err.source.as_ref().map_or(0, |e| e.to_errno());
+            let ee = ExtendedError::new(info.debug_id as u32, err.reply, param);
+            orig.from
+                .deliver_reply(Err(BR_FAILED_REPLY), &orig, Some(ee));
             err.reply = BR_TRANSACTION_COMPLETE;
             err
         });
@@ -1365,7 +1392,7 @@ impl Thread {
         let write_start = req.write_buffer.wrapping_add(req.write_consumed);
         let write_len = req.write_size.saturating_sub(req.write_consumed);
         let mut reader =
-            UserSlice::new(UserPtr::from_addr(write_start as _), write_len as _).reader();
+            UserSlice::new(UserPtr::from_addr(write_start as usize), write_len as usize).reader();
 
         while reader.len() >= size_of::<u32>() && self.inner.lock().return_work.is_unused() {
             let before = reader.len();
@@ -1436,7 +1463,7 @@ impl Thread {
         let read_start = req.read_buffer.wrapping_add(req.read_consumed);
         let read_len = req.read_size.saturating_sub(req.read_consumed);
         let mut writer = BinderReturnWriter::new(
-            UserSlice::new(UserPtr::from_addr(read_start as _), read_len as _).writer(),
+            UserSlice::new(UserPtr::from_addr(read_start as usize), read_len as usize).writer(),
             self,
         );
         let (in_pool, has_transaction, thread_todo, use_proc_queue) = {
@@ -1500,9 +1527,11 @@ impl Thread {
 
         // Write BR_SPAWN_LOOPER if the process needs more threads for its pool.
         if has_noop_placeholder && in_pool && self.process.needs_thread() {
-            let mut writer =
-                UserSlice::new(UserPtr::from_addr(req.read_buffer as _), req.read_size as _)
-                    .writer();
+            let mut writer = UserSlice::new(
+                UserPtr::from_addr(req.read_buffer as usize),
+                req.read_size as usize,
+            )
+            .writer();
             writer.write(&BR_SPAWN_LOOPER)?;
         }
         Ok(())
