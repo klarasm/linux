@@ -6,7 +6,9 @@
 #ifndef _ASM_RISCV_CACHEFLUSH_H
 #define _ASM_RISCV_CACHEFLUSH_H
 
+#include <linux/array_size.h>
 #include <linux/mm.h>
+#include <asm/barrier.h>
 
 static inline void local_flush_icache_all(void)
 {
@@ -40,23 +42,35 @@ do {							\
 		flush_icache_mm(vma->vm_mm, 0);		\
 } while (0)
 
-#ifdef CONFIG_64BIT
+#if defined(CONFIG_64BIT) && defined(CONFIG_MMU)
 /* This is accessed in assembly code. cpumask_var_t would be too complex. */
 extern DECLARE_BITMAP(new_valid_map_cpus, NR_CPUS);
 extern char _end[];
 static inline void mark_new_valid_map(void)
 {
 	/*
+	 * Orders any previous page table writes before setting bits in
+	 * new_valid_map_cpus. Pairs with the sfence.vma in
+	 * new_valid_map_cpus_check.
+	 */
+	smp_wmb();
+
+	/*
 	 * We don't care if concurrently a cpu resets this value since
 	 * the only place this can happen is in handle_exception() where
 	 * an sfence.vma is emitted.
+	 *
+	 * Not memset() or bitmap_fill() to avoid any possible compiler
+	 * shenanigans.
 	 */
-	bitmap_fill(new_valid_map_cpus, NR_CPUS);
+	for (size_t i = 0; i < ARRAY_SIZE(new_valid_map_cpus); i++)
+		WRITE_ONCE(new_valid_map_cpus[i], -1UL);
 }
 #define flush_cache_vmap flush_cache_vmap
 static inline void flush_cache_vmap(unsigned long start, unsigned long end)
 {
-	if (is_vmalloc_or_module_addr((void *)start))
+	if (is_vmalloc_or_module_addr((void *)start) ||
+	    (start >= VMEMMAP_START && end <= VMEMMAP_END))
 		mark_new_valid_map();
 }
 #define flush_cache_vmap_early(start, end)	local_flush_tlb_kernel_range(start, end)

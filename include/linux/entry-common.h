@@ -6,9 +6,11 @@
 #include <linux/irq-entry-common.h>
 #include <linux/livepatch.h>
 #include <linux/ptrace.h>
+#include <linux/randomize_kstack.h>
 #include <linux/resume_user_mode.h>
 #include <linux/seccomp.h>
 #include <linux/sched.h>
+#include <linux/syscall_user_dispatch.h>
 
 #include <asm/entry-common.h>
 #include <asm/syscall.h>
@@ -18,7 +20,7 @@
 #endif
 
 /*
- * SYSCALL_WORK flags handled in syscall_enter_from_user_mode()
+ * SYSCALL_WORK flags handled in syscall_enter_from_user_mode_work()
  */
 #define SYSCALL_WORK_ENTER	(SYSCALL_WORK_SECCOMP |			\
 				 SYSCALL_WORK_SYSCALL_TRACEPOINT |	\
@@ -37,25 +39,25 @@
 				 SYSCALL_WORK_SYSCALL_EXIT_TRAP)
 
 /**
- * arch_ptrace_report_syscall_entry - Architecture specific ptrace_report_syscall_entry() wrapper
+ * arch_ptrace_report_syscall_permit_entry - Architecture specific wrapper for
+ *					     ptrace_report_syscall_permit_entry()
  * @regs: Pointer to the register state at syscall entry
  *
- * Invoked from syscall_trace_enter() to wrap ptrace_report_syscall_entry().
+ * Invoked from syscall_trace_enter() to wrap ptrace_report_syscall_permit_entry().
  *
- * This allows architecture specific ptrace_report_syscall_entry()
+ * This allows architecture specific ptrace_report_syscall_permit_entry()
  * implementations. If not defined by the architecture this falls back to
- * to ptrace_report_syscall_entry().
+ * to ptrace_report_syscall_permit_entry().
  */
-static __always_inline int arch_ptrace_report_syscall_entry(struct pt_regs *regs);
+static __always_inline bool arch_ptrace_report_syscall_permit_entry(struct pt_regs *regs);
 
-#ifndef arch_ptrace_report_syscall_entry
-static __always_inline int arch_ptrace_report_syscall_entry(struct pt_regs *regs)
+#ifndef arch_ptrace_report_syscall_permit_entry
+static __always_inline bool arch_ptrace_report_syscall_permit_entry(struct pt_regs *regs)
 {
-	return ptrace_report_syscall_entry(regs);
+	return ptrace_report_syscall_permit_entry(regs);
 }
 #endif
 
-bool syscall_user_dispatch(struct pt_regs *regs);
 long trace_syscall_enter(struct pt_regs *regs, long syscall);
 void trace_syscall_exit(struct pt_regs *regs, long ret);
 
@@ -69,10 +71,9 @@ static inline void syscall_enter_audit(struct pt_regs *regs, long syscall)
 	}
 }
 
-static __always_inline long syscall_trace_enter(struct pt_regs *regs, unsigned long work)
+static __always_inline long syscall_trace_enter(struct pt_regs *regs, unsigned long work,
+						long syscall)
 {
-	long syscall, ret = 0;
-
 	/*
 	 * Handle Syscall User Dispatch.  This must comes first, since
 	 * the ABI here can be something that doesn't make sense for
@@ -89,20 +90,19 @@ static __always_inline long syscall_trace_enter(struct pt_regs *regs, unsigned l
 	 * through hrtimer_interrupt().
 	 */
 	if (work & SYSCALL_WORK_SYSCALL_RSEQ_SLICE)
-		rseq_syscall_enter_work(syscall_get_nr(current, regs));
+		rseq_syscall_enter_work(syscall);
 
 	/* Handle ptrace */
 	if (work & (SYSCALL_WORK_SYSCALL_TRACE | SYSCALL_WORK_SYSCALL_EMU)) {
-		ret = arch_ptrace_report_syscall_entry(regs);
-		if (ret || (work & SYSCALL_WORK_SYSCALL_EMU))
+		if (!arch_ptrace_report_syscall_permit_entry(regs) ||
+		    (work & SYSCALL_WORK_SYSCALL_EMU))
 			return -1L;
 	}
 
 	/* Do seccomp after ptrace, to catch any tracer changes. */
 	if (work & SYSCALL_WORK_SECCOMP) {
-		ret = __secure_computing();
-		if (ret == -1L)
-			return ret;
+		if (!__seccomp_permit_syscall())
+			return -1L;
 	}
 
 	/* Either of the above might have changed the syscall number */
@@ -113,7 +113,7 @@ static __always_inline long syscall_trace_enter(struct pt_regs *regs, unsigned l
 
 	syscall_enter_audit(regs, syscall);
 
-	return ret ? : syscall;
+	return syscall;
 }
 
 /**
@@ -136,7 +136,7 @@ static __always_inline long syscall_trace_enter(struct pt_regs *regs, unsigned l
  * It handles the following work items:
  *
  *  1) syscall_work flag dependent invocations of
- *     ptrace_report_syscall_entry(), __secure_computing(), trace_sys_enter()
+ *     ptrace_report_syscall_permit_entry(), __seccomp_permit_syscall(), trace_sys_enter()
  *  2) Invocation of audit_syscall_entry()
  */
 static __always_inline long syscall_enter_from_user_mode_work(struct pt_regs *regs, long syscall)
@@ -144,14 +144,36 @@ static __always_inline long syscall_enter_from_user_mode_work(struct pt_regs *re
 	unsigned long work = READ_ONCE(current_thread_info()->syscall_work);
 
 	if (work & SYSCALL_WORK_ENTER)
-		syscall = syscall_trace_enter(regs, work);
+		syscall = syscall_trace_enter(regs, work, syscall);
 
 	return syscall;
 }
 
 /**
- * syscall_enter_from_user_mode - Establish state and check and handle work
- *				  before invoking a syscall
+ * enter_from_user_mode_randomize_stack - Establish state and add stack randomization
+ *					  before invoking syscall_enter_from_user_mode_work()
+ * @regs:	Pointer to currents pt_regs
+ *
+ * Invoked from architecture specific syscall entry code with interrupts
+ * disabled. The calling code has to be non-instrumentable. When the function
+ * returns all state is correct, interrupts are still disabled and the
+ * subsequent functions can be instrumented.
+ *
+ * Implemented as a macro so that the stack randomization is effective
+ * throughout the function in which it is invoked. An inline would only make it
+ * effective in the scope of the inline function.
+ */
+#define enter_from_user_mode_randomize_stack(regs)			\
+do {									\
+	enter_from_user_mode(regs);					\
+	instrumentation_begin();					\
+	add_random_kstack_offset_irqsoff();				\
+	instrumentation_end();						\
+} while (0)
+
+/**
+ * syscall_enter_from_user_mode_randomize_stack - Establish state and check and handle work
+ *						  before invoking a syscall
  * @regs:	Pointer to currents pt_regs
  * @syscall:	The syscall number
  *
@@ -160,31 +182,32 @@ static __always_inline long syscall_enter_from_user_mode_work(struct pt_regs *re
  * function returns all state is correct, interrupts are enabled and the
  * subsequent functions can be instrumented.
  *
- * This is the combination of enter_from_user_mode() and
+ * This is the combination of enter_from_user_mode_randomize_stack() and
  * syscall_enter_from_user_mode_work() to be used when there is no
  * architecture specific work to be done between the two.
  *
  * Returns: The original or a modified syscall number. See
  * syscall_enter_from_user_mode_work() for further explanation.
+ *
+ * Implemented as a macro to make stack randomization effective in the calling
+ * scope.
  */
-static __always_inline long syscall_enter_from_user_mode(struct pt_regs *regs, long syscall)
-{
-	long ret;
-
-	enter_from_user_mode(regs);
-
-	instrumentation_begin();
-	local_irq_enable();
-	ret = syscall_enter_from_user_mode_work(regs, syscall);
-	instrumentation_end();
-
-	return ret;
-}
+#define syscall_enter_from_user_mode_randomize_stack(regs, syscall)	\
+({									\
+	enter_from_user_mode_randomize_stack(regs);			\
+									\
+	instrumentation_begin();					\
+	local_irq_enable();						\
+	long _ret = syscall_enter_from_user_mode_work(regs, syscall);	\
+	instrumentation_end();						\
+									\
+	_ret;								\
+})
 
 /*
- * If SYSCALL_EMU is set, then the only reason to report is when
- * SINGLESTEP is set (i.e. PTRACE_SYSEMU_SINGLESTEP).  This syscall
- * instruction has been already reported in syscall_enter_from_user_mode().
+ * If SYSCALL_EMU is set, then the only reason to report is when SINGLESTEP is
+ * set (i.e. PTRACE_SYSEMU_SINGLESTEP).  This syscall instruction has been
+ * already reported in syscall_enter_from_user_mode_work().
  */
 static __always_inline bool report_single_step(unsigned long work)
 {
@@ -232,10 +255,8 @@ static __always_inline void syscall_exit_work(struct pt_regs *regs, unsigned lon
 	 * of these syscalls is unknown.
 	 */
 	if (work & SYSCALL_WORK_SYSCALL_USER_DISPATCH) {
-		if (unlikely(current->syscall_dispatch.on_dispatch)) {
-			current->syscall_dispatch.on_dispatch = false;
+		if (syscall_user_dispatch_clear_on_dispatch())
 			return;
-		}
 	}
 
 	audit_syscall_exit(regs);
