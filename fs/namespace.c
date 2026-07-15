@@ -1893,6 +1893,8 @@ static int do_umount(struct mount *mnt, int flags)
 		 */
 		lock_mount_hash();
 		if (!list_empty(&mnt->mnt_mounts) || mnt_get_count(mnt) != 2) {
+			printk("%s: task=%s[%d] !list_empty(&mnt->mnt_mounts)=%d mnt_get_count(mnt)=%d\n", __func__,
+			       current->comm, current->pid, !list_empty(&mnt->mnt_mounts), mnt_get_count(mnt));
 			unlock_mount_hash();
 			return -EBUSY;
 		}
@@ -1960,6 +1962,9 @@ static int do_umount(struct mount *mnt, int flags)
 		if (!propagate_mount_busy(mnt, 2)) {
 			umount_tree(mnt, UMOUNT_PROPAGATE|UMOUNT_SYNC);
 			retval = 0;
+		} else {
+			printk("%s: task=%s[%d] propagate_mount_busy()!=0\n", __func__,
+			       current->comm, current->pid);
 		}
 	}
 out:
@@ -2908,6 +2913,9 @@ static int do_change_type(const struct path *path, int ms_flags)
 	for (m = mnt; m; m = (recurse ? next_mnt(m, mnt) : NULL))
 		change_mnt_propagation(m, type);
 
+	guard(mount_locked_reader)();
+	touch_mnt_namespace(mnt->mnt_ns);
+
 	return 0;
 }
 
@@ -3481,6 +3489,10 @@ static int do_set_group(const struct path *from_path, const struct path *to_path
 		list_add(&to->mnt_share, &from->mnt_share);
 		set_mnt_shared(to);
 	}
+
+	guard(mount_locked_reader)();
+	touch_mnt_namespace(to->mnt_ns);
+
 	return 0;
 }
 
@@ -6184,12 +6196,14 @@ static void __init init_mount_tree(void)
 	struct path root;
 
 	/*
-	 * We create two mounts:
+	 * We create three mounts:
 	 *
 	 * (1) nullfs with mount id 1
 	 * (2) mutable rootfs with mount id 2
+	 * (3) private nullfs for kthreads (SB_KERNMOUNT)
 	 *
-	 * with (2) mounted on top of (1).
+	 * with (2) mounted on top of (1). The init_task's root and pwd
+	 * are pointed at (3) so all kthreads start isolated in nullfs.
 	 */
 	nullfs_mnt = vfs_kern_mount(&nullfs_fs_type, 0, "nullfs", NULL);
 	if (IS_ERR(nullfs_mnt))
@@ -6229,12 +6243,14 @@ static void __init init_mount_tree(void)
 		init_mnt_ns.nr_mounts++;
 	}
 
+	nullfs_mnt = kern_mount(&nullfs_fs_type);
+	if (IS_ERR(nullfs_mnt))
+		panic("VFS: Failed to create private nullfs instance");
+	root.mnt	= nullfs_mnt;
+	root.dentry	= nullfs_mnt->mnt_root;
+
 	init_task.nsproxy->mnt_ns = &init_mnt_ns;
 	get_mnt_ns(&init_mnt_ns);
-
-	/* The root and pwd always point to the mutable rootfs. */
-	root.mnt	= mnt;
-	root.dentry	= mnt->mnt_root;
 	set_fs_pwd(current->fs, &root);
 	set_fs_root(current->fs, &root);
 
@@ -6261,6 +6277,8 @@ void __init mnt_init(void)
 
 	if (!mount_hashtable || !mountpoint_hashtable)
 		panic("Failed to allocate mount hash table\n");
+
+	super_dev_init();
 
 	kernfs_init();
 
