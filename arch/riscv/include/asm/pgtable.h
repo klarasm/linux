@@ -567,7 +567,7 @@ static inline void __update_mmu_cache_range_svinval(struct vm_area_struct *vma,
 
 	local_sfence_w_inval();
 	for (i = 0; i < nr; i++)
-		local_sinval_vma(address + nr * PAGE_SIZE, asid);
+		local_sinval_vma(address + i * PAGE_SIZE, asid);
 	local_sfence_inval_ir();
 }
 
