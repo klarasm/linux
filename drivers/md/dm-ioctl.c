@@ -1444,10 +1444,6 @@ static void retrieve_status(struct dm_table *table,
 
 		outptr += sizeof(struct dm_target_spec);
 		remaining = len - (outptr - outbuf);
-		if (remaining <= 0) {
-			param->flags |= DM_BUFFER_FULL_FLAG;
-			break;
-		}
 
 		/* Get the status/table string from the target driver */
 		if (ti->type->status) {
@@ -2273,12 +2269,9 @@ static long dm_compat_ctl_ioctl(struct file *file, uint command, ulong u)
 
 static int dm_open(struct inode *inode, struct file *filp)
 {
-	int r;
 	struct dm_file *priv;
 
-	r = nonseekable_open(inode, filp);
-	if (unlikely(r))
-		return r;
+	nonseekable_open(inode, filp);
 
 	priv = filp->private_data = kmalloc_obj(struct dm_file);
 	if (!priv)

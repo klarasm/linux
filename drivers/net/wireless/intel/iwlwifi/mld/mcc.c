@@ -18,9 +18,15 @@ static struct iwl_mcc_update_resp_v8 *
 iwl_mld_copy_mcc_resp(const struct iwl_rx_packet *pkt)
 {
 	const struct iwl_mcc_update_resp_v8 *mcc_resp_v8 = (const void *)pkt->data;
-	int n_channels = __le32_to_cpu(mcc_resp_v8->n_channels);
 	struct iwl_mcc_update_resp_v8 *resp_cp;
-	int notif_len = struct_size(resp_cp, channels, n_channels);
+	int n_channels;
+	int notif_len;
+
+	if (iwl_rx_packet_payload_len(pkt) < sizeof(*mcc_resp_v8))
+		return ERR_PTR(-EINVAL);
+
+	n_channels = __le32_to_cpu(mcc_resp_v8->n_channels);
+	notif_len = struct_size(resp_cp, channels, n_channels);
 
 	if (iwl_rx_packet_payload_len(pkt) != notif_len)
 		return ERR_PTR(-EINVAL);
@@ -131,7 +137,7 @@ iwl_mld_get_regdomain(struct iwl_mld *mld,
 
 	/* FM follows BIOS/MCC policy, WH disallows puncturing only in US/CA. */
 	if (CSR_HW_RFID_TYPE(mld->trans->info.hw_rf_id) == IWL_CFG_RF_TYPE_FM) {
-		if (!iwl_puncturing_is_allowed_in_bios(mld->bios_enable_puncturing,
+		if (!iwl_puncturing_is_allowed_in_bios(mld->fwrt.bios_puncturing,
 						       le16_to_cpu(resp->mcc)))
 			ieee80211_hw_set(mld->hw, DISALLOW_PUNCTURING);
 		else
