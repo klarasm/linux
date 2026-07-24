@@ -95,10 +95,13 @@ static int xe_i2c_register_adapter(struct xe_i2c *i2c)
 	struct platform_device *pdev;
 	struct fwnode_handle *fwnode;
 	int ret;
+	u32 id;
 
 	fwnode = fwnode_create_software_node(xe_i2c_adapter_properties, NULL);
 	if (IS_ERR(fwnode))
 		return PTR_ERR(fwnode);
+
+	id = (pci_domain_nr(pci->bus) << 16) | pci_dev_id(pci);
 
 	/*
 	 * Not using platform_device_register_full() here because we don't have
@@ -106,7 +109,7 @@ static int xe_i2c_register_adapter(struct xe_i2c *i2c)
 	 * uses that handle, but it may be called before
 	 * platform_device_register_full() is done.
 	 */
-	pdev = platform_device_alloc(adapter_name, pci_dev_id(pci));
+	pdev = platform_device_alloc(adapter_name, id);
 	if (!pdev) {
 		ret = -ENOMEM;
 		goto err_fwnode_remove;
@@ -123,7 +126,7 @@ static int xe_i2c_register_adapter(struct xe_i2c *i2c)
 	}
 
 	pdev->dev.parent = i2c->drm_dev;
-	pdev->dev.fwnode = fwnode;
+	platform_device_set_fwnode(pdev, fwnode);
 	i2c->adapter_node = fwnode;
 	i2c->pdev = pdev;
 
@@ -332,9 +335,6 @@ int xe_i2c_probe(struct xe_device *xe)
 	int ret;
 
 	if (!xe->info.has_i2c)
-		return 0;
-
-	if (IS_SRIOV_VF(xe))
 		return 0;
 
 	xe_i2c_read_endpoint(xe_root_tile_mmio(xe), &ep);

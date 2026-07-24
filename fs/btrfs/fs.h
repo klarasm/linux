@@ -289,7 +289,8 @@ enum {
 	 BTRFS_MOUNT_IGNOREBADROOTS |		\
 	 BTRFS_MOUNT_IGNOREDATACSUMS |		\
 	 BTRFS_MOUNT_IGNOREMETACSUMS |		\
-	 BTRFS_MOUNT_IGNORESUPERFLAGS)
+	 BTRFS_MOUNT_IGNORESUPERFLAGS |		\
+	 BTRFS_MOUNT_USEBACKUPROOT)
 
 /*
  * Compat flags that we support.  If any incompat flags are set other than the
@@ -888,7 +889,6 @@ struct btrfs_fs_info {
 	u32 sectorsize_bits;
 	u32 block_min_order;
 	u32 block_max_order;
-	u32 stripesize;
 	u32 writeback_bio_size;
 	u32 csum_size;
 	u32 csums_per_leaf;
@@ -1058,8 +1058,6 @@ static inline u64 btrfs_calc_metadata_size(const struct btrfs_fs_info *fs_info,
 #define BTRFS_MAX_EXTENT_ITEM_SIZE(r) ((BTRFS_LEAF_DATA_SIZE(r->fs_info) >> 4) - \
 					sizeof(struct btrfs_item))
 
-#define BTRFS_BYTES_TO_BLKS(fs_info, bytes) ((bytes) >> (fs_info)->sectorsize_bits)
-
 static inline bool btrfs_is_zoned(const struct btrfs_fs_info *fs_info)
 {
 	return IS_ENABLED(CONFIG_BLK_DEV_ZONED) && fs_info->zone_size > 0;
@@ -1158,6 +1156,15 @@ void __btrfs_clear_fs_compat_ro(struct btrfs_fs_info *fs_info, u64 flag,
 #define btrfs_raw_test_opt(o, opt)	((o) & BTRFS_MOUNT_##opt)
 #define btrfs_test_opt(fs_info, opt)	((fs_info)->mount_opt & \
 					 BTRFS_MOUNT_##opt)
+
+static inline bool btrfs_is_full_ro(const struct btrfs_fs_info *fs_info)
+{
+	if (!sb_rdonly(fs_info->sb))
+		return false;
+	if (unlikely(fs_info->mount_opt & BTRFS_MOUNT_FULL_RO_MASK))
+		return true;
+	return false;
+}
 
 static inline bool btrfs_fs_closing(const struct btrfs_fs_info *fs_info)
 {
