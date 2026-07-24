@@ -50,7 +50,8 @@ struct cpa_data {
 	unsigned int	flags;
 	unsigned int	force_split		: 1,
 			force_static_prot	: 1,
-			force_flush_all		: 1;
+			force_flush_all		: 1,
+			init_mm_read_locked	: 1;
 	struct page	**pages;
 };
 
@@ -1259,9 +1260,15 @@ static int split_large_page(struct cpa_data *cpa, pte_t *kpte,
 {
 	pte_t *pte;
 
-	spin_unlock(&cpa_lock);
+	if (!debug_pagealloc_enabled())
+		spin_unlock(&cpa_lock);
+	if (cpa->init_mm_read_locked)
+		mmap_read_unlock(&init_mm);
 	pte = pte_alloc_one_kernel(&init_mm);
-	spin_lock(&cpa_lock);
+	if (cpa->init_mm_read_locked)
+		mmap_read_lock(&init_mm);
+	if (!debug_pagealloc_enabled())
+		spin_lock(&cpa_lock);
 	if (!pte)
 		return -ENOMEM;
 
@@ -2130,8 +2137,10 @@ static int change_page_attr_set_clr(unsigned long *addr, int numpages,
 	cpa.force_split = force_split;
 
 	/* Avoid race with concurrent CPA collapse. */
+	cpa.init_mm_read_locked = true;
 	scoped_guard(mmap_read_lock, &init_mm)
 		ret = __change_page_attr_set_clr(&cpa, 1);
+	cpa.init_mm_read_locked = false;
 
 	/*
 	 * Check whether we really changed something:

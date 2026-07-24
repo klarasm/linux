@@ -41,9 +41,6 @@ void workingset_refault(struct folio *folio, void *shadow);
 void workingset_activation(struct folio *folio);
 
 /* mm/folio.c */
-void lru_note_cost_unlock_irq(struct lruvec *lruvec, bool file,
-		unsigned int nr_io, unsigned int nr_rotated);
-void lru_note_cost_refault(struct folio *folio);
 void folio_add_lru_vma(struct folio *folio, struct vm_area_struct *vma);
 
 static inline bool folio_may_be_lru_cached(struct folio *folio)
@@ -279,6 +276,10 @@ static inline void vma_close(struct vm_area_struct *vma)
 void unmap_vmas(struct mmu_gather *tlb, struct unmap_desc *unmap);
 
 #ifdef CONFIG_MMU
+
+bool cond_install_uffd_wp_ptes(struct vm_area_struct *vma,
+		unsigned long addr, pte_t *ptep, pte_t pte,
+		unsigned long nr_ptes);
 
 static inline void get_anon_vma(struct anon_vma *anon_vma)
 {
@@ -868,7 +869,15 @@ struct compact_control {
  * immediately when one is created during the free path.
  */
 struct capture_control {
-	struct compact_control *cc;
+	struct zone *zone;
+	int migratetype;
+	/*
+	 * Allocation request order. May differ from the compaction
+	 * order: defrag_mode promotes sub-block allocations to
+	 * pageblock-order compaction; capture still matches at the
+	 * original allocation order so prep_new_page() is consistent.
+	 */
+	int order;
 	struct page *page;
 };
 

@@ -1677,6 +1677,74 @@ static inline bool zap_drop_markers(struct zap_details *details)
 	return details->zap_flags & ZAP_FLAG_DROP_MARKER;
 }
 
+/**
+ * cond_install_uffd_wp_ptes - install uffd-wp markers after clearing PTEs
+ * @vma: The VMA the pages are mapped into.
+ * @addr: Address the first page of this batch is mapped at.
+ * @ptep: Page table pointer for the first entry of this batch.
+ * @pte: Old value of the entry pointed to by @ptep.
+ * @nr_ptes: Number of entries to install.
+ *
+ * If the PTEs were write-protected by uffd-wp in any form, arm special PTEs
+ * to replace none PTEs. NOTE! This should only be called when the PTEs are
+ * already cleared so we will never accidentally replace something valuable.
+ * Meanwhile none PTEs also mean we are not demoting the PTEs so a TLB flush is
+ * not needed. E.g., when the PTEs were cleared, the caller should have taken
+ * care of the TLB flush.
+ *
+ * Must be called with the page table lock held so that no thread will see the
+ * none PTEs, and if they see them, they'll fault and serialize at the page table
+ * lock.
+ *
+ * Returns true if uffd-wp PTEs were installed, false otherwise.
+ */
+bool cond_install_uffd_wp_ptes(struct vm_area_struct *vma,
+		unsigned long addr, pte_t *ptep, pte_t pte,
+		unsigned long nr_ptes)
+{
+	bool arm_uffd_pte = false;
+
+	if (!uffd_supports_wp_marker())
+		return false;
+
+	/* The current status of the pte should be "cleared" before calling */
+	WARN_ON_ONCE(!pte_none(ptep_get(ptep)));
+
+	/*
+	 * NOTE: userfaultfd_wp_unpopulated() doesn't need this whole
+	 * thing, because when zapping either it means it's dropping the
+	 * page, or in TTU where the present pte will be quickly replaced
+	 * with a swap pte.  There's no way of leaking the bit.
+	 */
+	if (vma_is_anonymous(vma) || !userfaultfd_wp(vma))
+		return false;
+
+	/* A uffd-wp wr-protected normal pte */
+	if (unlikely(pte_present(pte) && pte_uffd(pte)))
+		arm_uffd_pte = true;
+
+	/*
+	 * A uffd-wp wr-protected swap pte.  Note: this should even cover an
+	 * existing pte marker with uffd-wp bit set.
+	 */
+	if (unlikely(pte_swp_uffd_any(pte)))
+		arm_uffd_pte = true;
+
+	if (likely(!arm_uffd_pte))
+		return false;
+
+	for (;;) {
+		set_pte_at(vma->vm_mm, addr, ptep,
+			   make_pte_marker(PTE_MARKER_UFFD_WP));
+		if (--nr_ptes == 0)
+			break;
+		ptep++;
+		addr += PAGE_SIZE;
+	}
+
+	return true;
+}
+
 /*
  * This function makes sure that we'll replace the none pte with an uffd-wp
  * swap special pte marker when necessary. Must be with the pgtable lock held.
@@ -1688,29 +1756,10 @@ zap_install_uffd_wp_if_needed(struct vm_area_struct *vma,
 			      unsigned long addr, pte_t *pte, int nr,
 			      struct zap_details *details, pte_t pteval)
 {
-	bool was_installed = false;
-
-	if (!uffd_supports_wp_marker())
-		return false;
-
-	/* Zap on anonymous always means dropping everything */
-	if (vma_is_anonymous(vma))
-		return false;
-
 	if (zap_drop_markers(details))
 		return false;
 
-	for (;;) {
-		/* the PFN in the PTE is irrelevant. */
-		if (pte_install_uffd_wp_if_needed(vma, addr, pte, pteval))
-			was_installed = true;
-		if (--nr == 0)
-			break;
-		pte++;
-		addr += PAGE_SIZE;
-	}
-
-	return was_installed;
+	return cond_install_uffd_wp_ptes(vma, addr, pte, pteval, nr);
 }
 
 static __always_inline void zap_present_folio_ptes(struct mmu_gather *tlb,
@@ -4817,6 +4866,74 @@ static void check_swap_exclusive(struct folio *folio, swp_entry_t entry,
 	} while (--nr_pages);
 }
 
+static vm_fault_t do_non_swap_page(struct vm_fault *vmf)
+{
+	struct vm_area_struct *vma = vmf->vma;
+	struct folio *folio;
+	softleaf_t entry;
+	vm_fault_t ret = 0;
+
+	entry = softleaf_from_pte(vmf->orig_pte);
+	if (softleaf_is_migration(entry)) {
+		migration_entry_wait(vma->vm_mm, vmf->pmd,
+				     vmf->address);
+	} else if (softleaf_is_device_exclusive(entry)) {
+		vmf->page = softleaf_to_page(entry);
+		ret = remove_device_exclusive_entry(vmf);
+	} else if (softleaf_is_device_private(entry)) {
+
+		if (vmf->flags & FAULT_FLAG_VMA_LOCK) {
+			/*
+			 * migrate_to_ram is not yet ready to operate
+			 * under VMA lock.
+			 */
+			vma_end_read(vma);
+			return VM_FAULT_RETRY;
+		}
+
+		vmf->page = softleaf_to_page(entry);
+		vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd,
+						vmf->address, &vmf->ptl);
+		if (unlikely(!vmf->pte ||
+			     !pte_same(ptep_get(vmf->pte),
+					vmf->orig_pte)))
+			goto unlock;
+
+		/*
+		 * Get a folio reference while we know the folio can't be
+		 * freed.
+		 */
+		folio = page_folio(vmf->page);
+		if (folio_trylock(folio)) {
+			struct dev_pagemap *pgmap;
+
+			folio_get(folio);
+			pte_unmap_unlock(vmf->pte, vmf->ptl);
+			pgmap = page_pgmap(vmf->page);
+			ret = pgmap->ops->migrate_to_ram(vmf);
+			folio_unlock(folio);
+			folio_put(folio);
+		} else {
+			pte_unmap(vmf->pte);
+			softleaf_entry_wait_on_locked(entry, vmf->ptl);
+		}
+	} else if (softleaf_is_hwpoison(entry)) {
+		ret = VM_FAULT_HWPOISON;
+	} else if (softleaf_is_marker(entry)) {
+		ret = handle_pte_marker(vmf);
+	} else {
+		print_bad_pte(vma, vmf->address, vmf->orig_pte, NULL);
+		ret = VM_FAULT_SIGBUS;
+	}
+
+	return ret;
+
+unlock:
+	if (vmf->pte)
+		pte_unmap_unlock(vmf->pte, vmf->ptl);
+	return ret;
+}
+
 /*
  * We enter with either the VMA lock or the mmap_lock held (see
  * FAULT_FLAG_VMA_LOCK), and pte mapped but not yet locked.
@@ -4847,56 +4964,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 
 	entry = softleaf_from_pte(vmf->orig_pte);
 	if (unlikely(!softleaf_is_swap(entry))) {
-		if (softleaf_is_migration(entry)) {
-			migration_entry_wait(vma->vm_mm, vmf->pmd,
-					     vmf->address);
-		} else if (softleaf_is_device_exclusive(entry)) {
-			vmf->page = softleaf_to_page(entry);
-			ret = remove_device_exclusive_entry(vmf);
-		} else if (softleaf_is_device_private(entry)) {
-			if (vmf->flags & FAULT_FLAG_VMA_LOCK) {
-				/*
-				 * migrate_to_ram is not yet ready to operate
-				 * under VMA lock.
-				 */
-				vma_end_read(vma);
-				ret = VM_FAULT_RETRY;
-				goto out;
-			}
-
-			vmf->page = softleaf_to_page(entry);
-			vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd,
-					vmf->address, &vmf->ptl);
-			if (unlikely(!vmf->pte ||
-				     !pte_same(ptep_get(vmf->pte),
-							vmf->orig_pte)))
-				goto unlock;
-
-			/*
-			 * Get a page reference while we know the page can't be
-			 * freed.
-			 */
-			if (trylock_page(vmf->page)) {
-				struct dev_pagemap *pgmap;
-
-				get_page(vmf->page);
-				pte_unmap_unlock(vmf->pte, vmf->ptl);
-				pgmap = page_pgmap(vmf->page);
-				ret = pgmap->ops->migrate_to_ram(vmf);
-				unlock_page(vmf->page);
-				put_page(vmf->page);
-			} else {
-				pte_unmap(vmf->pte);
-				softleaf_entry_wait_on_locked(entry, vmf->ptl);
-			}
-		} else if (softleaf_is_hwpoison(entry)) {
-			ret = VM_FAULT_HWPOISON;
-		} else if (softleaf_is_marker(entry)) {
-			ret = handle_pte_marker(vmf);
-		} else {
-			print_bad_pte(vma, vmf->address, vmf->orig_pte, NULL);
-			ret = VM_FAULT_SIGBUS;
-		}
+		ret = do_non_swap_page(vmf);
 		goto out;
 	}
 

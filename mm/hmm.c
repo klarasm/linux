@@ -17,6 +17,7 @@
 #include <linux/slab.h>
 #include <linux/sched.h>
 #include <linux/mmzone.h>
+#include <linux/oom.h>
 #include <linux/pagemap.h>
 #include <linux/leafops.h>
 #include <linux/hugetlb.h>
@@ -805,6 +806,11 @@ int hmm_range_fault_unlocked_timeout(struct hmm_range *range,
 		ret = mmap_read_lock_killable(mm);
 		if (ret)
 			return ret;
+
+		if (check_stable_address_space(mm)) {
+			mmap_read_unlock(mm);
+			return -EFAULT;
+		}
 
 		if (timeout && time_after(jiffies, deadline)) {
 			mmap_read_unlock(mm);

@@ -5357,8 +5357,6 @@ static void *__kmalloc_nolock_noprof(DECL_TOKEN_PARAMS(size, token), gfp_t gfp_f
 	if (!can_spin_trylock())
 		return NULL;
 
-	node = apply_strict_numa_policy(node);
-
 retry:
 	if (unlikely(size > KMALLOC_MAX_CACHE_SIZE))
 		return NULL;
