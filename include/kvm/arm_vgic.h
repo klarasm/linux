@@ -176,8 +176,6 @@ struct vgic_global {
 	/* GICv3 compat mode on a GICv5 host */
 	bool			has_gcie_v3_compat;
 
-	u32			ich_vtr_el2;
-
 	/* GICv5 PPI capabilities */
 	struct {
 		DECLARE_BITMAP(impl_ppi_mask, VGIC_V5_NR_PRIVATE_IRQS);
@@ -246,9 +244,6 @@ struct vgic_irq {
 					 * targets reg (v2) or the
 					 * affinity reg (v3).
 					 */
-
-	bool pending_release:1;		/* Used for LPIs only, unreferenced IRQ
-					 * pending a release */
 
 	bool pending_latch:1;		/* The pending latch state used to calculate
 					 * the pending state for both level

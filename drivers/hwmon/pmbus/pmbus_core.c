@@ -2985,8 +2985,9 @@ static void pmbus_notify(struct pmbus_data *data, int page, int reg, int flags)
 
 		if (reg == sreg && page == spage && (smask & flags)) {
 			dev_dbg(data->dev, "sysfs notify: %s", da->attr.name);
-			sysfs_notify(&data->dev->kobj, NULL, da->attr.name);
-			kobject_uevent(&data->dev->kobj, KOBJ_CHANGE);
+			sysfs_notify(&data->hwmon_dev->kobj, NULL,
+				     da->attr.name);
+			kobject_uevent(&data->hwmon_dev->kobj, KOBJ_CHANGE);
 			flags &= ~smask;
 		}
 
@@ -3496,10 +3497,8 @@ static int pmbus_irq_setup(struct i2c_client *client, struct pmbus_data *data)
 	/* Register notifiers */
 	err = devm_request_threaded_irq(dev, client->irq, NULL, pmbus_fault_handler,
 					IRQF_ONESHOT, "pmbus-irq", data);
-	if (err) {
-		dev_err(dev, "failed to request an irq %d\n", err);
+	if (err)
 		return err;
-	}
 
 	return 0;
 }

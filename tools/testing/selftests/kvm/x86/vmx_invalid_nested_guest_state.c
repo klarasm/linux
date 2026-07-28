@@ -25,15 +25,11 @@ static void l2_guest_code(void)
 
 static void l1_guest_code(struct vmx_pages *vmx_pages)
 {
-#define L2_GUEST_STACK_SIZE 64
-	unsigned long l2_guest_stack[L2_GUEST_STACK_SIZE];
-
 	GUEST_ASSERT(prepare_for_vmx_operation(vmx_pages));
 	GUEST_ASSERT(load_vmcs(vmx_pages));
 
 	/* Prepare the VMCS for L2 execution. */
-	prepare_vmcs(vmx_pages, l2_guest_code,
-		     &l2_guest_stack[L2_GUEST_STACK_SIZE]);
+	prepare_vmcs(vmx_pages, l2_guest_code);
 
 	/*
 	 * L2 must be run without unrestricted guest, verify that the selftests
@@ -81,7 +77,7 @@ int main(int argc, char *argv[])
 		    ARBITRARY_IO_PORT, run->io.port);
 
 	/*
-	 * Stuff invalid guest state for L2 by making TR unusuable.  The next
+	 * Stuff invalid guest state for L2 by making TR unusable.  The next
 	 * KVM_RUN should induce a TRIPLE_FAULT in L2 as KVM doesn't support
 	 * emulating invalid guest state for L2.
 	 */

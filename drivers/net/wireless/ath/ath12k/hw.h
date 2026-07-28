@@ -196,6 +196,7 @@ struct ath12k_hw_params {
 	bool supports_shadow_regs:1;
 	bool supports_aspm:1;
 	bool current_cc_support:1;
+	bool supports_cong_ctrl_max_msdus:1;
 
 	u32 num_tcl_banks;
 	u32 max_tx_ring;
@@ -236,6 +237,8 @@ struct ath12k_hw_params {
 		u32 max_client_dbs;
 		u32 max_client_dbs_sbs;
 	} client;
+
+	bool host_alloc_ml_id;
 };
 
 struct ath12k_hw_ops {

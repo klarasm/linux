@@ -47,6 +47,7 @@
 	PCI	PCI bus support is enabled.
 	PCIE	PCI Express support is enabled.
 	PCMCIA	The PCMCIA subsystem is enabled.
+	PM	Power Management support is enabled.
 	PNP	Plug & Play support is enabled.
 	PPC	PowerPC architecture is enabled.
 	PPT	Parallel port support is enabled.
@@ -1089,14 +1090,14 @@ Kernel parameters
 			It will be ignored when crashkernel=X,high is not used
 			or memory reserved is below 4G.
 	crashkernel=size[KMG],cma
-			[KNL, X86, ppc] Reserve additional crash kernel memory from
-			CMA. This reservation is usable by the first system's
-			userspace memory and kernel movable allocations (memory
-			balloon, zswap). Pages allocated from this memory range
-			will not be included in the vmcore so this should not
-			be used if dumping of userspace memory is intended and
-			it has to be expected that some movable kernel pages
-			may be missing from the dump.
+			[KNL, X86, ARM64, RISCV, PPC] Reserve additional crash
+			kernel memory from CMA. This reservation is usable by
+			the first system's userspace memory and kernel movable
+			allocations (memory balloon, zswap). Pages allocated
+			from this memory range will not be included in the vmcore
+			so this should not be used if dumping of userspace memory
+			is intended and it has to be expected that some movable
+			kernel pages may be missing from the dump.
 
 			A standard crashkernel reservation, as described above,
 			is still needed to hold the crash kernel and initrd.
@@ -1614,10 +1615,17 @@ Kernel parameters
 			on all PCI bridges while in the EFI boot stub
 
 	efi_no_storage_paranoia [EFI,X86,EARLY]
-			Using this parameter you can use more than 50% of
-			your efi variable storage. Use this parameter only if
-			you are really sure that your UEFI does sane gc and
-			fulfills the spec otherwise your board may brick.
+			The kernel reserves 5KB of EFI variable storage for
+			safety, because some UEFI implementation may fail to
+			boot if there's insufficient space in the EFI variable
+			storage.
+
+			Using this parameter, you can use the 5KB reservation
+			in the EFI variable storage.
+
+			However, Use this parameter only if you are really
+			sure that your UEFI does sane gc and fulfills the spec
+			otherwise your board may brick.
 
 	efivar_ssdt=	[EFI; X86] Name of an EFI variable that contains an SSDT
 			that is to be dynamically loaded by Linux. If there are
@@ -1951,6 +1959,102 @@ Kernel parameters
 			for 64-bit NUMA, off otherwise.
 			Format: 0 | 1 (for off | on)
 
+	hazptrtorture.defer_modulus= [KNL]
+			Defer release of the hazard pointer on average
+			one out of the specified number of times.  Zero
+			disables.  Negative one defaults to 1,000 times
+			nr_cpu_ids, unless hazptr.kthread_do_pending_ms is
+			equal to zero, in which case it instead defaults
+			to zero (disabled).
+
+	hazptrtorture.irq_acquire= [KNL]
+			Acquire hazard pointers from an irq handler on average
+			one out of the specified number of times.  Zero
+			disables.  Negative one defaults to 1,000 times
+			nr_cpu_ids.
+
+	hazptrtorture.irq_release= [KNL]
+			Release hazard pointers from an irq handler on average
+			one out of the specified number of times.  Zero
+			disables.  Negative one defaults to 1,000 times
+			nr_cpu_ids.
+
+	hazptrtorture.kthread_do_pending_ms= [KNL]
+			Interval between cleanup of pending (deferred)
+			hazard-pointer releases in milliseconds.
+			Zero disables.	Negative one defaults to three
+			milliseconds, unless hazptr.kthread_do_pending_ms
+			is equal to zero, in which case it instead
+			defaults to zero (disabled).
+
+	hazptrtorture.nreaders= [KNL]
+			Number of hazard-pointer reader kthreads, each
+			of which repeatedly acquires and releases hazard
+			pointers.  If the value is zero, one reader
+			is spawned.  If the value is less than zero,
+			the absolute value is multiplied by the number
+			of online CPUs at initialization time.
+
+	hazptrtorture.nwriters= [KNL]
+			Controls whether or not there is a writer.
+			There is at most one writer, so this value must
+			be zero or one.
+
+	hazptrtorture.onoff_holdoff= [KNL]
+			Set time (s) after boot for CPU-hotplug testing.
+
+	hazptrtorture.onoff_interval= [KNL]
+			Set time (jiffies) between CPU-hotplug operations,
+			or zero to disable CPU-hotplug testing.
+
+	hazptrtorture.preempt_duration= [KNL]
+			Set duration (in milliseconds) of preemptions
+			by a high-priority FIFO real-time task.  Set to
+			zero (the default) to disable.	The CPUs to
+			preempt are selected randomly from the set that
+			are online at a given point in time.  Races with
+			CPUs going offline are ignored, with that attempt
+			at preemption skipped.
+
+	hazptrtorture.preempt_interval= [KNL]
+			Set interval (in milliseconds, defaulting to one
+			second) between preemptions by a high-priority
+			FIFO real-time task.  This delay is mediated
+			by an hrtimer and is further fuzzed to avoid
+			inadvertent synchronizations.
+
+	hazptrtorture.reader_sleep_us= [KNL]
+			Set occassional read-side sleep time in
+			microseconds, defaulting to zero for disabled.
+
+	hazptrtorture.shuffle_interval= [KNL]
+			Set task-shuffle interval (seconds).  Shuffling
+			tasks allows some CPUs to go into dyntick-idle
+			mode during the hazptrtorture test.
+
+	hazptrtorture.shutdown_secs= [KNL]
+			Set time (s) after boot system shutdown.  This
+			is useful for hands-off automated testing.
+
+	hazptrtorture.stat_interval= [KNL]
+			Time (s) between statistics printk()s.
+
+	hazptrtorture.stutter= [KNL]
+			Time (s) to stutter testing, for example,
+			specifying three seconds (the default) causes
+			the test to run for three seconds, wait
+			for five seconds, and so on.  This tests the
+			hazard-pointers primitives' ability to transition
+			abruptly to and from idle.  Setting this to zero
+			disables stuttering.
+
+	hazptrtorture.torture_type= [KNL]
+			Specify the hazard-pointers implementation
+			to test.
+
+	hazptrtorture.verbose= [KNL]
+			Enable additional printk() statements.
+
 	hd=		[EIDE] (E)IDE hard drive subsystem geometry
 			Format: <cyl>,<head>,<sect>
 
@@ -2064,8 +2168,11 @@ Kernel parameters
 	hugetlb_cma=	[HW,CMA,EARLY] The size of a CMA area used for allocation
 			of gigantic hugepages. Or using node format, the size
 			of a CMA area per node can be specified.
-			Format: nn[KMGTPE] or (node format)
-				<node>:nn[KMGTPE][,<node>:nn[KMGTPE]]
+			The size can be an absolute value (e.g., 2G) or a
+			percentage of the total memory or node memory (e.g., 20%).
+			Format: nn[KMGTPE] or nn% or (node format)
+				<node>:nn[KMGTPE][,<node>:nn[KMGTPE]] or
+				<node>:nn%[,<node>:nn%]
 
 			The size must be a multiple of the gigantic page size.
 			When using node format, this applies to each per-node size.
@@ -3782,6 +3889,9 @@ Kernel parameters
 		nobootlog
 			disable boot machine check logging.
 
+		print_all
+			print all machine check logs to the console.
+
 		monarchtimeout (number)
 			sets the time in us to wait for other CPUs on machine
 			checks. 0 to disable.
@@ -3976,6 +4086,11 @@ Kernel parameters
 			/sys/module/memory_hotplug/parameters/memmap_on_memory.
 			Note that even when enabled, there are a few cases where
 			the feature is not effective.
+
+	mempool_debug	[MM]
+			Enable mempool debugging. This enables element
+			poison checking when freeing elements back to the
+			pool. Useful for debugging mempool corruption.
 
 	memtest=	[KNL,X86,ARM,M68K,PPC,RISCV,EARLY] Enable memtest
 			Format: <integer>
@@ -4586,9 +4701,6 @@ Kernel parameters
 
 	norandmaps	Don't use address space randomization.  Equivalent to
 			echo 0 > /proc/sys/kernel/randomize_va_space
-
-	noreplace-smp	[X86-32,SMP] Don't replace SMP instructions
-			with UP alternatives
 
 	noresume	[SWSUSP] Disables resume and restores original swap
 			space.
@@ -5353,6 +5465,12 @@ Kernel parameters
 
 	pm_debug_messages	[SUSPEND,KNL]
 			Enable suspend/resume debug messages during boot up.
+
+	pm.dpm_watchdog_enabled=
+			[PM] Enable or disable the DPM watchdog.  Requires
+			CONFIG_PM_SLEEP and CONFIG_DPM_WATCHDOG enabled.
+			Format: <bool>
+			Default value is set by CONFIG_DPM_WATCHDOG_ENABLED.
 
 	pnp.debug=1	[PNP]
 			Enable PNP debug messages (depends on the
@@ -6413,9 +6531,9 @@ Kernel parameters
 	reboot=		[KNL]
 			Format (x86 or x86_64):
 				[w[arm] | c[old] | h[ard] | s[oft] | g[pio]] | d[efault] \
-				[[,]s[mp]#### \
+				[[,]s[mp]####] \
 				[[,]b[ios] | a[cpi] | k[bd] | t[riple] | e[fi] | p[ci]] \
-				[[,]f[orce]
+				[[,]f[orce]]
 			Where reboot_mode is one of warm (soft) or cold (hard) or gpio
 					(prefix with 'panic_' to set mode for panic
 					reboot only),
@@ -6875,7 +6993,7 @@ Kernel parameters
 			xtime_lock contention on larger systems, and/or RCU lock
 			contention on all systems with CONFIG_MAXSMP set.
 			Format: { "0" | "1" }
-			0 -- disable. (may be 1 via CONFIG_CMDLINE="skew_tick=1"
+			0 -- disable. (may be 1 via CONFIG_CMDLINE="skew_tick=1")
 			1 -- enable.
 			Note: increases power consumption, thus should only be
 			enabled if running jitter sensitive (HPC/RT) workloads.
@@ -6916,7 +7034,7 @@ Kernel parameters
 			apic=verbose is specified.
 			Example: apic=debug show_lapic=all
 
-	slab_debug[=options[,slabs][;[options[,slabs]]...]	[MM]
+	slab_debug[=options[,slabs][;[options[,slabs]]...]]	[MM]
 			Enabling slab_debug allows one to determine the
 			culprit if slab objects become corrupted. Enabling
 			slab_debug can create guard zones around objects and

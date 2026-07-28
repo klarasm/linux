@@ -443,10 +443,6 @@ static bool xe_pt_hugepte_possible(u64 addr, u64 next, unsigned int level,
 	if (!xe_pt_covers(addr, next, level, &xe_walk->base))
 		return false;
 
-	/* Does the DMA segment cover the whole pte? */
-	if (next - xe_walk->va_curs_start > xe_walk->curs->size)
-		return false;
-
 	/* null VMA's and purged BO's do not have dma addresses */
 	if (xe_vma_is_null(xe_walk->vma) || (bo && xe_bo_is_purged(bo)))
 		return true;
@@ -454,6 +450,10 @@ static bool xe_pt_hugepte_possible(u64 addr, u64 next, unsigned int level,
 	/* if we are clearing page table, no dma addresses*/
 	if (xe_walk->clear_pt)
 		return true;
+
+	/* Does the DMA segment cover the whole pte? */
+	if (next - xe_walk->va_curs_start > xe_walk->curs->size)
+		return false;
 
 	/* Is the DMA address huge PTE size aligned? */
 	size = next - addr;
@@ -760,7 +760,7 @@ xe_pt_stage_bind(struct xe_tile *tile, struct xe_vma *vma,
 			return -EAGAIN;
 		}
 		if (xe_svm_range_has_dma_mapping(range)) {
-			xe_res_first_dma(range->base.pages.dma_addr, 0,
+			xe_res_first_dma(range->pages.dma_addr, 0,
 					 xe_svm_range_size(range),
 					 &curs);
 			xe_svm_range_debug(range, "BIND PREPARE - MIXED");
@@ -775,8 +775,11 @@ xe_pt_stage_bind(struct xe_tile *tile, struct xe_vma *vma,
 	}
 
 	xe_walk.needs_64K = (vm->flags & XE_VM_FLAG_64K);
-	if (clear_pt)
+	if (clear_pt) {
+		xe_assert(xe, !range);
+		curs.size = xe_vma_size(vma);
 		goto walk_pt;
+	}
 
 	if (vma->gpuva.flags & XE_VMA_ATOMIC_PTE_BIT) {
 		xe_walk.default_vram_pte = xe_atomic_for_vram(vm, vma) ? XE_USM_PPGTT_PTE_AE : 0;
@@ -2085,6 +2088,9 @@ static int bind_op_prepare(struct xe_vm *vm, struct xe_tile *tile,
 		 * automatically when the context is re-enabled by the rebind worker,
 		 * or in fault mode it was invalidated on PTE zapping.
 		 *
+		 * If rebind, we have to invalidate TLB on context based TLB invalidation
+		 * LR vms, as they cannot be relied on context re-enable.
+		 *
 		 * If !rebind, and scratch enabled VMs, there is a chance the scratch
 		 * PTE is already cached in the TLB so it needs to be invalidated.
 		 * On !LR VMs this is done in the ring ops preceding a batch, but on
@@ -2093,6 +2099,9 @@ static int bind_op_prepare(struct xe_vm *vm, struct xe_tile *tile,
 		 */
 		if ((!pt_op->rebind && xe_vm_has_scratch(vm) &&
 		     xe_vm_in_lr_mode(vm)))
+			pt_update_ops->needs_invalidation = true;
+		else if (pt_op->rebind && xe_vm_in_preempt_fence_mode(vm) &&
+			 vm->xe->info.has_ctx_tlb_inval)
 			pt_update_ops->needs_invalidation = true;
 		else if (pt_op->rebind && !xe_vm_in_lr_mode(vm))
 			/* We bump also if batch_invalidate_tlb is true */
