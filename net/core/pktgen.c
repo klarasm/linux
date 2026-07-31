@@ -2345,11 +2345,11 @@ static void spin(struct pktgen_dev *pkt_dev, ktime_t spin_until)
 			set_current_state(TASK_INTERRUPTIBLE);
 			hrtimer_sleeper_start_expires(&t, HRTIMER_MODE_ABS);
 
-			if (likely(t.task))
+			if (likely(hrtimer_sleeper_task_get(&t)))
 				schedule();
 
 			hrtimer_cancel(&t.timer);
-		} while (t.task && pkt_dev->running && !signal_pending(current));
+		} while (hrtimer_sleeper_task_get(&t) && pkt_dev->running && !signal_pending(current));
 		__set_current_state(TASK_RUNNING);
 		end_time = ktime_get();
 	}
@@ -3005,7 +3005,7 @@ static struct sk_buff *fill_packet_ipv4(struct net_device *odev,
 
 	udph->source = htons(pkt_dev->cur_udp_src);
 	udph->dest = htons(pkt_dev->cur_udp_dst);
-	udph->len = htons(datalen + 8);	/* DATA + udphdr */
+	udp_set_len_short(udph, datalen + 8);	/* DATA + udphdr */
 	udph->check = 0;
 
 	iph->ihl = 5;
@@ -3138,7 +3138,7 @@ static struct sk_buff *fill_packet_ipv6(struct net_device *odev,
 	udplen = datalen + sizeof(struct udphdr);
 	udph->source = htons(pkt_dev->cur_udp_src);
 	udph->dest = htons(pkt_dev->cur_udp_dst);
-	udph->len = htons(udplen);
+	udp_set_len_short(udph, udplen);
 	udph->check = 0;
 
 	*(__be32 *) iph = htonl(0x60000000);	/* Version + flow */

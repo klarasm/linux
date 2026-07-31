@@ -677,7 +677,8 @@ static int aldebaran_get_smu_metrics_data(struct smu_context *smu,
 	case METRICS_AVERAGE_SOCKETPOWER:
 		/* Valid power data is available only from primary die */
 		if (aldebaran_is_primary(smu))
-			*value = metrics->AverageSocketPower << 8;
+			*value = metrics->AverageSocketPower *
+				 MILLIWATT_PER_WATT;
 		else
 			ret = -EOPNOTSUPP;
 		break;
@@ -2004,7 +2005,6 @@ static const struct pptable_funcs aldebaran_ppt_funcs = {
 	.disable_thermal_alert = smu_v13_0_disable_thermal_alert,
 	.set_xgmi_pstate = smu_v13_0_set_xgmi_pstate,
 	.register_irq_handler = smu_v13_0_register_irq_handler,
-	.set_azalia_d3_pme = smu_v13_0_set_azalia_d3_pme,
 	.get_max_sustainable_clocks_by_dc = smu_v13_0_get_max_sustainable_clocks_by_dc,
 	.get_bamaco_support = aldebaran_get_bamaco_support,
 	.get_dpm_ultimate_freq = aldebaran_get_dpm_ultimate_freq,

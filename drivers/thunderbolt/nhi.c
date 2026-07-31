@@ -1226,6 +1226,8 @@ int nhi_probe(struct tb_nhi *nhi)
 			return dev_err_probe(dev, res, "NHI specific init failed\n");
 	}
 
+	init_completion(&nhi->domain_released);
+
 	tb = nhi_select_cm(nhi);
 	if (!tb)
 		return dev_err_probe(dev, -ENODEV,
@@ -1233,7 +1235,7 @@ int nhi_probe(struct tb_nhi *nhi)
 
 	dev_dbg(dev, "NHI initialized, starting thunderbolt\n");
 
-	init_completion(&nhi->domain_released);
+	nhi->host_reset = host_reset;
 
 	res = tb_domain_add(tb, host_reset);
 	if (res) {

@@ -41,8 +41,6 @@
 
 #define DEVICE_ATTR_IS(_name)		(attr_id == device_attr_id__##_name)
 
-#define power_2_mwatt(power)	(((power) >> 8) * 1000 + ((power) & 0xff))
-
 struct od_attribute {
 	struct kobj_attribute	attribute;
 	struct list_head	entry;
@@ -99,6 +97,37 @@ const char * const amdgpu_pp_profile_name[] = {
 	"CAPPED",
 	"UNCAPPED",
 };
+
+static int amdgpu_pm_parse_long_params(char *str, long *params,
+				       uint32_t max_params,
+				       uint32_t *num_params)
+{
+	const char delimiter[] = { ' ', '\n', '\0' };
+	uint32_t count = 0;
+	char *sub_str;
+	int ret;
+
+	if (!params || !num_params)
+		return -EINVAL;
+
+	while ((sub_str = strsep(&str, delimiter)) != NULL) {
+		if (strlen(sub_str) == 0)
+			continue;
+		if (count >= max_params)
+			return -EINVAL;
+		ret = kstrtol(sub_str, 0, &params[count]);
+		if (ret)
+			return -EINVAL;
+		count++;
+		if (!str)
+			break;
+		while (isspace(*str))
+			str++;
+	}
+	*num_params = count;
+
+	return 0;
+}
 
 /**
  * amdgpu_pm_dev_state_check - Check if device can be accessed.
@@ -564,24 +593,18 @@ static ssize_t amdgpu_get_pp_table(struct device *dev,
 {
 	struct drm_device *ddev = dev_get_drvdata(dev);
 	struct amdgpu_device *adev = drm_to_adev(ddev);
-	char *table = NULL;
 	int size, ret;
 
 	ret = amdgpu_pm_get_access_if_active(adev);
 	if (ret)
 		return ret;
 
-	size = amdgpu_dpm_get_pp_table(adev, &table);
+	size = amdgpu_dpm_get_pp_table(adev, buf, PAGE_SIZE - 1);
 
 	amdgpu_pm_put_access(adev);
 
 	if (size <= 0)
 		return size;
-
-	if (size >= PAGE_SIZE)
-		size = PAGE_SIZE - 1;
-
-	memcpy(buf, table, size);
 
 	return size;
 }
@@ -769,8 +792,6 @@ static ssize_t amdgpu_set_pp_od_clk_voltage(struct device *dev,
 	long parameter[64];
 	char buf_cpy[128];
 	char *tmp_str;
-	char *sub_str;
-	const char delimiter[3] = {' ', '\n', '\0'};
 	uint32_t type;
 
 	if (count > 127 || count == 0)
@@ -805,22 +826,10 @@ static ssize_t amdgpu_set_pp_od_clk_voltage(struct device *dev,
 		tmp_str++;
 	while (isspace(*++tmp_str));
 
-	while ((sub_str = strsep(&tmp_str, delimiter)) != NULL) {
-		if (strlen(sub_str) == 0)
-			continue;
-		if (parameter_size >= ARRAY_SIZE(parameter))
-			return -EINVAL;
-		ret = kstrtol(sub_str, 0, &parameter[parameter_size]);
-		if (ret)
-			return -EINVAL;
-		parameter_size++;
-
-		if (!tmp_str)
-			break;
-
-		while (isspace(*tmp_str))
-			tmp_str++;
-	}
+	ret = amdgpu_pm_parse_long_params(
+		tmp_str, parameter, ARRAY_SIZE(parameter), &parameter_size);
+	if (ret)
+		return ret;
 
 	ret = amdgpu_pm_get_access(adev);
 	if (ret < 0)
@@ -1393,11 +1402,9 @@ static ssize_t amdgpu_set_pp_power_profile_mode(struct device *dev,
 	struct amdgpu_device *adev = drm_to_adev(ddev);
 	uint32_t parameter_size = 0;
 	long parameter[64];
-	char *sub_str, buf_cpy[128];
-	char *tmp_str;
+	char buf_cpy[128];
 	char tmp[2];
 	long int profile_mode = 0;
-	const char delimiter[3] = {' ', '\n', '\0'};
 
 	/* Reject empty/whitespace strings - fuzzing found this is not validated */
 	if (count == 0 || sysfs_streq(buf, ""))
@@ -1415,19 +1422,11 @@ static ssize_t amdgpu_set_pp_power_profile_mode(struct device *dev,
 		while (isspace(*buf))
 			buf++;
 		strscpy(buf_cpy, buf, sizeof(buf_cpy));
-		tmp_str = buf_cpy;
-		while ((sub_str = strsep(&tmp_str, delimiter)) != NULL) {
-			if (strlen(sub_str) == 0)
-				continue;
-			ret = kstrtol(sub_str, 0, &parameter[parameter_size]);
-			if (ret)
-				return -EINVAL;
-			parameter_size++;
-			if (!tmp_str)
-				break;
-			while (isspace(*tmp_str))
-				tmp_str++;
-		}
+		ret = amdgpu_pm_parse_long_params(buf_cpy, parameter,
+						  ARRAY_SIZE(parameter) - 1,
+						  &parameter_size);
+		if (ret)
+			return ret;
 	}
 	parameter[parameter_size] = profile_mode;
 
@@ -1780,7 +1779,6 @@ static ssize_t amdgpu_get_gpu_metrics(struct device *dev,
 {
 	struct drm_device *ddev = dev_get_drvdata(dev);
 	struct amdgpu_device *adev = drm_to_adev(ddev);
-	void *gpu_metrics;
 	ssize_t size = 0;
 	int ret;
 
@@ -1788,14 +1786,9 @@ static ssize_t amdgpu_get_gpu_metrics(struct device *dev,
 	if (ret)
 		return ret;
 
-	size = amdgpu_dpm_get_gpu_metrics(adev, &gpu_metrics);
+	size = amdgpu_dpm_get_gpu_metrics(adev, buf, PAGE_SIZE - 1);
 	if (size <= 0)
 		goto out;
-
-	if (size >= PAGE_SIZE)
-		size = PAGE_SIZE - 1;
-
-	memcpy(buf, gpu_metrics, size);
 
 out:
 	amdgpu_pm_put_access(adev);
@@ -2726,10 +2719,9 @@ static int default_attr_update(struct amdgpu_device *adev, struct amdgpu_device_
 			*states = ATTR_STATE_UNSUPPORTED;
 	} else if (DEVICE_ATTR_IS(pp_table)) {
 		int ret;
-		char *tmp = NULL;
 
-		ret = amdgpu_dpm_get_pp_table(adev, &tmp);
-		if (ret == -EOPNOTSUPP || !tmp)
+		ret = amdgpu_dpm_get_pp_table(adev, NULL, 0);
+		if (ret <= 0)
 			*states = ATTR_STATE_UNSUPPORTED;
 		else
 			*states = ATTR_STATE_SUPPORTED;
@@ -3364,7 +3356,7 @@ static int amdgpu_hwmon_get_power(struct device *dev,
 		return r;
 
 	/* convert to microwatts */
-	return power_2_mwatt(query) * 1000;
+	return query * 1000;
 }
 
 static ssize_t amdgpu_hwmon_show_power_avg(struct device *dev,
@@ -3958,18 +3950,14 @@ out_pm_put:
 	return size;
 }
 
-static int parse_input_od_command_lines(const char *buf,
-					size_t count,
-					u32 *type,
-					long *params,
-					size_t params_max,
+static int parse_input_od_command_lines(const char *buf, size_t count,
+					u32 *type, long *params,
+					uint32_t max_params,
 					uint32_t *num_of_params)
 {
-	const char delimiter[3] = {' ', '\n', '\0'};
 	uint32_t parameter_size = 0;
 	char buf_cpy[128] = {0};
-	char *tmp_str, *sub_str;
-	int ret;
+	char *tmp_str;
 
 	if (count > sizeof(buf_cpy) - 1)
 		return -EINVAL;
@@ -3994,28 +3982,8 @@ static int parse_input_od_command_lines(const char *buf,
 		break;
 	}
 
-	while ((sub_str = strsep(&tmp_str, delimiter)) != NULL) {
-		if (strlen(sub_str) == 0)
-			continue;
-
-		if (parameter_size >= params_max)
-			return -EINVAL;
-
-		ret = kstrtol(sub_str, 0, &params[parameter_size]);
-		if (ret)
-			return -EINVAL;
-		parameter_size++;
-
-		if (!tmp_str)
-			break;
-
-		while (isspace(*tmp_str))
-			tmp_str++;
-	}
-
-	*num_of_params = parameter_size;
-
-	return 0;
+	return amdgpu_pm_parse_long_params(tmp_str, params, max_params,
+					   num_of_params);
 }
 
 static int
@@ -4028,10 +3996,7 @@ amdgpu_distribute_custom_od_settings(struct amdgpu_device *adev,
 	long parameter[64];
 	int ret;
 
-	ret = parse_input_od_command_lines(in_buf,
-					   count,
-					   &cmd_type,
-					   parameter,
+	ret = parse_input_od_command_lines(in_buf, count, &cmd_type, parameter,
 					   ARRAY_SIZE(parameter),
 					   &parameter_size);
 	if (ret)
@@ -4932,7 +4897,7 @@ static int amdgpu_debugfs_pm_info_pp(struct seq_file *m, struct amdgpu_device *a
 		seq_printf(m, "\t%u mV (VDDNB)\n", value);
 	size = sizeof(uint32_t);
 	if (!amdgpu_dpm_read_sensor(adev, AMDGPU_PP_SENSOR_GPU_AVG_POWER, (void *)&query, &size)) {
-		mwatt = power_2_mwatt(query);
+		mwatt = query;
 		centiwatt = DIV_ROUND_CLOSEST(mwatt, 10);
 		if (adev->flags & AMD_IS_APU)
 			seq_printf(m, "\t%u.%02u W (average SoC including CPU)\n", centiwatt / 100, centiwatt % 100);
@@ -4941,7 +4906,7 @@ static int amdgpu_debugfs_pm_info_pp(struct seq_file *m, struct amdgpu_device *a
 	}
 	size = sizeof(uint32_t);
 	if (!amdgpu_dpm_read_sensor(adev, AMDGPU_PP_SENSOR_GPU_INPUT_POWER, (void *)&query, &size)) {
-		mwatt = power_2_mwatt(query);
+		mwatt = query;
 		centiwatt = DIV_ROUND_CLOSEST(mwatt, 10);
 		if (adev->flags & AMD_IS_APU)
 			seq_printf(m, "\t%u.%02u W (current SoC including CPU)\n", centiwatt / 100, centiwatt % 100);
