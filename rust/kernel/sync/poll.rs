@@ -124,6 +124,9 @@ pub struct PollCondVarBox {
 struct PollCondVarBoxInner {
     #[pin]
     inner: PollCondVar,
+    #[cfg(CONFIG_KVFREE_RCU_BATCHED)]
+    rcu: Opaque<bindings::kvfree_rcu_head>,
+    #[cfg(not(CONFIG_KVFREE_RCU_BATCHED))]
     rcu: Opaque<bindings::callback_head>,
 }
 
