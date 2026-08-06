@@ -904,10 +904,11 @@ unlock:
 		int grow_res;
 
 		module_tags.size = offset + size;
-		if (mem_alloc_profiling_enabled() && !tags_addressable()) {
+		if (!tags_addressable()) {
 			shutdown_mem_profiling(true);
-			pr_warn("With module %s there are too many tags to fit in %d page flag bits. Memory allocation profiling is disabled!\n",
-				mod->name, NR_UNUSED_PAGEFLAG_BITS);
+			pr_warn_once("With module %s there are too many tags to fit in %d page flag bits. Memory allocation profiling is disabled!\n",
+				     mod->name, NR_UNUSED_PAGEFLAG_BITS);
+			return ERR_PTR(-ENOMEM);
 		}
 
 		grow_res = vm_module_tags_populate();
@@ -1302,6 +1303,12 @@ static const struct ctl_table memory_allocation_profiling_sysctls[] = {
 		.data		= &mem_alloc_profiling_key,
 		.mode		= 0644,
 		.proc_handler	= proc_mem_profiling_handler,
+	},
+	{
+		.procname	= "mem_profiling_compressed",
+		.data		= &mem_profiling_compressed,
+		.mode		= 0444,
+		.proc_handler	= proc_do_static_key,
 	},
 };
 
