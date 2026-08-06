@@ -297,19 +297,12 @@ static bool nf_flow_exceeds_mtu(const struct sk_buff *skb, unsigned int mtu)
 	return true;
 }
 
-static inline bool nf_flow_dst_check(struct flow_offload_tuple *tuple)
-{
-	if (!tuple->dst_cache)
-		return true;
-
-	return dst_check(tuple->dst_cache, tuple->dst_cookie);
-}
-
 static unsigned int nf_flow_xmit_xfrm(struct sk_buff *skb,
 				      const struct nf_hook_state *state,
 				      struct dst_entry *dst)
 {
 	skb_orphan(skb);
+	skb_dst_drop(skb);
 	skb_dst_set_noref(skb, dst);
 	dst_output(state->net, state->sk, skb);
 	return NF_STOLEN;
@@ -861,6 +854,7 @@ nf_flow_offload_ip_hook(void *priv, struct sk_buff *skb,
 			return NF_DROP;
 		}
 		xmit.dest = neigh->ha;
+		skb_dst_drop(skb);
 		skb_dst_set_noref(skb, &rt->dst);
 		break;
 	case FLOW_OFFLOAD_XMIT_DIRECT:
@@ -1178,6 +1172,7 @@ nf_flow_offload_ipv6_hook(void *priv, struct sk_buff *skb,
 			return NF_DROP;
 		}
 		xmit.dest = neigh->ha;
+		skb_dst_drop(skb);
 		skb_dst_set_noref(skb, &rt->dst);
 		break;
 	case FLOW_OFFLOAD_XMIT_DIRECT:

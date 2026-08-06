@@ -129,6 +129,10 @@ struct fcp_data {
 
 #define FCP_SEGMENT_APP_GOLD 0
 
+#define FCP_MAX_METER_MAP_SIZE \
+	(sizeof_field(struct snd_ctl_elem_value, value.integer.value) / \
+	 sizeof(long))
+
 /* Forward declarations */
 static int fcp_init(struct usb_mixer_interface *mixer,
 		    void *step0_resp, void *step2_resp);
@@ -410,6 +414,9 @@ static int fcp_meter_ctl_get(struct snd_kcontrol *kctl,
 	if (err < 0)
 		return err;
 
+	if (WARN_ON_ONCE(elem->channels > FCP_MAX_METER_MAP_SIZE))
+		return -EINVAL;
+
 	/* copy & translate from resp[] using meter_level_map[] */
 	for (i = 0; i < elem->channels; i++) {
 		int idx = private->meter_level_map[i];
@@ -486,7 +493,7 @@ static int fcp_ioctl_init(struct usb_mixer_interface *mixer,
 	buf_size = init.step0_resp_size + init.step2_resp_size;
 
 	void *resp __free(kfree) =
-		kmalloc(buf_size, GFP_KERNEL);
+		kzalloc(buf_size, GFP_KERNEL);
 	if (!resp)
 		return -ENOMEM;
 
@@ -636,7 +643,8 @@ static int fcp_ioctl_set_meter_map(struct usb_mixer_interface *mixer,
 	}
 
 	/* Validate the map size */
-	if (map.map_size < 1 || map.map_size > 255 ||
+	if (map.map_size < 1 ||
+	    map.map_size > FCP_MAX_METER_MAP_SIZE ||
 	    map.meter_slots < 1 || map.meter_slots > 255)
 		return -EINVAL;
 
@@ -1022,6 +1030,8 @@ static int fcp_init(struct usb_mixer_interface *mixer,
 		step0_resp, private->step0_resp_size);
 	if (err < 0)
 		return err;
+	if (err != private->step0_resp_size)
+		return -EIO;
 
 	err = fcp_init_notify(mixer);
 	if (err < 0)

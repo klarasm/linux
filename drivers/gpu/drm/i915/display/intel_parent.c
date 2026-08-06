@@ -251,9 +251,11 @@ struct intel_panic *intel_parent_panic_alloc(struct intel_display *display)
 	return display->parent->panic->alloc();
 }
 
-int intel_parent_panic_setup(struct intel_display *display, struct intel_panic *panic, struct drm_scanout_buffer *sb)
+int intel_parent_panic_setup(struct intel_display *display, struct intel_panic *panic,
+			     struct drm_scanout_buffer *sb, struct drm_gem_object *obj,
+			     unsigned int (*tiling)(unsigned int x, unsigned int y, unsigned int width))
 {
-	return display->parent->panic->setup(panic, sb);
+	return display->parent->panic->setup(panic, sb, obj, tiling);
 }
 
 void intel_parent_panic_finish(struct intel_display *display, struct intel_panic *panic)
@@ -447,6 +449,12 @@ bool intel_parent_has_auxccs(struct intel_display *display)
 bool intel_parent_has_fenced_regions(struct intel_display *display)
 {
 	return display->parent->has_fenced_regions && display->parent->has_fenced_regions(display->drm);
+}
+
+void intel_parent_transient_data_flush(struct intel_display *display)
+{
+	if (display->parent->transient_data_flush)
+		display->parent->transient_data_flush(display->drm);
 }
 
 bool intel_parent_vgpu_active(struct intel_display *display)

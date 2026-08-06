@@ -825,6 +825,10 @@ static int zcrx_register_netdev(struct io_zcrx_ifq *ifq,
 						reg->if_idx);
 	if (!ifq->netdev)
 		return -ENODEV;
+	if (!ifq->netdev->queue_mgmt_ops) {
+		ret = -EOPNOTSUPP;
+		goto netdev_put_unlock;
+	}
 
 	netdev_hold(ifq->netdev, &ifq->netdev_tracker, GFP_KERNEL);
 
