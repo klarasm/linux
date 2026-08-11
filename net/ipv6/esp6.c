@@ -121,6 +121,13 @@ static void esp_ssg_unref(struct xfrm_state *x, void *tmp, struct sk_buff *skb, 
 	struct aead_request *req;
 	struct scatterlist *sg;
 
+	/* Managed frags are owned by the zerocopy ubuf; the skb holds no
+	 * per-frag page reference, so we must not drop one here.  Mirrors
+	 * the SKBFL_MANAGED_FRAG_REFS handling in skb_release_data().
+	 */
+	if (skb_zcopy_managed(skb))
+		return;
+
 	if (x->props.flags & XFRM_STATE_ESN)
 		extralen += sizeof(struct esp_output_extra);
 
@@ -230,7 +237,8 @@ static void esp_output_encap_csum(struct sk_buff *skb)
 	if (*skb_mac_header(skb) == IPPROTO_UDP) {
 		struct udphdr *uh = udp_hdr(skb);
 		struct ipv6hdr *ip6h = ipv6_hdr(skb);
-		int len = ntohs(uh->len);
+		/* esp6_output_udp_encap limits len to U16_MAX. */
+		int len = udp_get_len_short(uh);
 		unsigned int offset = skb_transport_offset(skb);
 		__wsum csum = skb_checksum(skb, offset, skb->len - offset, 0);
 
@@ -358,7 +366,7 @@ static struct ip_esp_hdr *esp6_output_udp_encap(struct sk_buff *skb,
 	uh = (struct udphdr *)esp->esph;
 	uh->source = sport;
 	uh->dest = dport;
-	uh->len = htons(len);
+	udp_set_len_short(uh, len);
 	uh->check = 0;
 
 	*skb_mac_header(skb) = IPPROTO_UDP;

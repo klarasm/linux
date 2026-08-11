@@ -28,7 +28,7 @@ static inline void preempt_count_set(u64 pc)
 
 static inline void set_preempt_need_resched(void)
 {
-	current_thread_info()->preempt.need_resched = 0;
+	WRITE_ONCE(current_thread_info()->preempt.need_resched, 0);
 }
 
 static inline void clear_preempt_need_resched(void)
@@ -53,6 +53,26 @@ static inline void __preempt_count_sub(int val)
 	u32 pc = READ_ONCE(current_thread_info()->preempt.count);
 	pc -= val;
 	WRITE_ONCE(current_thread_info()->preempt.count, pc);
+}
+
+static inline int __preempt_count_add_return(int val)
+{
+	u32 pc = READ_ONCE(current_thread_info()->preempt.count);
+
+	pc += val;
+	WRITE_ONCE(current_thread_info()->preempt.count, pc);
+
+	return pc;
+}
+
+static inline int __preempt_count_sub_return(int val)
+{
+	u32 pc = READ_ONCE(current_thread_info()->preempt.count);
+
+	pc -= val;
+	WRITE_ONCE(current_thread_info()->preempt.count, pc);
+
+	return pc;
 }
 
 static inline bool __preempt_count_dec_and_test(void)

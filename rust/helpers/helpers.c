@@ -38,7 +38,6 @@
 #define __rust_helper __always_inline
 #endif
 
-#include "acpi.c"
 #include "atomic.c"
 #include "atomic_ext.c"
 #include "auxiliary.c"
@@ -58,7 +57,9 @@
 #include "cred.c"
 #include "device.c"
 #include "dma.c"
+#ifdef CONFIG_DMA_SHARED_BUFFER
 #include "dma-resv.c"
+#endif
 #include "drm.c"
 #include "drm_gpuvm.c"
 #include "err.c"
@@ -72,6 +73,7 @@
 #include "maple_tree.c"
 #include "mm.c"
 #include "mutex.c"
+#include "net/genetlink.c"
 #include "of.c"
 #include "page.c"
 #include "pci.c"
@@ -87,10 +89,12 @@
 #include "regulator.c"
 #include "scatterlist.c"
 #include "security.c"
+#include "serdev.c"
 #include "signal.c"
 #include "slab.c"
 #include "spinlock.c"
 #include "string.c"
+#include "srcu.c"
 #include "sync.c"
 #include "task.c"
 #include "time.c"

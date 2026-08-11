@@ -105,7 +105,9 @@ void intel_parent_overlay_cleanup(struct intel_display *display);
 
 /* panic */
 struct intel_panic *intel_parent_panic_alloc(struct intel_display *display);
-int intel_parent_panic_setup(struct intel_display *display, struct intel_panic *panic, struct drm_scanout_buffer *sb);
+int intel_parent_panic_setup(struct intel_display *display, struct intel_panic *panic,
+			     struct drm_scanout_buffer *sb, struct drm_gem_object *obj,
+			     unsigned int (*tiling)(unsigned int x, unsigned int y, unsigned int width));
 void intel_parent_panic_finish(struct intel_display *display, struct intel_panic *panic);
 
 /* pc8 */
@@ -153,6 +155,7 @@ int intel_parent_vlv_iosf_write(struct intel_display *display, enum vlv_iosf_sb_
 /* generic */
 bool intel_parent_has_auxccs(struct intel_display *display);
 bool intel_parent_has_fenced_regions(struct intel_display *display);
+void intel_parent_transient_data_flush(struct intel_display *display);
 bool intel_parent_vgpu_active(struct intel_display *display);
 void intel_parent_fence_priority_display(struct intel_display *display, struct dma_fence *fence);
 
