@@ -47,7 +47,6 @@ enum {
 	BRANCH = 2,
 };
 
-
 static void mark_subprog_changes_pkt_data(struct bpf_verifier_env *env, int off)
 {
 	struct bpf_subprog_info *subprog;
@@ -491,7 +490,7 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 					return ret;
 			}
 		} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
-			struct bpf_kfunc_call_arg_meta meta;
+			struct bpf_call_arg_meta meta;
 
 			ret = bpf_fetch_kfunc_arg_meta(env, insn->imm, insn->off, &meta);
 			if (ret == 0 && bpf_is_iter_next_kfunc(&meta)) {
