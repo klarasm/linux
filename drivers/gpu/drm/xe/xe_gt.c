@@ -21,6 +21,7 @@
 #include "regs/xe_gt_regs.h"
 #include "xe_assert.h"
 #include "xe_bb.h"
+#include "xe_debugfs.h"
 #include "xe_device.h"
 #include "xe_eu_stall.h"
 #include "xe_exec_queue.h"
@@ -47,6 +48,7 @@
 #include "xe_hw_engine_class_sysfs.h"
 #include "xe_irq.h"
 #include "xe_lmtt.h"
+#include "xe_log.h"
 #include "xe_lrc.h"
 #include "xe_map.h"
 #include "xe_migrate.h"
@@ -917,13 +919,16 @@ static void gt_reset_worker(struct work_struct *w)
 	if (xe_device_wedged(gt_to_xe(gt)))
 		goto err_pm_put;
 
+	if (xe_device_is_in_reset(gt_to_xe(gt)))
+		goto err_pm_put;
+
 	/* We only support GT resets with GuC submission */
 	if (!xe_device_uc_enabled(gt_to_xe(gt)))
 		goto err_pm_put;
 
-	xe_gt_info(gt, "reset started\n");
+	xe_log_info(gt, GT, "reset started\n");
 
-	if (xe_fault_inject_gt_reset()) {
+	if (xe_fault_gt_reset()) {
 		err = -ECANCELED;
 		goto err_fail;
 	}
@@ -960,7 +965,7 @@ static void gt_reset_worker(struct work_struct *w)
 	/* Pair with get while enqueueing the work in xe_gt_reset_async() */
 	xe_pm_runtime_put(gt_to_xe(gt));
 
-	xe_gt_info(gt, "reset done\n");
+	xe_log_info(gt, GT, "reset done\n");
 
 	return;
 
@@ -969,7 +974,7 @@ err_out:
 	XE_WARN_ON(xe_uc_start(&gt->uc));
 
 err_fail:
-	xe_gt_err(gt, "reset failed (%pe)\n", ERR_PTR(err));
+	xe_log_err_fatal(gt, GT, err, "reset failed\n");
 	xe_device_declare_wedged(gt_to_xe(gt));
 err_pm_put:
 	xe_pm_runtime_put(gt_to_xe(gt));
@@ -977,18 +982,21 @@ err_pm_put:
 
 void xe_gt_reset_async(struct xe_gt *gt)
 {
-	xe_gt_info(gt, "trying reset from %ps\n", __builtin_return_address(0));
+	struct xe_device *xe = gt_to_xe(gt);
 
-	/* Don't do a reset while one is already in flight */
-	if (!xe_fault_inject_gt_reset() && xe_uc_reset_prepare(&gt->uc))
+	if (xe_device_is_in_reset(xe))
 		return;
 
-	xe_gt_info(gt, "reset queued\n");
+	/* Don't do a reset while one is already in flight */
+	if (!xe_fault_gt_reset() && xe_uc_reset_prepare(&gt->uc))
+		return;
+
+	xe_gt_info(gt, "reset queued from %ps\n", __builtin_return_address(0));
 
 	/* Pair with put in gt_reset_worker() if work is enqueued */
-	xe_pm_runtime_get_noresume(gt_to_xe(gt));
+	xe_pm_runtime_get_noresume(xe);
 	if (!queue_work(gt->ordered_wq, &gt->reset.worker))
-		xe_pm_runtime_put(gt_to_xe(gt));
+		xe_pm_runtime_put(xe);
 }
 
 void xe_gt_suspend_prepare(struct xe_gt *gt)
