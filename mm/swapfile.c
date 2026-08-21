@@ -3623,7 +3623,7 @@ retry:
 
 		folio = swap_cache_get_folio(vswap_entry);
 		if (!folio) {
-			folio = swap_cache_alloc_folio(vswap_entry,
+			folio = __swap_cache_alloc_folio(vswap_entry,
 						      GFP_KERNEL, BIT(0), NULL,
 						      mpol, NO_INTERLEAVE_INDEX);
 			if (IS_ERR(folio))
