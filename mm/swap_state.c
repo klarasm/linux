@@ -26,6 +26,7 @@
 #include <linux/shmem_fs.h>
 #include <linux/sysctl.h>
 #include <linux/swap_ops.h>
+#include <linux/zswap.h>
 #include "internal.h"
 #include "swap_table.h"
 #include "swap.h"
@@ -292,11 +293,20 @@ static void __swap_cache_do_del_folio(struct swap_cluster_info *ci,
 	unsigned int ci_start, ci_off, ci_end;
 	bool folio_swapped = false, need_free = false;
 	unsigned long nr_pages = folio_nr_pages(folio);
+	void *shadow_parked;
 
 	VM_WARN_ON_ONCE(__swap_entry_to_cluster(entry) != ci);
 	VM_WARN_ON_ONCE_FOLIO(!folio_test_locked(folio), folio);
 	VM_WARN_ON_ONCE_FOLIO(!folio_test_swapcache(folio), folio);
 	VM_WARN_ON_ONCE_FOLIO(folio_test_writeback(folio), folio);
+
+	/*
+	 * A zswap writeback buffer parked the slot's original shadow in the
+	 * zswap tree: restore it into the slot for later swap-in.
+	 */
+	shadow_parked = zswap_lookup_and_clear_shadows(folio);
+	if (shadow_parked)
+		shadow = shadow_parked;
 
 	si = __swap_entry_to_info(entry);
 	ci_start = swp_cluster_offset(entry);
@@ -521,8 +531,6 @@ static struct folio *__swap_cache_alloc(swp_entry_t targ_entry, gfp_t gfp,
 
 	/* memsw uncharges swap when folio is added to swap cache */
 	memcg1_swapin(folio);
-	if (shadow)
-		workingset_refault(folio, shadow);
 
 	node_stat_mod_folio(folio, NR_FILE_PAGES, nr_pages);
 	lruvec_stat_mod_folio(folio, NR_SWAPCACHE, nr_pages);
@@ -774,16 +782,25 @@ static struct folio *swap_cache_read_folio(struct swap_io_ctx *ctx,
 		pgoff_t ilx, bool readahead)
 {
 	struct folio *folio;
+	void *shadow = NULL;
 
 	do {
 		folio = swap_cache_get_folio(entry);
 		if (folio)
 			return folio;
+		/*
+		 * Capture the slot's shadow before the allocation overwrites it,
+		 * so a fresh swap-in can be evaluated as a refault below.
+		 */
+		shadow = swap_cache_get_shadow(entry);
 		folio = __swap_cache_alloc_folio(entry, gfp, BIT(0), NULL, mpol, ilx);
 	} while (PTR_ERR(folio) == -EEXIST);
 
 	if (IS_ERR_OR_NULL(folio))
 		return NULL;
+
+	if (shadow)
+		workingset_refault(folio, shadow, false);
 
 	folio_add_lru(folio);
 	swap_read_folio(ctx, folio);
@@ -816,16 +833,25 @@ struct folio *swapin_sync(swp_entry_t entry, gfp_t gfp, unsigned long orders,
 {
 	struct swap_io_ctx ctx = {};
 	struct folio *folio;
+	void *shadow = NULL;
 
 	do {
 		folio = swap_cache_get_folio(entry);
 		if (folio)
 			return folio;
+		/*
+		 * Capture the slot's shadow before the allocation overwrites it,
+		 * so a fresh swap-in can be evaluated as a refault below.
+		 */
+		shadow = swap_cache_get_shadow(entry);
 		folio = __swap_cache_alloc_folio(entry, gfp, orders, vmf, mpol, ilx);
 	} while (PTR_ERR(folio) == -EEXIST);
 
 	if (IS_ERR(folio))
 		return folio;
+
+	if (shadow)
+		workingset_refault(folio, shadow, false);
 
 	folio_add_lru(folio);
 	swap_read_folio(&ctx, folio);
