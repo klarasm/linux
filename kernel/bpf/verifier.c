@@ -5877,6 +5877,28 @@ BTF_TYPE_SAFE_TRUSTED(struct file) {
 	struct inode *f_inode;
 };
 
+/*
+ * The pointer fields in the sched_ext ops argument containers are pinned by the
+ * callers for the duration of the ops calls and are never NULL.
+ */
+BTF_TYPE_SAFE_TRUSTED(struct scx_init_task_args) {
+#ifdef CONFIG_EXT_GROUP_SCHED
+	struct cgroup *cgroup;
+#endif
+};
+
+BTF_TYPE_SAFE_TRUSTED(struct scx_cpu_release_args) {
+	struct task_struct *task;
+};
+
+BTF_TYPE_SAFE_TRUSTED(struct scx_sub_attach_args) {
+	struct sched_ext_ops *ops;
+};
+
+BTF_TYPE_SAFE_TRUSTED(struct scx_sub_detach_args) {
+	struct sched_ext_ops *ops;
+};
+
 BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct dentry) {
 	struct inode *d_inode;
 };
@@ -5921,6 +5943,10 @@ static bool type_is_trusted(struct bpf_verifier_env *env,
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct bpf_iter__task));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct linux_binprm));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct file));
+	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct scx_init_task_args));
+	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct scx_cpu_release_args));
+	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct scx_sub_attach_args));
+	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct scx_sub_detach_args));
 
 	return btf_nested_type_is_trusted(&env->log, reg, field_name, btf_id, "__safe_trusted");
 }
@@ -14560,15 +14586,20 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 		return -EINVAL;
 	}
 
-	/* pointer types do not carry 32-bit bounds at the moment. */
-	__mark_reg32_unbounded(dst_reg);
-
 	if (sanitize_needed(opcode)) {
 		ret = sanitize_ptr_alu(env, insn, ptr_reg, off_reg, dst_reg,
 				       &info, false);
 		if (ret < 0)
 			return sanitize_err(env, insn, ret);
 	}
+
+	/*
+	 * Pointer types do not carry 32-bit bounds at the moment. Blank r32
+	 * only after sanitize_ptr_alu() may have snapshotted dst_reg into a
+	 * speculative path: otherwise reg_bounds_sanity_check() might hit some
+	 * constraints violations.
+	 */
+	__mark_reg32_unbounded(dst_reg);
 
 	switch (opcode) {
 	case BPF_ADD:
