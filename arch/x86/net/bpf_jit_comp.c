@@ -13,6 +13,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/memory.h>
 #include <linux/sort.h>
+#include <linux/execmem.h>
 #include <asm/extable.h>
 #include <asm/ftrace.h>
 #include <asm/set_memory.h>
@@ -1689,16 +1690,11 @@ static int emit_spectre_bhb_barrier(u8 **pprog, u8 *ip,
  * arena NULL is offset 0. Return the number of emitted bytes.
  */
 static int emit_kfunc_arena_args(struct bpf_prog *bpf_prog,
-				 const struct bpf_insn *insn, u8 **pprog)
+				 const struct btf_func_model *fm, u8 **pprog)
 {
-	const struct btf_func_model *fm;
 	u8 *prog = *pprog;
 	u8 *start = prog;
 	int i;
-
-	fm = bpf_jit_find_kfunc_model(bpf_prog, insn);
-	if (!fm)
-		return -EINVAL;
 
 	for (i = 0; i < min_t(int, fm->nr_args, MAX_BPF_FUNC_REG_ARGS); i++) {
 		u8 flags = fm->arg_flags[i];
@@ -2644,6 +2640,8 @@ populate_extable:
 
 			/* call */
 		case BPF_JMP | BPF_CALL: {
+			const struct btf_func_model *fm = NULL;
+
 			func = (u8 *) __bpf_call_base + imm32;
 			if (src_reg == BPF_PSEUDO_CALL && tail_call_reachable) {
 				LOAD_TAIL_CALL_CNT_PTR(stack_depth);
@@ -2652,7 +2650,10 @@ populate_extable:
 			if (!imm32)
 				return -EINVAL;
 			if (src_reg == BPF_PSEUDO_KFUNC_CALL) {
-				err = emit_kfunc_arena_args(bpf_prog, insn, &prog);
+				fm = bpf_jit_find_kfunc_model(bpf_prog, insn);
+				if (!fm)
+					return -EINVAL;
+				err = emit_kfunc_arena_args(bpf_prog, fm, &prog);
 				if (err < 0)
 					return err;
 				ip += err;
@@ -2666,6 +2667,14 @@ populate_extable:
 				return -EINVAL;
 			if (priv_frame_ptr)
 				pop_r9(&prog);
+			/*
+			 * A kfunc returning more than 8 bytes hands the second
+			 * half back in RDX (the native ABI's second return reg),
+			 * but BPF expects it in R0:R2. BPF R0 is RAX (no move
+			 * needed), while BPF R2 is RSI, so copy RDX into RSI.
+			 */
+			if (fm && fm->ret_size > 8)
+				emit_mov_reg(&prog, true, BPF_REG_2, BPF_REG_3);
 			break;
 		}
 
@@ -3818,15 +3827,16 @@ int arch_bpf_trampoline_size(const struct btf_func_model *m, u32 flags,
 	 *
 	 * We cannot use kvmalloc here, because we need image to be in
 	 * module memory range.
-	 * Since it must be writable use bpf_jit_alloc_exec_rw().
+	 * Since it must be writable use execmem_alloc(EXECMEM_MODULE_DATA)
+	 * that returns writable memory in the module address space.
 	 */
-	image = bpf_jit_alloc_exec_rw(PAGE_SIZE);
+	image = execmem_alloc(EXECMEM_MODULE_DATA, PAGE_SIZE);
 	if (!image)
 		return -ENOMEM;
 
 	ret = __arch_prepare_bpf_trampoline(&im, image, image + PAGE_SIZE, image,
 					    m, flags, tnodes, func_addr);
-	bpf_jit_free_exec(image);
+	execmem_free(image);
 	return ret;
 }
 
@@ -4152,6 +4162,11 @@ out_priv_stack:
 }
 
 bool bpf_jit_supports_kfunc_call(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_kfunc_ret_reg_pair(void)
 {
 	return true;
 }
