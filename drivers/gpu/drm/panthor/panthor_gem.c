@@ -9,6 +9,9 @@
 #include <linux/dma-buf.h>
 #include <linux/dma-mapping.h>
 #include <linux/err.h>
+#include <linux/highmem.h>
+#include <linux/pagemap.h>
+#include <linux/swap.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 
@@ -761,7 +764,7 @@ static int panthor_gem_mmap(struct drm_gem_object *obj, struct vm_area_struct *v
 		return ret;
 	}
 
-	if (is_cow_mapping(vma->vm_flags))
+	if (vma_is_cow_mapping(vma))
 		return -EINVAL;
 
 	if (!refcount_inc_not_zero(&bo->cmap.mmap_count)) {
