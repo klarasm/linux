@@ -245,15 +245,17 @@ void adjust_range_if_pmd_sharing_possible(struct vm_area_struct *vma,
 				unsigned long *start, unsigned long *end);
 
 extern void __hugetlb_zap_begin(struct vm_area_struct *vma,
-				unsigned long *begin, unsigned long *end);
+				unsigned long *begin, unsigned long *end,
+				struct zap_details *details);
 extern void __hugetlb_zap_end(struct vm_area_struct *vma,
 			      struct zap_details *details);
 
 static inline void hugetlb_zap_begin(struct vm_area_struct *vma,
-				     unsigned long *start, unsigned long *end)
+				     unsigned long *start, unsigned long *end,
+				     struct zap_details *details)
 {
 	if (is_vm_hugetlb_page(vma))
-		__hugetlb_zap_begin(vma, start, end);
+		__hugetlb_zap_begin(vma, start, end, details);
 }
 
 static inline void hugetlb_zap_end(struct vm_area_struct *vma,
@@ -319,7 +321,8 @@ static inline void adjust_range_if_pmd_sharing_possible(
 
 static inline void hugetlb_zap_begin(
 				struct vm_area_struct *vma,
-				unsigned long *start, unsigned long *end)
+				unsigned long *start, unsigned long *end,
+				struct zap_details *details)
 {
 }
 
@@ -694,7 +697,8 @@ enum hugetlb_alloc_flag {
 #define HUGETLB_ALLOC_USE_GLOBAL_RESERVATIONS BIT(HUGETLB_ALLOC_USE_GLOBAL_RESERVATIONS_BIT)
 
 struct folio *hugetlb_alloc_folio(struct hstate *h,
-		struct mempolicy_interpreted *mpoli, u8 alloc_flags);
+		struct mempolicy_interpreted *mpoli, struct mm_struct *mm,
+		u8 alloc_flags);
 struct folio *alloc_hugetlb_folio(struct vm_area_struct *vma,
 				unsigned long addr, bool cow_from_owner);
 struct folio *alloc_hugetlb_folio_nodemask(struct hstate *h, int preferred_nid,
