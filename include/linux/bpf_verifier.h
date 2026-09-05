@@ -706,6 +706,8 @@ struct bpf_insn_aux_data {
 	 */
 	u32 calls_callback:1;
 	u32 indirect_target:1; /* if it is an indirect jump target */
+	/* true if some jump or call instruction targets this instruction */
+	u32 jump_target:1;
 	/*
 	 * CFG strongly connected component this instruction belongs to,
 	 * zero if it is a singleton SCC.
@@ -819,6 +821,8 @@ struct bpf_subprog_info {
 	bool is_async_cb: 1;
 	bool is_exception_cb: 1;
 	bool args_cached: 1;
+	/* true if the return value is passed in the R0:R2 register pair */
+	bool ret_reg_pair: 1;
 	/* true if bpf_fastcall stack region is used by functions that can't be inlined */
 	bool keep_fastcall_stack: 1;
 	bool changes_pkt_data: 1;
@@ -1055,6 +1059,11 @@ static inline struct bpf_subprog_info *subprog_info(struct bpf_verifier_env *env
 	return &env->subprog_info[subprog];
 }
 
+static inline bool bpf_ret_reg_pair(struct bpf_verifier_env *env, int subprog)
+{
+	return subprog_info(env, subprog)->ret_reg_pair;
+}
+
 struct bpf_call_summary {
 	u8 num_params;
 	bool is_void;
@@ -1140,6 +1149,16 @@ static inline bool bpf_calls_callback(struct bpf_verifier_env *env, int insn_idx
 static inline void mark_jmp_point(struct bpf_verifier_env *env, int idx)
 {
 	env->insn_aux_data[idx].jmp_point = true;
+}
+
+static inline void mark_jump_target(struct bpf_verifier_env *env, int idx)
+{
+	env->insn_aux_data[idx].jump_target = true;
+}
+
+static inline bool bpf_is_jump_target(struct bpf_verifier_env *env, int insn_idx)
+{
+	return env->insn_aux_data[insn_idx].jump_target;
 }
 
 static inline struct bpf_func_state *cur_func(struct bpf_verifier_env *env)
@@ -1369,7 +1388,9 @@ static inline bool bpf_type_has_unsafe_modifiers(u32 type)
 
 static inline bool type_is_ptr_alloc_obj(u32 type)
 {
-	return base_type(type) == PTR_TO_BTF_ID && type_flag(type) & MEM_ALLOC;
+	return base_type(type) == PTR_TO_BTF_ID &&
+	       type_flag(type) & MEM_ALLOC &&
+	       !(type_flag(type) & PTR_UNTRUSTED);
 }
 
 static inline bool type_is_non_owning_ref(u32 type)
@@ -1481,6 +1502,15 @@ int bpf_jmp_offset(struct bpf_insn *insn);
 struct bpf_iarray *bpf_insn_successors(struct bpf_verifier_env *env, u32 idx);
 void bpf_fmt_stack_mask(char *buf, ssize_t buf_sz, u64 stack_mask);
 bool bpf_subprog_is_global(const struct bpf_verifier_env *env, int subprog);
+
+/* Kinds of member a by-value struct or union may be composed of. */
+enum btf_member_kind {
+	BTF_MEMBER_SCALAR	= BIT(0), /* an int or an enum */
+	BTF_MEMBER_ARENA_PTR	= BIT(1), /* a pointer carrying the "arena" type tag */
+};
+
+bool btf_struct_is_composed_of(struct bpf_verifier_env *env, const struct btf *btf,
+			       const struct btf_type *t, u32 member_kinds);
 
 int bpf_find_subprog(struct bpf_verifier_env *env, int off);
 bool bpf_is_throw_kfunc(struct bpf_insn *insn);
