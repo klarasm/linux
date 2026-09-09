@@ -26,7 +26,6 @@
  */
 
 #include <linux/file.h>
-#include <linux/pagemap.h>
 #include <linux/sync_file.h>
 #include <linux/dma-buf.h>
 
@@ -1803,8 +1802,6 @@ int amdgpu_cs_find_mapping(struct amdgpu_cs_parser *parser,
 	struct amdgpu_vm *vm = &fpriv->vm;
 	struct amdgpu_bo_va_mapping *mapping;
 	int i, r;
-
-	addr /= AMDGPU_GPU_PAGE_SIZE;
 
 	mapping = amdgpu_vm_bo_lookup_mapping(vm, addr);
 	if (!mapping || !mapping->bo_va || !mapping->bo_va->base.bo)
