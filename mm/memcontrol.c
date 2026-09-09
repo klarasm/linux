@@ -62,6 +62,7 @@
 #include <linux/seq_buf.h>
 #include <linux/sched/isolation.h>
 #include <linux/kmemleak.h>
+#include <linux/irq_work.h>
 #include "internal.h"
 #include "swap.h"
 #include "swap_table.h"
@@ -675,9 +676,11 @@ struct memcg_vmstats {
 	long			state[MEMCG_VMSTAT_SIZE];
 	unsigned long		events[NR_MEMCG_EVENTS];
 
+#ifdef CONFIG_MEMCG_V1
 	/* Non-hierarchical (CPU aggregated) page state & events */
 	long			state_local[MEMCG_VMSTAT_SIZE];
 	unsigned long		events_local[NR_MEMCG_EVENTS];
+#endif
 
 	/* Pending child counts during tree propagation */
 	long			state_pending[MEMCG_VMSTAT_SIZE];
@@ -686,6 +689,31 @@ struct memcg_vmstats {
 	/* Stats updates since the last flush */
 	atomic_long_t		stats_updates;
 };
+
+/*
+ * The non-hierarchical memcg-wide counters are read back only by the legacy
+ * memory.stat and memory.numa_stat, and by reparenting on offline, all of which
+ * are v1-only. If the kernel is built without CONFIG_MEMCG_V1, or if the boot
+ * param cgroup_no_v1= has blocked the memory controller from v1 hierarchies,
+ * then nothing reads them and writers can skip the updates.
+ */
+static long *memcg_state_local_array(struct mem_cgroup *memcg)
+{
+#ifdef CONFIG_MEMCG_V1
+	if (!cgroup1_ssid_disabled(memory_cgrp_id))
+		return memcg->vmstats->state_local;
+#endif
+	return NULL;
+}
+
+static unsigned long *memcg_events_local_array(struct mem_cgroup *memcg)
+{
+#ifdef CONFIG_MEMCG_V1
+	if (!cgroup1_ssid_disabled(memory_cgrp_id))
+		return memcg->vmstats->events_local;
+#endif
+	return NULL;
+}
 
 /*
  * memcg and lruvec stats flushing
@@ -845,16 +873,21 @@ static long memcg_state_val_in_pages(int idx, long val)
 	return val < 0 ? -res : res;
 }
 
-#ifdef CONFIG_MEMCG_V1
 /*
- * Used in mod_memcg_state() and mod_memcg_lruvec_state() to avoid race with
- * reparenting of non-hierarchical state_locals.
+ * Used in mod_memcg_state() and mod_memcg_lruvec_state() to avoid race
+ * with reparenting of non-hierarchical state_locals.  Offlining a
+ * memcg is rare, so do the redirection for all cgroup hierarchies.
  */
-static inline struct mem_cgroup *get_non_dying_memcg_start(struct mem_cgroup *memcg,
-							   bool *rcu_locked)
+static inline struct mem_cgroup *
+get_non_dying_memcg_start(struct mem_cgroup *memcg, bool *rcu_locked)
 {
-	/* Rebinding can cause this value to be changed at runtime */
-	if (cgroup_subsys_on_dfl(memory_cgrp_subsys)) {
+	/*
+	 * Fast path: the caller holds a reference to @memcg, so reading
+	 * its CSS_DYING flag without the RCU lock is safe.  The RCU lock
+	 * is only needed to walk up to a non-dying ancestor, which
+	 * happens only while a memcg is actually being offlined.
+	 */
+	if (!memcg_is_dying(memcg)) {
 		*rcu_locked = false;
 		return memcg;
 	}
@@ -875,17 +908,6 @@ static inline void get_non_dying_memcg_end(bool rcu_locked)
 
 	rcu_read_unlock();
 }
-#else
-static inline struct mem_cgroup *get_non_dying_memcg_start(struct mem_cgroup *memcg,
-							   bool *rcu_locked)
-{
-	return memcg;
-}
-
-static inline void get_non_dying_memcg_end(bool rcu_locked)
-{
-}
-#endif
 
 static void __mod_memcg_state(struct mem_cgroup *memcg,
 			      enum memcg_stat_item idx, long val)
@@ -2424,6 +2446,11 @@ static void high_work_func(struct work_struct *work)
 	reclaim_high(memcg, MEMCG_CHARGE_BATCH, GFP_KERNEL);
 }
 
+static void high_irq_work_func(struct irq_work *work)
+{
+	schedule_work(&container_of(work, struct mem_cgroup, high_irq_work)->high_work);
+}
+
 /*
  * Clamp the maximum sleep time per allocation batch to 2 seconds. This is
  * enough to still cause a significant slowdown in most cases, while still
@@ -2832,7 +2859,10 @@ done_restock:
 		/* Don't bother a random interrupted task */
 		if (!in_task()) {
 			if (mem_high) {
-				schedule_work(&memcg->high_work);
+				if (allow_spinning)
+					schedule_work(&memcg->high_work);
+				else
+					irq_work_queue(&memcg->high_irq_work);
 				break;
 			}
 			continue;
@@ -3773,7 +3803,7 @@ static void memcg_online_kmem(struct mem_cgroup *memcg)
 
 	static_branch_enable(&memcg_kmem_online_key);
 
-	memcg->kmemcg_id = memcg->id.id;
+	memcg->kmemcg_id = memcg->private_id;
 }
 
 static void memcg_offline_kmem(struct mem_cgroup *memcg)
@@ -4032,15 +4062,15 @@ static DEFINE_XARRAY_ALLOC1(mem_cgroup_private_ids);
 
 static void mem_cgroup_private_id_remove(struct mem_cgroup *memcg)
 {
-	if (memcg->id.id > 0) {
-		xa_erase(&mem_cgroup_private_ids, memcg->id.id);
-		memcg->id.id = 0;
+	if (memcg->private_id > 0) {
+		xa_erase(&mem_cgroup_private_ids, memcg->private_id);
+		memcg->private_id = 0;
 	}
 }
 
 static inline void mem_cgroup_private_id_put(struct mem_cgroup *memcg, unsigned int n)
 {
-	if (refcount_sub_and_test(n, &memcg->id.ref)) {
+	if (refcount_sub_and_test(n, &memcg->private_id_ref)) {
 		mem_cgroup_private_id_remove(memcg);
 
 		/* Memcg ID pins CSS */
@@ -4050,7 +4080,7 @@ static inline void mem_cgroup_private_id_put(struct mem_cgroup *memcg, unsigned 
 
 struct mem_cgroup *mem_cgroup_private_id_get_online(struct mem_cgroup *memcg, unsigned int n)
 {
-	while (!refcount_add_not_zero(n, &memcg->id.ref)) {
+	while (!refcount_add_not_zero(n, &memcg->private_id_ref)) {
 		/*
 		 * The root cgroup cannot be destroyed, so it's refcount must
 		 * always be >= 1.
@@ -4174,7 +4204,7 @@ static struct mem_cgroup *mem_cgroup_alloc(struct mem_cgroup *parent)
 	if (!memcg)
 		return ERR_PTR(-ENOMEM);
 
-	error = xa_alloc(&mem_cgroup_private_ids, &memcg->id.id, NULL,
+	error = xa_alloc(&mem_cgroup_private_ids, &memcg->private_id, NULL,
 			 XA_LIMIT(1, MEM_CGROUP_ID_MAX), GFP_KERNEL);
 	if (error)
 		goto fail;
@@ -4207,6 +4237,7 @@ static struct mem_cgroup *mem_cgroup_alloc(struct mem_cgroup *parent)
 		goto fail;
 
 	INIT_WORK(&memcg->high_work, high_work_func);
+	init_irq_work(&memcg->high_irq_work, high_irq_work_func);
 	vmpressure_init(&memcg->vmpressure);
 	INIT_LIST_HEAD(&memcg->memory_peaks);
 	INIT_LIST_HEAD(&memcg->swap_peaks);
@@ -4320,7 +4351,7 @@ static int mem_cgroup_css_online(struct cgroup_subsys_state *css)
 	lru_gen_online_memcg(memcg);
 
 	/* Online state pins memcg ID, memcg ID pins CSS */
-	refcount_set(&memcg->id.ref, 1);
+	refcount_set(&memcg->private_id_ref, 1);
 	css_get(css);
 
 	/*
@@ -4333,7 +4364,7 @@ static int mem_cgroup_css_online(struct cgroup_subsys_state *css)
 	 * publish it here at the end of onlining. This matches the
 	 * regular ID destruction during offlining.
 	 */
-	xa_store(&mem_cgroup_private_ids, memcg->id.id, memcg, GFP_KERNEL);
+	xa_store(&mem_cgroup_private_ids, memcg->private_id, memcg, GFP_KERNEL);
 
 	return 0;
 free_objcg:
@@ -4415,6 +4446,7 @@ static void mem_cgroup_css_free(struct cgroup_subsys_state *css)
 		static_branch_dec(&memcg_bpf_enabled_key);
 
 	vmpressure_cleanup(&memcg->vmpressure);
+	irq_work_sync(&memcg->high_irq_work);
 	cancel_work_sync(&memcg->high_work);
 	free_shrinker_info(memcg);
 	mem_cgroup_free(memcg);
@@ -4458,7 +4490,10 @@ static void mem_cgroup_css_reset(struct cgroup_subsys_state *css)
 struct aggregate_control {
 	/* pointer to the aggregated (CPU and subtree aggregated) counters */
 	long *aggregate;
-	/* pointer to the non-hierarchichal (CPU aggregated) counters */
+	/*
+	 * pointer to the non-hierarchical (CPU aggregated) counters or NULL to
+	 * skip updating them (see memcg_state_local_array())
+	 */
 	long *local;
 	/* pointer to the pending child counters during tree propagation */
 	long *pending;
@@ -4497,7 +4532,7 @@ static void mem_cgroup_stat_aggregate(struct aggregate_control *ac)
 		}
 
 		/* Aggregate counts on this level and propagate upwards */
-		if (delta_cpu)
+		if (delta_cpu && ac->local)
 			ac->local[i] += delta_cpu;
 
 		if (delta) {
@@ -4511,6 +4546,7 @@ static void mem_cgroup_stat_aggregate(struct aggregate_control *ac)
 #ifdef CONFIG_MEMCG_NMI_SAFETY_REQUIRES_ATOMIC
 static void flush_nmi_stats(struct mem_cgroup *memcg, struct mem_cgroup *parent)
 {
+	long *state_local = memcg_state_local_array(memcg);
 	int nid;
 
 	if (atomic_read(&memcg->kmem_stat)) {
@@ -4518,7 +4554,8 @@ static void flush_nmi_stats(struct mem_cgroup *memcg, struct mem_cgroup *parent)
 		int index = memcg_stats_index(MEMCG_KMEM);
 
 		memcg->vmstats->state[index] += kmem;
-		memcg->vmstats->state_local[index] += kmem;
+		if (state_local)
+			state_local[index] += kmem;
 		if (parent)
 			parent->vmstats->state_pending[index] += kmem;
 	}
@@ -4540,7 +4577,8 @@ static void flush_nmi_stats(struct mem_cgroup *memcg, struct mem_cgroup *parent)
 			if (plstats)
 				plstats->state_pending[index] += slab;
 			memcg->vmstats->state[index] += slab;
-			memcg->vmstats->state_local[index] += slab;
+			if (state_local)
+				state_local[index] += slab;
 			if (parent)
 				parent->vmstats->state_pending[index] += slab;
 		}
@@ -4553,7 +4591,8 @@ static void flush_nmi_stats(struct mem_cgroup *memcg, struct mem_cgroup *parent)
 			if (plstats)
 				plstats->state_pending[index] += slab;
 			memcg->vmstats->state[index] += slab;
-			memcg->vmstats->state_local[index] += slab;
+			if (state_local)
+				state_local[index] += slab;
 			if (parent)
 				parent->vmstats->state_pending[index] += slab;
 		}
@@ -4578,7 +4617,7 @@ static void mem_cgroup_css_rstat_flush(struct cgroup_subsys_state *css, int cpu)
 
 	ac = (struct aggregate_control) {
 		.aggregate = memcg->vmstats->state,
-		.local = memcg->vmstats->state_local,
+		.local = memcg_state_local_array(memcg),
 		.pending = memcg->vmstats->state_pending,
 		.ppending = parent ? parent->vmstats->state_pending : NULL,
 		.cstat = statc->state,
@@ -4589,7 +4628,7 @@ static void mem_cgroup_css_rstat_flush(struct cgroup_subsys_state *css, int cpu)
 
 	ac = (struct aggregate_control) {
 		.aggregate = memcg->vmstats->events,
-		.local = memcg->vmstats->events_local,
+		.local = memcg_events_local_array(memcg),
 		.pending = memcg->vmstats->events_pending,
 		.ppending = parent ? parent->vmstats->events_pending : NULL,
 		.cstat = statc->events,
@@ -5700,6 +5739,108 @@ __setup("cgroup.memory=", cgroup_memory);
  * basically everything that doesn't depend on a specific mem_cgroup structure
  * should be initialized from here.
  */
+/*
+ * Fields are grouped by access pattern. Putting a field in the wrong group
+ * breaks the build here.
+ */
+static void __init memcg_struct_check(void)
+{
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_write_hot,
+				      socket_pressure);
+#if BITS_PER_LONG < 64
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_write_hot,
+				      socket_pressure_seqlock);
+#endif
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_write_hot,
+				      memory_events);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_write_hot,
+				      memory_events_local);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_write_hot,
+				      vmpressure);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_write_hot,
+				      private_id_ref);
+#ifdef CONFIG_MEMCG_NMI_SAFETY_REQUIRES_ATOMIC
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_write_hot,
+				      kmem_stat);
+#endif
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_write_hot,
+				      high_irq_work);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_write_hot,
+				      high_work);
+
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_cold,
+				      memory_peaks);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_cold,
+				      swap_peaks);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_cold,
+				      peaks_lock);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_cold,
+				      events_file);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_cold,
+				      events_local_file);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_cold,
+				      swap_events_file);
+#ifdef CONFIG_CGROUP_WRITEBACK
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_cold,
+				      cgwb_list);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_cold,
+				      cgwb_domain);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_cold,
+				      cgwb_frn);
+#endif
+#ifdef CONFIG_LRU_GEN_WALKS_MMU
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_cold,
+				      mm_list);
+#endif
+
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_read_mostly,
+				      vmstats_percpu);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_read_mostly,
+				      vmstats);
+#ifdef CONFIG_ZSWAP
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_read_mostly,
+				      zswap_max);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_read_mostly,
+				      zswap_writeback);
+#endif
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_read_mostly,
+				      private_id);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_read_mostly,
+				      kmemcg_id);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup, memcg_read_mostly,
+				      oom_group);
+
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup_per_node,
+				      memcg_pn_read_mostly, memcg);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup_per_node,
+				      memcg_pn_read_mostly, lruvec_stats_percpu);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup_per_node,
+				      memcg_pn_read_mostly, lruvec_stats);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup_per_node,
+				      memcg_pn_read_mostly, shrinker_info);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup_per_node,
+				      memcg_pn_read_mostly, objcg);
+
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup_per_node,
+				      memcg_pn_lruvec, lruvec);
+
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup_per_node,
+				      memcg_pn_write_hot, lru_zone_size);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup_per_node,
+				      memcg_pn_write_hot, iter);
+#ifdef CONFIG_MEMCG_NMI_SAFETY_REQUIRES_ATOMIC
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup_per_node,
+				      memcg_pn_write_hot, slab_reclaimable);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup_per_node,
+				      memcg_pn_write_hot, slab_unreclaimable);
+#endif
+
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup_per_node,
+				      memcg_pn_cold, orig_objcg);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct mem_cgroup_per_node,
+				      memcg_pn_cold, objcg_list);
+}
+
 int __init mem_cgroup_init(void)
 {
 	unsigned int memcg_size;
@@ -5712,6 +5853,8 @@ int __init mem_cgroup_init(void)
 	 * exceed S32_MAX / PAGE_SIZE.
 	 */
 	BUILD_BUG_ON(MEMCG_CHARGE_BATCH > S32_MAX / PAGE_SIZE);
+
+	memcg_struct_check();
 
 	cpuhp_setup_state_nocalls(CPUHP_MM_MEMCQ_DEAD, "mm/memctrl:dead", NULL,
 				  memcg_hotplug_cpu_dead);
