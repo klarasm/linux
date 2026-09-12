@@ -1041,8 +1041,8 @@ static int zswap_writeback_entry(struct zswap_entry *entry,
 
 	is_vswap = swap_is_vswap(si);
 	mpol = get_task_policy(current);
-	folio = swap_cache_alloc_folio(swpentry, GFP_KERNEL, BIT(0), NULL, mpol,
-				       NO_INTERLEAVE_INDEX);
+	folio = __swap_cache_alloc_folio(swpentry, GFP_KERNEL, BIT(0), NULL, mpol,
+					 NO_INTERLEAVE_INDEX);
 	put_swap_device(si);
 
 	/*
@@ -1054,6 +1054,8 @@ static int zswap_writeback_entry(struct zswap_entry *entry,
 	 */
 	if (IS_ERR(folio))
 		return PTR_ERR(folio);
+
+	folio_clear_active(folio);
 
 	/*
 	 * folio is locked, and the swapcache is now secured against
@@ -1067,7 +1069,7 @@ static int zswap_writeback_entry(struct zswap_entry *entry,
 	 */
 	if (entry != zswap_entry_load(swpentry)) {
 		ret = -ENOMEM;
-		goto out;
+		goto err;
 	}
 
 	if (is_vswap) {
@@ -1078,7 +1080,7 @@ static int zswap_writeback_entry(struct zswap_entry *entry,
 		phys = folio_realloc_swap(folio);
 		if (!phys.val) {
 			ret = -ENOMEM;
-			goto out;
+			goto err;
 		}
 	}
 
@@ -1091,7 +1093,7 @@ static int zswap_writeback_entry(struct zswap_entry *entry,
 		 */
 		if (is_vswap)
 			vswap_zswap_store(swpentry, entry);
-		goto out;
+		goto err;
 	}
 
 	if (!is_vswap)
@@ -1106,8 +1108,20 @@ static int zswap_writeback_entry(struct zswap_entry *entry,
 	/* folio is up to date */
 	folio_mark_uptodate(folio);
 
-	/* move it to the tail of the inactive list after end_writeback */
-	folio_set_reclaim(folio);
+	folio_set_dropbehind(folio);
+
+	/*
+	 * Drop our reference before starting writeback so the swap cache holds
+	 * the only one: the drop in folio_end_writeback() needs that for
+	 * remove_mapping_set_shadow() to succeed, otherwise the folio is
+	 * handed back to reclaim instead.
+	 *
+	 * Nothing can free the folio in the meantime: we hold the folio lock
+	 * until writeback starts, PG_writeback then blocks swap cache removal,
+	 * and folio_end_writeback() takes its own reference before clearing
+	 * PG_writeback and donates it to the drop.
+	 */
+	folio_put(folio);
 
 	/* start writeback */
 	if (is_vswap)
@@ -1116,11 +1130,11 @@ static int zswap_writeback_entry(struct zswap_entry *entry,
 		__swap_writeout(&ctx, folio, folio->swap);
 	swap_write_submit(&ctx);
 
-out:
-	if (ret) {
-		swap_cache_del_folio(folio);
-		folio_unlock(folio);
-	}
+	return 0;
+
+err:
+	swap_cache_del_folio(folio);
+	folio_unlock(folio);
 	folio_put(folio);
 	return ret;
 }

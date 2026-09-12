@@ -2535,7 +2535,7 @@ void folio_put_swap_pages(struct folio *folio, struct page *page,
  *   CPU1				CPU2
  *   do_swap_page()
  *     ...				swapoff+swapon
- *     swap_cache_alloc_folio()
+ *     __swap_cache_alloc_folio()
  *       // check swap_map
  *     // verify PTE not changed
  *
@@ -3591,7 +3591,7 @@ retry:
 
 		folio = swap_cache_get_folio(vswap_entry);
 		if (!folio) {
-			folio = swap_cache_alloc_folio(vswap_entry,
+			folio = __swap_cache_alloc_folio(vswap_entry,
 						       GFP_HIGHUSER_MOVABLE,
 						       BIT(0), NULL, mpol,
 						       NO_INTERLEAVE_INDEX);
