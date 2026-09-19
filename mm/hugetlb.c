@@ -4330,9 +4330,9 @@ static __init void hugetlb_parse_params(void)
 
 /*
  * hugepages command line processing
- * hugepages normally follows a valid hugepagsz or default_hugepagsz
- * specification.  If not, ignore the hugepages value.  hugepages can also
- * be the first huge page command line  option in which case it implicitly
+ * hugepages normally follows a valid hugepagesz or default_hugepagesz
+ * specification. If not, ignore the hugepages value. hugepages can also
+ * be the first huge page command line option in which case it implicitly
  * specifies the number of huge pages for the default size.
  */
 static int __init hugepages_setup(char *s)
@@ -5677,7 +5677,7 @@ retry_avoidcopy:
 
 	/*
 	 * When the original hugepage is shared one, it does not have
-	 * anon_vma prepared.
+	 * an anon rmap prepared.
 	 */
 	ret = __vmf_anon_prepare(vmf);
 	if (unlikely(ret))
