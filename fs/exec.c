@@ -1124,6 +1124,7 @@ static struct file *bprm_identity_file(const struct linux_binprm *bprm)
 int begin_new_exec(struct linux_binprm * bprm)
 {
 	struct task_struct *me = current;
+	struct files_struct *files = NULL;
 	int retval;
 
 	/* A pending PT_INTERP substitution this format cannot consume. */
@@ -1152,6 +1153,16 @@ int begin_new_exec(struct linux_binprm * bprm)
 	retval = de_thread(me);
 	if (retval)
 		goto out;
+
+	/*
+	 * This must be done here to ensure that POSIX CPU timers which were
+	 * armed on the current task are dequeued from me::posix_cputimers.
+	 * Otherwise in case of a TID switch the deletion of the related POSIX
+	 * timer would not remove an enqueued timer because the TID lookup
+	 * of the old TID fails.
+	 */
+	posixtimer_exec();
+
 	/* see the comment in check_unsafe_exec() */
 	current->fs->in_exec = 0;
 	/*
@@ -1160,9 +1171,11 @@ int begin_new_exec(struct linux_binprm * bprm)
 	io_uring_task_cancel();
 
 	/* Ensure the files table is not shared. */
-	retval = unshare_files();
+	retval = unshare_fd(CLONE_FILES, &files);
 	if (retval)
 		goto out;
+	if (files)
+		switch_files_struct(me, files);
 
 	/*
 	 * We have to apply CLOEXEC before we change whether the process is
@@ -1170,13 +1183,13 @@ int begin_new_exec(struct linux_binprm * bprm)
 	 * trying to access the should-be-closed file descriptors of a process
 	 * undergoing exec(2).
 	 *
-	 * This can block on filesystem ->flush() handlers, including waiting
-	 * for FUSE daemons, so do it before exec_mmap takes the
-	 * exec_update_lock.
+	 * This can block on filesystem ->flush() and ->release() handlers,
+	 * including waiting for FUSE daemons, so do it before exec_mmap
+	 * takes the exec_update_lock.
 	 * This must happen after the point of no return, and after unsharing
 	 * the FD table.
 	 */
-	do_close_on_exec(me->files);
+	close_cloexec_files(me->files);
 
 	/*
 	 * Must be called _before_ exec_mmap() as bprm->mm is
@@ -1205,14 +1218,6 @@ int begin_new_exec(struct linux_binprm * bprm)
 	retval = exec_task_namespaces();
 	if (retval)
 		goto out_unlock;
-
-#ifdef CONFIG_POSIX_TIMERS
-	spin_lock_irq(&me->sighand->siglock);
-	posix_cpu_timers_exit(me);
-	spin_unlock_irq(&me->sighand->siglock);
-	exit_itimers(me);
-	flush_itimer_signals();
-#endif
 
 	/*
 	 * Make the signal table private.

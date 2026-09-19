@@ -26,6 +26,7 @@
 #include "xfs_zones.h"
 #include "xfs_trace.h"
 #include "xfs_mru_cache.h"
+#include <linux/bio-integrity.h>
 
 static void
 xfs_open_zone_free_rcu(
@@ -820,7 +821,7 @@ xfs_get_cached_zone(
 		spin_unlock(&ip->i_flags_lock);
 	}
 
-	if (!atomic_inc_not_zero(&oz->oz_ref))
+	if (oz && !atomic_inc_not_zero(&oz->oz_ref))
 		oz = NULL;
 out_unlock:
 	rcu_read_unlock();
@@ -828,7 +829,7 @@ out_unlock:
 }
 
 /*
- * Stash our zone in the inode so that is is reused for future allocations.
+ * Stash our zone in the inode so that it is reused for future allocations.
  *
  * The open_zone structure will be pinned until either the inode is freed or
  * until the cached open zone is replaced with a different one because the
@@ -910,6 +911,9 @@ xfs_zone_alloc_and_submit(
 
 	if (xfs_is_shutdown(mp))
 		goto out_error;
+
+	if (ioend->io_flags & IOMAP_IOEND_INTEGRITY)
+		fs_bio_integrity_generate(&ioend->io_bio);
 
 	/*
 	 * If we don't have a locally cached zone in this write context, see if
