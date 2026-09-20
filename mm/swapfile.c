@@ -189,6 +189,7 @@ static DEFINE_SPINLOCK(swap_lock);
 static unsigned int nr_swapfiles;
 atomic_long_t nr_swap_pages;
 atomic_t nr_real_swapfiles;
+atomic_t nr_xswap_files;
 /*
  * Some modules use swappable objects and may try to swap them out under
  * memory pressure (via the shrinker). Before doing so, they may wish to
@@ -1425,6 +1426,8 @@ static void del_from_avail_list(struct swap_info_struct *si, bool swapoff)
 		/* Count active devices, not merely those on the avail list. */
 		if (!(si->flags & SWP_XSWAP))
 			atomic_sub(1, &nr_real_swapfiles);
+		else
+			atomic_sub(1, &nr_xswap_files);
 		atomic_long_or(SWAP_USAGE_OFFLIST_BIT, &si->inuse_pages);
 	} else {
 		/*
@@ -1486,6 +1489,8 @@ static void add_to_avail_list(struct swap_info_struct *si, bool swapon)
 	plist_add(&si->avail_list, &swap_avail_head);
 	if (swapon && !(si->flags & SWP_XSWAP))
 		atomic_add(1, &nr_real_swapfiles);
+	else if (swapon)
+		atomic_add(1, &nr_xswap_files);
 
 skip:
 	spin_unlock(&swap_avail_lock);
