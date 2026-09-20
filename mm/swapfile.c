@@ -311,13 +311,17 @@ static bool swap_only_has_cache(struct swap_cluster_info *ci,
  * returns number of pages in the folio that backs the swap entry. If positive,
  * the folio was reclaimed. If negative, the folio was not reclaimed. If 0, no
  * folio was associated with the swap entry.
+ *
+ * @entry names its own device, which may differ from the device being scanned:
+ * a physical slot is backed by an xswap entry, and it is that entry's folio
+ * and cluster the reclaim works on.
  */
-static int __try_to_reclaim_swap(struct swap_info_struct *si,
-				 unsigned long offset, unsigned long flags)
+static int __try_to_reclaim_swap(swp_entry_t entry, unsigned long flags)
 {
-	const swp_entry_t entry = swp_entry(si->type, offset);
+	struct swap_info_struct *si = __swap_entry_to_info(entry);
 	struct swap_cluster_info *ci;
 	struct folio *folio;
+	unsigned long offset;
 	int ret, nr_pages;
 	bool need_reclaim;
 
@@ -993,7 +997,8 @@ static bool cluster_reclaim_range(struct swap_info_struct *si,
 		if (swp_tb_get_count(swp_tb))
 			break;
 		if (swp_tb_is_folio(swp_tb))
-			if (__try_to_reclaim_swap(si, offset, TTRS_ANYWAY) < 0)
+			if (__try_to_reclaim_swap(swp_entry(si->type, offset),
+						  TTRS_ANYWAY) < 0)
 				break;
 	} while (++offset < end);
 	spin_lock(&ci->lock);
@@ -1213,13 +1218,31 @@ static void swap_reclaim_full_clusters(struct swap_info_struct *si, bool force)
 			swp_tb = swap_table_get(ci, offset % SWAPFILE_CLUSTER);
 			if (swp_tb_is_folio(swp_tb) && !__swp_tb_get_count(swp_tb)) {
 				spin_unlock(&ci->lock);
-				nr_reclaim = __try_to_reclaim_swap(si, offset,
-								   TTRS_ANYWAY);
+				nr_reclaim = __try_to_reclaim_swap(
+						swp_entry(si->type, offset),
+						TTRS_ANYWAY);
 				spin_lock(&ci->lock);
 				if (nr_reclaim) {
 					offset += abs(nr_reclaim);
 					continue;
 				}
+#ifdef CONFIG_XSWAP
+			} else if (swp_tb_is_pointer(swp_tb)) {
+				/*
+				 * The slot is backed by an xswap entry, and
+				 * that entry's swap count decides whether the
+				 * slot can go.
+				 */
+				spin_unlock(&ci->lock);
+				nr_reclaim = __try_to_reclaim_swap(
+						xswap_rmap_to_entry(swp_tb),
+						TTRS_ANYWAY);
+				spin_lock(&ci->lock);
+				if (nr_reclaim) {
+					offset += abs(nr_reclaim);
+					continue;
+				}
+#endif
 			}
 			offset++;
 		}
@@ -1854,8 +1877,9 @@ static void swap_put_entries_cluster(struct swap_info_struct *si,
 		return;
 
 	do {
-		nr_reclaimed = __try_to_reclaim_swap(si, offset,
-						     TTRS_UNMAPPED | TTRS_FULL);
+		nr_reclaimed = __try_to_reclaim_swap(
+					swp_entry(si->type, offset),
+					TTRS_UNMAPPED | TTRS_FULL);
 		offset++;
 		if (nr_reclaimed)
 			offset = round_up(offset, abs(nr_reclaimed));
@@ -2459,7 +2483,7 @@ void swap_free_hibernation_slot(swp_entry_t entry)
 	swap_cluster_unlock(ci);
 
 	/* In theory readahead might add it to the swap cache by accident */
-	__try_to_reclaim_swap(si, offset, TTRS_ANYWAY);
+	__try_to_reclaim_swap(swp_entry(si->type, offset), TTRS_ANYWAY);
 }
 
 static int __find_hibernation_swap_type(dev_t device, sector_t offset)
