@@ -81,6 +81,59 @@ struct swap_memcg_table {
 /* Bad slot: ends with 0b1000 and rests of bits are all 1 */
 #define SWP_TB_BAD		((~0UL) << 3)
 
+#ifdef CONFIG_XSWAP
+/*
+ * Pointer-tagged swap table entry: the reverse map from a physical slot to
+ * the xswap entry it backs. Layout:
+ *
+ *   Pointer:  | xswap_type(8) | xswap_offset(53) |100|
+ *
+ * The low three bits identify the entry: 0b000 is a free or bad slot, a
+ * shadow entry ends in 0b01 and a cached folio in 0b10, which leaves
+ * 0b100 as the only marker still free.
+ */
+#define SWP_TB_PTR_MARK			0b100UL
+#define SWP_TB_PTR_OFF_BITS		53
+#define SWP_TB_PTR_TYPE_BITS		8
+#define SWP_TB_PTR_OFF_SHIFT		3
+#define SWP_TB_PTR_TYPE_SHIFT		(SWP_TB_PTR_OFF_SHIFT + \
+					 SWP_TB_PTR_OFF_BITS)
+#define SWP_TB_PTR_OFF_MASK		((1UL << SWP_TB_PTR_OFF_BITS) - 1)
+#define SWP_TB_PTR_TYPE_MASK		((1UL << SWP_TB_PTR_TYPE_BITS) - 1)
+
+static inline bool swp_tb_is_pointer(unsigned long swp_tb)
+{
+	return (swp_tb & (BIT(3) - 1)) == SWP_TB_PTR_MARK;
+}
+
+static inline unsigned long xswap_entry_to_rmap(swp_entry_t entry)
+{
+	unsigned long type = swp_type(entry);
+	unsigned long off = swp_offset(entry);
+
+	VM_WARN_ON_ONCE(type > SWP_TB_PTR_TYPE_MASK);
+	VM_WARN_ON_ONCE(off > SWP_TB_PTR_OFF_MASK);
+	return (type << SWP_TB_PTR_TYPE_SHIFT) |
+	       (off << SWP_TB_PTR_OFF_SHIFT) |
+	       SWP_TB_PTR_MARK;
+}
+
+static inline swp_entry_t xswap_rmap_to_entry(unsigned long swp_tb)
+{
+	unsigned long type = (swp_tb >> SWP_TB_PTR_TYPE_SHIFT) &
+			     SWP_TB_PTR_TYPE_MASK;
+	unsigned long off = (swp_tb >> SWP_TB_PTR_OFF_SHIFT) &
+			    SWP_TB_PTR_OFF_MASK;
+
+	return swp_entry(type, off);
+}
+#else /* !CONFIG_XSWAP */
+static inline bool swp_tb_is_pointer(unsigned long swp_tb)
+{
+	return false;
+}
+#endif /* CONFIG_XSWAP */
+
 /* Macro for shadow offset calculation */
 #define SWAP_COUNT_SHIFT	SWP_TB_FLAGS_BITS
 
