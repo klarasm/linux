@@ -2002,7 +2002,12 @@ again:
 	 */
 	memcg = mem_cgroup_swap_get(folio);
 	if (memcg) {
-		if (unlikely(mem_cgroup_swap_charge(memcg, size))) {
+		/*
+		 * An xswap entry has no physical swap yet, so only record the
+		 * memcg here.  Its backing is charged when one is taken.
+		 */
+		if (!(__swap_entry_to_info(folio->swap)->flags & SWP_XSWAP) &&
+		    unlikely(mem_cgroup_swap_charge(memcg, size))) {
 			mem_cgroup_swap_put(memcg, size);
 			swap_cache_del_folio(folio);
 			goto failed;
@@ -2153,14 +2158,19 @@ put_out:
 	return ERR_PTR(-EIO);
 }
 
-static void memcg_swap_free(unsigned short id, unsigned int nr)
+static void memcg_swap_free(unsigned short id, unsigned int nr, bool is_xswap)
 {
 	struct mem_cgroup *memcg;
 
 	rcu_read_lock();
 	memcg = mem_cgroup_from_private_id(id);
 	if (memcg) {
-		mem_cgroup_swap_uncharge(memcg, nr);
+		/*
+		 * An xswap entry was not charged here; its backing, if any,
+		 * was uncharged when it was released.
+		 */
+		if (!is_xswap)
+			mem_cgroup_swap_uncharge(memcg, nr);
 		mem_cgroup_swap_put(memcg, nr);
 	}
 	rcu_read_unlock();
@@ -2179,6 +2189,7 @@ void __swap_cluster_free_entries(struct swap_info_struct *si,
 	unsigned int ci_off = ci_start, ci_end = ci_start + nr_pages;
 	unsigned long ci_head = cluster_offset(si, ci);
 	unsigned int batch_off = ci_off;
+	bool is_xswap = si->flags & SWP_XSWAP;
 
 	VM_WARN_ON(ci->count < nr_pages);
 
@@ -2208,14 +2219,14 @@ void __swap_cluster_free_entries(struct swap_info_struct *si,
 		id_cur = __swap_cgroup_clear(ci, ci_off, 1);
 		if (batch_id != id_cur) {
 			if (batch_id)
-				memcg_swap_free(batch_id, ci_off - batch_off);
+				memcg_swap_free(batch_id, ci_off - batch_off, is_xswap);
 			batch_id = id_cur;
 			batch_off = ci_off;
 		}
 	} while (++ci_off < ci_end);
 
 	if (batch_id)
-		memcg_swap_free(batch_id, ci_off - batch_off);
+		memcg_swap_free(batch_id, ci_off - batch_off, is_xswap);
 
 	swap_range_free(si, ci_head + ci_start, nr_pages);
 	swap_cluster_assert_empty(ci, ci_start, nr_pages, false);
