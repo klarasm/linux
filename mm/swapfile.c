@@ -4103,6 +4103,34 @@ swp_entry_t xswap_slot_backend(struct swap_cluster_info *ci, unsigned int slot)
 	return (swp_entry_t){ .val = xs[slot] };
 }
 
+/*
+ * A large xswap folio is read back as one IO only when the whole range is
+ * backed by one device, contiguously. Returns how many leading slots are.
+ */
+int xswap_check_backing(struct swap_cluster_info *ci, unsigned int off,
+			unsigned int nr)
+{
+	swp_entry_t first;
+	unsigned int i;
+
+	lockdep_assert_held(&ci->lock);
+
+	/* In zswap, which cannot load a large folio. */
+	if (!ci->xs_table || !ci->xs_table[off])
+		return 1;
+
+	first.val = ci->xs_table[off];
+	for (i = 1; i < nr; i++) {
+		swp_entry_t cur = { .val = ci->xs_table[off + i] };
+
+		if (swp_type(cur) != swp_type(first) ||
+		    swp_offset(cur) != swp_offset(first) + i)
+			break;
+	}
+
+	return i;
+}
+
 /* Cluster lock held. xswap never unmaps a cluster below the mapped prefix. */
 static unsigned long *xswap_xs_table_locked(struct swap_cluster_info *ci,
 					    gfp_t gfp)
@@ -5005,7 +5033,11 @@ static int xswap_create(int prio)
 	nr_clusters = DIV_ROUND_UP(ram, SWAPFILE_CLUSTER);
 
 	si->bdev = NULL;
-	si->flags |= SWP_XSWAP | SWP_SOLIDSTATE;
+	/*
+	 * Reads are served from zswap, so no readahead. Only a synchronous
+	 * device can swap a large folio back in as a unit.
+	 */
+	si->flags |= SWP_XSWAP | SWP_SOLIDSTATE | SWP_SYNCHRONOUS_IO;
 	si->max = maxpages;
 	si->pages = min_t(unsigned long, nr_clusters * SWAPFILE_CLUSTER,
 			  si->max) - 1;
