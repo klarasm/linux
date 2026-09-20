@@ -1068,8 +1068,10 @@ static bool __swap_cluster_alloc_entries(struct swap_info_struct *si,
 	 * Such swap slots starts with count == 0 and will be increased
 	 * upon folio unmap.
 	 *
-	 * Else, it's a exclusive order 0 allocation for hibernation.
-	 * The slot starts with count == 1 and never increases.
+	 * Else, it's an exclusive order 0 allocation for a slot that has
+	 * no folio of its own: hibernation, and the physical slot that
+	 * backs an xswap entry. The slot starts with count == 1 and
+	 * never increases.
 	 */
 	if (likely(folio)) {
 		order = folio_order(folio);
@@ -1077,16 +1079,12 @@ static bool __swap_cluster_alloc_entries(struct swap_info_struct *si,
 		swap_cluster_assert_empty(ci, ci_off, nr_pages, false);
 		__swap_cache_add_folio(ci, folio, swp_entry(si->type,
 							    ci_off + cluster_offset(si, ci)));
-	} else if (IS_ENABLED(CONFIG_HIBERNATION)) {
+	} else {
 		order = 0;
 		nr_pages = 1;
 		swap_cluster_assert_empty(ci, ci_off, 1, false);
-		/* Fake shadow placeholder with no flag, hibernation does not use the zeromap */
+		/* Fake shadow placeholder with no flag; no zeromap is used. */
 		__swap_table_set(ci, ci_off, __swp_tb_mk_count(shadow_to_swp_tb(NULL, 0), 1));
-	} else {
-		/* Allocation without folio is only possible with hibernation */
-		WARN_ON_ONCE(1);
-		return false;
 	}
 
 	/*
@@ -1149,8 +1147,15 @@ out:
 	swap_cluster_unlock(ci);
 	rcu_read_unlock();
 	if (si->flags & SWP_SOLIDSTATE) {
-		this_cpu_write(percpu_swap_cluster.offset[order], next);
-		this_cpu_write(percpu_swap_cluster.si[order], si);
+		/*
+		 * A NULL folio is a backend or hibernation allocation: it must
+		 * not displace the swapout cluster cached here, which
+		 * swap_alloc_fast() reuses without a device check.
+		 */
+		if (folio) {
+			this_cpu_write(percpu_swap_cluster.offset[order], next);
+			this_cpu_write(percpu_swap_cluster.si[order], si);
+		}
 	} else {
 		si->global_cluster->next[order] = next;
 	}
@@ -1279,6 +1284,16 @@ static unsigned long cluster_alloc_swap_entry(struct swap_info_struct *si,
 	}
 
 new_cluster:
+	/*
+	 * A slot with no folio packs into a cluster already in use: a free
+	 * cluster is the only thing a large order can allocate from.
+	 */
+	if (!folio && order < PMD_ORDER) {
+		found = alloc_swap_scan_list(si, &si->frag_clusters[order], folio, false);
+		if (found)
+			goto done;
+	}
+
 	/*
 	 * If the device need discard, prefer new cluster over nonfull
 	 * to spread out the writes.
