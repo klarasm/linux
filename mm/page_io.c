@@ -467,6 +467,7 @@ static bool swap_read_folio_zeromap(struct folio *folio)
 void swap_read_folio(struct swap_io_ctx *ctx, struct folio *folio)
 {
 	struct swap_info_struct *sis = __swap_entry_to_info(folio->swap);
+	swp_entry_t entry = folio->swap;
 	bool synchronous = sis->flags & SWP_SYNCHRONOUS_IO;
 	bool workingset = folio_test_workingset(folio);
 	unsigned long pflags;
@@ -496,18 +497,29 @@ void swap_read_folio(struct swap_io_ctx *ctx, struct folio *folio)
 		goto finish;
 
 	if (unlikely(sis->flags & SWP_XSWAP)) {
-		/*
-		 * An xswap entry only ever lives in zswap, so zswap_load()
-		 * must have found it.  Unlock and let the caller retry.
-		 */
-		WARN_ON_ONCE(1);
-		folio_unlock(folio);
-		goto finish;
+		struct swap_cluster_info *ci;
+		swp_entry_t phys = {};
+		unsigned long offset = swp_offset(folio->swap);
+
+		/* May have been written back; reuse the physical read path. */
+		ci = __swap_offset_to_cluster(sis, offset);
+		if (ci) {
+			spin_lock(&ci->lock);
+			phys = xswap_slot_backend(ci, offset % SWAPFILE_CLUSTER);
+			spin_unlock(&ci->lock);
+		}
+		if (!phys.val) {
+			/* No backend and no zswap entry: data is gone. */
+			folio_unlock(folio);
+			goto finish;
+		}
+
+		entry = phys;
 	}
 
 	/* We have to read from slower devices. Increase zswap protection. */
 	zswap_folio_swapin(folio);
-	swap_add_folio(ctx, folio, folio->swap, READ);
+	swap_add_folio(ctx, folio, entry, READ);
 
 finish:
 	if (workingset) {
