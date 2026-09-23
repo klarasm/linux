@@ -80,6 +80,7 @@
 #define KF_ARENA_ARG2   (1 << 15) /* kfunc takes an arena pointer as its second argument */
 #define KF_IMPLICIT_ARGS (1 << 16) /* kfunc has implicit arguments supplied by the verifier */
 #define KF_SPINLOCK_SAFE (1 << 17) /* kfunc is allowed inside bpf_spin_lock-ed region */
+#define KF_PERFMON      (1 << 18) /* kfunc requires CAP_PERFMON */
 
 /*
  * Tag marking a kernel function as a kfunc. This is meant to minimize the
@@ -235,6 +236,7 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 				    u32 field_mask, u32 value_size);
 int btf_check_and_fixup_fields(const struct btf *btf, struct btf_record *rec);
 bool btf_type_is_void(const struct btf_type *t);
+bool btf_type_is_arena_ptr(const struct btf *btf, const struct btf_type *t);
 s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind);
 s32 bpf_find_btf_id(const char *name, u32 kind, struct btf **btf_p);
 struct btf *btf_get_module_btf(const struct module *module);

@@ -34,6 +34,7 @@
 #include <linux/init.h>
 #include <linux/mount.h>
 #include <linux/namei.h>
+#include <linux/pagemap.h>
 #include <linux/bio.h>		/* struct bio */
 #include <linux/prefetch.h>
 
@@ -859,7 +860,8 @@ bl_pg_init_read(struct nfs_pageio_descriptor *pgio, struct nfs_page *req)
 
 	if (pgio->pg_lseg &&
 		test_bit(NFS_LSEG_UNAVAILABLE, &pgio->pg_lseg->pls_flags)) {
-		pnfs_error_mark_layout_for_return(pgio->pg_inode, pgio->pg_lseg);
+		pnfs_error_mark_layout_for_return(pgio->pg_inode, pgio->pg_lseg,
+						  NULL);
 		pnfs_set_lo_fail(pgio->pg_lseg);
 		nfs_pageio_reset_read_mds(pgio);
 	}
@@ -921,7 +923,8 @@ bl_pg_init_write(struct nfs_pageio_descriptor *pgio, struct nfs_page *req)
 	if (pgio->pg_lseg &&
 		test_bit(NFS_LSEG_UNAVAILABLE, &pgio->pg_lseg->pls_flags)) {
 
-		pnfs_error_mark_layout_for_return(pgio->pg_inode, pgio->pg_lseg);
+		pnfs_error_mark_layout_for_return(pgio->pg_inode, pgio->pg_lseg,
+						  NULL);
 		pnfs_set_lo_fail(pgio->pg_lseg);
 		nfs_pageio_reset_write_mds(pgio);
 	}

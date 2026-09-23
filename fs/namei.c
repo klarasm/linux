@@ -658,7 +658,7 @@ int inode_permission(struct mnt_idmap *idmap,
 	if (unlikely(retval))
 		return retval;
 
-	return security_inode_permission(inode, mask);
+	return security_inode_permission(idmap, inode, mask);
 }
 EXPORT_SYMBOL(inode_permission);
 
@@ -695,7 +695,7 @@ static __always_inline int lookup_inode_permission_may_exec(struct mnt_idmap *id
 	if (unlikely(((inode->i_mode & 0111) != 0111) || !no_acl_inode(inode)))
 		return inode_permission(idmap, inode, mask);
 
-	return security_inode_permission(inode, mask);
+	return security_inode_permission(idmap, inode, mask);
 }
 
 /**
@@ -4188,7 +4188,7 @@ int vfs_create(struct mnt_idmap *idmap, struct dentry *dentry, umode_t mode,
 		return -EACCES;	/* shouldn't it be ENOSYS? */
 
 	mode = vfs_prepare_mode(idmap, dir, mode, S_IALLUGO, S_IFREG);
-	error = security_inode_create(dir, dentry, mode);
+	error = security_inode_create(idmap, dir, dentry, mode);
 	if (error)
 		return error;
 	error = try_break_deleg(dir, LEASE_BREAK_DIR_CREATE, di);
@@ -4212,7 +4212,7 @@ int vfs_mkobj(struct dentry *dentry, umode_t mode,
 
 	mode &= S_IALLUGO;
 	mode |= S_IFREG;
-	error = security_inode_create(dir, dentry, mode);
+	error = security_inode_create(&nop_mnt_idmap, dir, dentry, mode);
 	if (error)
 		return error;
 	error = f(dentry, mode, arg);
@@ -4328,7 +4328,7 @@ static int may_o_create(struct mnt_idmap *idmap,
 	if (error)
 		return error;
 
-	return security_inode_create(dir->dentry->d_inode, dentry, mode);
+	return security_inode_create(idmap, dir->dentry->d_inode, dentry, mode);
 }
 
 /**
@@ -4789,6 +4789,7 @@ finish_lookup:
 static int do_open(struct nameidata *nd,
 		   struct file *file, const struct open_flags *op)
 {
+	struct vfsmount *mnt;
 	struct mnt_idmap *idmap;
 	int open_flag = op->open_flag;
 	bool do_truncate;
@@ -4830,11 +4831,17 @@ static int do_open(struct nameidata *nd,
 		error = mnt_want_write(nd->path.mnt);
 		if (error)
 			return error;
+		/*
+		 * A dedicated reference is needed because after the call to
+		 * vfs_open_consume() we no longer own the reference in nd->path.mnt
+		 * while we need to undo write acess below.
+		 */
+		mnt = mntget(nd->path.mnt);
 		do_truncate = true;
 	}
 	error = may_open(idmap, &nd->path, acc_mode, open_flag);
 	if (!error && !(file->f_mode & FMODE_OPENED))
-		error = vfs_open(&nd->path, file);
+		error = vfs_open_consume(&nd->path, file);
 	if (!error)
 		error = security_file_post_open(file, op->acc_mode);
 	if (!error && do_truncate)
@@ -4843,8 +4850,10 @@ static int do_open(struct nameidata *nd,
 		WARN_ON(1);
 		error = -EINVAL;
 	}
-	if (do_truncate)
-		mnt_drop_write(nd->path.mnt);
+	if (do_truncate) {
+		mnt_drop_write(mnt);
+		mntput(mnt);
+	}
 	return error;
 }
 
@@ -5211,6 +5220,8 @@ struct file *dentry_create(struct path *path, int flags, umode_t mode,
 		error = vfs_create(mnt_idmap(path->mnt), path->dentry, mode, NULL);
 		if (!error)
 			error = vfs_open(path, file);
+		if (!error)
+			file->f_mode |= FMODE_CREATED;
 	}
 	if (unlikely(error))
 		return ERR_PTR(error);
@@ -5258,7 +5269,7 @@ int vfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
 	if (error)
 		return error;
 
-	error = security_inode_mknod(dir, dentry, mode, dev);
+	error = security_inode_mknod(idmap, dir, dentry, mode, dev);
 	if (error)
 		return error;
 
@@ -5395,7 +5406,7 @@ struct dentry *vfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 		goto err;
 
 	mode = vfs_prepare_mode(idmap, dir, mode, S_IRWXUGO | S_ISVTX, S_IFDIR);
-	error = security_inode_mkdir(dir, dentry, mode);
+	error = security_inode_mkdir(idmap, dir, dentry, mode);
 	if (error)
 		goto err;
 
@@ -5783,7 +5794,7 @@ int vfs_symlink(struct mnt_idmap *idmap, struct inode *dir,
 	if (!dir->i_op->symlink)
 		return -EPERM;
 
-	error = security_inode_symlink(dir, dentry, oldname);
+	error = security_inode_symlink(idmap, dir, dentry, oldname);
 	if (error)
 		return error;
 
@@ -5907,7 +5918,7 @@ int vfs_link(struct dentry *old_dentry, struct mnt_idmap *idmap,
 	if (S_ISDIR(inode->i_mode))
 		return -EPERM;
 
-	error = security_inode_link(old_dentry, dir, new_dentry);
+	error = security_inode_link(idmap, old_dentry, dir, new_dentry);
 	if (error)
 		return error;
 
