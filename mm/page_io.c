@@ -253,8 +253,18 @@ int swap_writeout(struct swap_io_ctx *ctx, struct folio *folio)
 	 * yet, so look the device up from the entry.
 	 */
 	if (unlikely(__swap_entry_to_info(folio->swap)->flags & SWP_XSWAP)) {
-		folio_mark_dirty(folio);
-		return AOP_WRITEPAGE_ACTIVATE;
+		swp_entry_t entry = folio->swap;
+		swp_entry_t phys;
+
+		/* The pool refused it: fall back to a real swap device. */
+		phys = xswap_backend_alloc(entry);
+		if (!phys.val) {
+			folio_mark_dirty(folio);
+			return AOP_WRITEPAGE_ACTIVATE;
+		}
+
+		__swap_writeout(ctx, folio, phys);
+		return 0;
 	}
 
 	__swap_writeout(ctx, folio, folio->swap);
