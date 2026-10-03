@@ -1003,7 +1003,7 @@ static bool zswap_decompress(struct zswap_entry *entry, struct folio *folio)
  * freed.
  */
 static int zswap_writeback_entry(struct zswap_entry *entry,
-				 swp_entry_t swpentry)
+				 swp_entry_t swpentry, bool may_enter_fs)
 {
 	struct xarray *tree;
 	pgoff_t offset = swp_offset(swpentry);
@@ -1056,7 +1056,7 @@ static int zswap_writeback_entry(struct zswap_entry *entry,
 
 	/* Reserve the destination before dropping the zswap copy. */
 	if (is_xswap) {
-		phys = xswap_backend_alloc(swpentry, 0);
+		phys = xswap_backend_alloc(swpentry, 0, may_enter_fs);
 		if (!phys.val) {
 			ret = -ENOMEM;
 			goto err;
@@ -1134,11 +1134,18 @@ err:
  *    can expect from writeback. We scale down the number of objects available
  *    for reclaim by this ratio.
  */
+
+struct zswap_shrink_arg {
+	bool	*swapcache_hit;	/* page was already in the swap cache */
+	bool	may_enter_fs;
+};
+
 static enum lru_status shrink_memcg_cb(struct list_head *item, struct list_lru_one *l,
 				       void *arg)
 {
+	struct zswap_shrink_arg *shrinking = arg;
 	struct zswap_entry *entry = container_of(item, struct zswap_entry, lru);
-	bool *encountered_page_in_swapcache = (bool *)arg;
+	bool *encountered_page_in_swapcache = shrinking->swapcache_hit;
 	swp_entry_t swpentry;
 	enum lru_status ret = LRU_REMOVED_RETRY;
 	int writeback_result;
@@ -1193,7 +1200,8 @@ static enum lru_status shrink_memcg_cb(struct list_head *item, struct list_lru_o
 	 */
 	spin_unlock(&l->lock);
 
-	writeback_result = zswap_writeback_entry(entry, swpentry);
+	writeback_result = zswap_writeback_entry(entry, swpentry,
+						 shrinking->may_enter_fs);
 
 	if (writeback_result) {
 		zswap_reject_reclaim_fail++;
@@ -1220,6 +1228,7 @@ static unsigned long zswap_shrinker_scan(struct shrinker *shrinker,
 {
 	unsigned long shrink_ret;
 	bool encountered_page_in_swapcache = false;
+	struct zswap_shrink_arg shrinking = {};
 
 	if (!zswap_shrinker_enabled ||
 			!mem_cgroup_zswap_writeback_enabled(sc->memcg)) {
@@ -1227,8 +1236,10 @@ static unsigned long zswap_shrinker_scan(struct shrinker *shrinker,
 		return SHRINK_STOP;
 	}
 
+	shrinking.swapcache_hit = &encountered_page_in_swapcache;
+	shrinking.may_enter_fs = !!(sc->gfp_mask & __GFP_FS);
 	shrink_ret = list_lru_shrink_walk(&zswap_list_lru, sc, &shrink_memcg_cb,
-		&encountered_page_in_swapcache);
+		&shrinking);
 
 	if (encountered_page_in_swapcache)
 		return SHRINK_STOP;
@@ -1332,8 +1343,11 @@ static struct shrinker *zswap_alloc_shrinker(void)
  * were scanned but none could be written back, or -ENOENT if @memcg has
  * writeback disabled, is a zombie cgroup, or has empty zswap LRUs.
  */
-static int shrink_memcg(struct mem_cgroup *memcg)
+static int shrink_memcg(struct mem_cgroup *memcg, bool may_enter_fs)
 {
+	struct zswap_shrink_arg shrinking = {
+		.may_enter_fs = may_enter_fs,
+	};
 	int nid, shrunk = 0, scanned = 0;
 
 	if (!mem_cgroup_zswap_writeback_enabled(memcg))
@@ -1350,7 +1364,8 @@ static int shrink_memcg(struct mem_cgroup *memcg)
 		unsigned long nr_to_walk = SWAP_CLUSTER_MAX;
 
 		shrunk += list_lru_walk_one(&zswap_list_lru, nid, memcg,
-					    &shrink_memcg_cb, NULL, &nr_to_walk);
+					    &shrink_memcg_cb, &shrinking,
+					    &nr_to_walk);
 		scanned += SWAP_CLUSTER_MAX - nr_to_walk;
 	}
 
@@ -1427,7 +1442,7 @@ static void shrink_worker(struct work_struct *w)
 			goto resched;
 		}
 
-		ret = shrink_memcg(memcg);
+		ret = shrink_memcg(memcg, true);
 		/* drop the extra reference */
 		mem_cgroup_put(memcg);
 
@@ -1544,7 +1559,7 @@ compress_failed:
 	return false;
 }
 
-bool zswap_store(struct folio *folio)
+bool zswap_store(struct folio *folio, bool may_enter_fs)
 {
 	long nr_pages = folio_nr_pages(folio);
 	swp_entry_t swp = folio->swap;
@@ -1563,7 +1578,7 @@ bool zswap_store(struct folio *folio)
 	objcg = get_obj_cgroup_from_folio(folio);
 	if (objcg && !obj_cgroup_may_zswap(objcg)) {
 		memcg = get_mem_cgroup_from_objcg(objcg);
-		if (shrink_memcg(memcg)) {
+		if (shrink_memcg(memcg, may_enter_fs)) {
 			mem_cgroup_put(memcg);
 			goto put_objcg;
 		}
