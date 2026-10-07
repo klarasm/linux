@@ -477,6 +477,9 @@ xrep_xattr_recover_sf(
 		if (xchk_should_terminate(sc, &error))
 			return error;
 
+		if ((unsigned char *)(sfe + 1) >= end)
+			break;
+
 		next = xfs_attr_sf_nextentry(sfe);
 		if ((unsigned char *)next > end)
 			break;
@@ -1473,6 +1476,9 @@ xrep_xattr_rebuild_tree(
 	error = xrep_xattr_finalize_tempfile(rx);
 	if (error)
 		return error;
+
+	if (rx->live_update_aborted)
+		return -EIO;
 
 	/*
 	 * Exchange the blocks mapped by the tempfile's attr fork with the file
