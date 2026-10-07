@@ -200,6 +200,7 @@ enum {
 	SWP_STABLE_WRITES = (1 << 11),	/* no overwrite PG_writeback pages */
 	SWP_SYNCHRONOUS_IO = (1 << 12),	/* synchronous IO is efficient */
 	SWP_HIBERNATION = (1 << 13),	/* pinned for hibernation */
+	SWP_XSWAP	= (1 << 14),	/* extendable swap device */
 					/* add others here before... */
 };
 
@@ -238,15 +239,25 @@ struct swap_info_struct {
 	signed short	prio;		/* swap priority of this type */
 	struct plist_node list;		/* entry in swap_active_head */
 	signed char	type;		/* strange name for an index */
-	unsigned int	max;		/* size of this swap device */
+	unsigned long	max;		/* size of this swap device */
 	struct swap_cluster_info *cluster_info; /* array, one entry per cluster */
+#ifdef CONFIG_XSWAP
+	struct vm_struct	*cluster_vm;	/* VM_SPARSE area for cluster_info */
+	unsigned long		nr_clusters_max;/* total clusters in the xswap address space */
+	unsigned long		nr_clusters_mapped; /* currently mapped cluster count */
+	struct work_struct	xswap_shrink_work; /* deferred shrink trigger */
+	struct mutex		xswap_lock;	/* serialize map/unmap operations */
+	struct dentry		*xswap_debugfs;	/* mapped range and counters */
+	atomic_long_t		xswap_grows;	/* grow operations so far */
+	atomic_long_t		xswap_shrinks;	/* shrink operations so far */
+#endif
 	struct list_head free_clusters; /* free clusters list */
 	struct list_head full_clusters; /* full clusters list */
 	struct list_head nonfull_clusters[SWAP_NR_ORDERS];
 					/* list of cluster that contains at least one free slot */
 	struct list_head frag_clusters[SWAP_NR_ORDERS];
 					/* list of cluster that are fragmented or contented */
-	unsigned int pages;		/* total of usable pages of swap */
+	unsigned long pages;		/* total of usable pages of swap */
 	atomic_long_t inuse_pages;	/* number of those currently in use */
 	struct swap_sequential_cluster *global_cluster; /* Use one global cluster for rotating device */
 	spinlock_t global_cluster_lock;	/* Serialize usage of global cluster */
@@ -377,6 +388,13 @@ void free_folio_and_swap_cache(struct folio *folio);
 void free_pages_and_swap_cache(struct encoded_page **, int);
 /* linux/mm/swapfile.c */
 extern atomic_long_t nr_swap_pages;
+extern atomic_t nr_real_swapfiles;
+extern atomic_t nr_xswap_files;
+
+static inline bool xswap_enabled(void)
+{
+	return atomic_read(&nr_xswap_files) > 0;
+}
 extern long total_swap_pages;
 extern atomic_t nr_rotate_swap;
 
@@ -404,7 +422,7 @@ extern int __swap_count(swp_entry_t entry);
 extern bool swap_entry_swapped(struct swap_info_struct *si, swp_entry_t entry);
 extern int swp_swapcount(swp_entry_t entry);
 extern struct swap_info_struct *get_swap_device(swp_entry_t entry);
-sector_t swap_folio_sector(struct folio *folio);
+sector_t swap_entry_sector(swp_entry_t entry);
 
 /*
  * If there is an existing swap slot reference (swap entry) and the caller
@@ -518,33 +536,77 @@ static inline void folio_throttle_swaprate(struct folio *folio, gfp_t gfp)
 #endif
 
 #if defined(CONFIG_MEMCG) && defined(CONFIG_SWAP)
-int __mem_cgroup_try_charge_swap(struct folio *folio);
-static inline int mem_cgroup_try_charge_swap(struct folio *folio)
+bool __mem_cgroup_swap_get(struct folio *folio, unsigned short *id);
+static inline bool mem_cgroup_swap_get(struct folio *folio, unsigned short *id)
+{
+	if (mem_cgroup_disabled())
+		return false;
+	return __mem_cgroup_swap_get(folio, id);
+}
+
+int __mem_cgroup_swap_charge(unsigned short id, unsigned int nr_pages);
+static inline int mem_cgroup_swap_charge(unsigned short id,
+					 unsigned int nr_pages)
 {
 	if (mem_cgroup_disabled())
 		return 0;
-	return __mem_cgroup_try_charge_swap(folio);
+	return __mem_cgroup_swap_charge(id, nr_pages);
 }
 
-extern void __mem_cgroup_uncharge_swap(unsigned short id, unsigned int nr_pages);
-static inline void mem_cgroup_uncharge_swap(unsigned short id, unsigned int nr_pages)
+void __mem_cgroup_swap_record(struct folio *folio, unsigned short id);
+static inline void mem_cgroup_swap_record(struct folio *folio,
+					  unsigned short id)
 {
 	if (mem_cgroup_disabled())
 		return;
-	__mem_cgroup_uncharge_swap(id, nr_pages);
+	__mem_cgroup_swap_record(folio, id);
+}
+
+void __mem_cgroup_swap_uncharge(unsigned short id, unsigned int nr_pages);
+static inline void mem_cgroup_swap_uncharge(unsigned short id,
+					    unsigned int nr_pages)
+{
+	if (mem_cgroup_disabled())
+		return;
+	__mem_cgroup_swap_uncharge(id, nr_pages);
+}
+
+void __mem_cgroup_swap_put(unsigned short id, unsigned int nr_pages);
+static inline void mem_cgroup_swap_put(unsigned short id,
+				       unsigned int nr_pages)
+{
+	if (mem_cgroup_disabled())
+		return;
+	__mem_cgroup_swap_put(id, nr_pages);
 }
 
 long mem_cgroup_get_folio_swap_margin(const struct folio *folio);
 long mem_cgroup_get_nr_swap_pages(const struct mem_cgroup *memcg);
 bool mem_cgroup_swap_full(const struct folio *folio);
 #else
-static inline int mem_cgroup_try_charge_swap(struct folio *folio)
+static inline bool mem_cgroup_swap_get(struct folio *folio, unsigned short *id)
+{
+	return false;
+}
+
+static inline int mem_cgroup_swap_charge(unsigned short id,
+					 unsigned int nr_pages)
 {
 	return 0;
 }
 
-static inline void mem_cgroup_uncharge_swap(unsigned short id,
+static inline void mem_cgroup_swap_record(struct folio *folio,
+					  unsigned short id)
+{
+}
+
+static inline void mem_cgroup_swap_uncharge(unsigned short id,
 					    unsigned int nr_pages)
+{
+}
+
+static inline void mem_cgroup_swap_put(unsigned short id,
+				       unsigned int nr_pages)
 {
 }
 

@@ -25,7 +25,7 @@ struct zswap_lruvec_state {
 };
 
 unsigned long zswap_total_pages(void);
-bool zswap_store(struct folio *folio);
+bool zswap_store(struct folio *folio, bool may_enter_fs);
 int zswap_load(struct folio *folio);
 void zswap_invalidate(int type, pgoff_t offset, unsigned long nr_entries);
 int zswap_swapon(int type, unsigned long nr_pages);
@@ -39,7 +39,7 @@ bool zswap_never_enabled(void);
 
 struct zswap_lruvec_state {};
 
-static inline bool zswap_store(struct folio *folio)
+static inline bool zswap_store(struct folio *folio, bool may_enter_fs)
 {
 	return false;
 }

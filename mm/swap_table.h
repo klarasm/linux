@@ -28,7 +28,7 @@ struct swap_memcg_table {
  * NULL:     |---------------- 0 ---------------| - Free slot
  * Shadow:   |SWAP_COUNT|Z|---- SHADOW_VAL ---|1| - Swapped out slot
  * PFN:      |SWAP_COUNT|Z|------ PFN -------|10| - Cached slot
- * Pointer:  |----------- Pointer ----------|100| - (Unused)
+ * Pointer:  |C|-- xswap type/offset --|100| - Backend slot
  * Bad:      |------------- 1 -------------|1000| - Bad slot
  *
  * COUNT is `SWP_TB_COUNT_BITS` long, Z is the `SWP_TB_ZERO_FLAG` bit,
@@ -49,9 +49,9 @@ struct swap_memcg_table {
  * - PFN: Swap slot is in use, and cached. Memcg info is recorded on the page
  *   struct.
  *
- * - Pointer: Unused yet. `0b100` is reserved for potential pointer usage
- *   because only the lower three bits can be used as a marker for 8 bytes
- *   aligned pointers.
+ * - Pointer: A physical swap slot backed by an xswap entry. `0b100` marks it
+ *   and the xswap type and offset go above it; C is SWP_RMAP_CACHE_ONLY. See
+ *   the layout in the CONFIG_XSWAP block below.
  *
  * - Bad: Swap slot is reserved, protects swap header or holes on swap devices.
  */
@@ -80,6 +80,90 @@ struct swap_memcg_table {
 
 /* Bad slot: ends with 0b1000 and rests of bits are all 1 */
 #define SWP_TB_BAD		((~0UL) << 3)
+
+#ifdef CONFIG_XSWAP
+/*
+ * Pointer-tagged swap table entry: the reverse map from a physical slot to
+ * the xswap entry it backs. Layout:
+ *
+ *   Pointer:  |C| xswap_type(7) | xswap_offset(53) |100|
+ *
+ * The low three bits identify the entry: 0b000 is a free or bad slot, a
+ * shadow entry ends in 0b01 and a cached folio in 0b10, which leaves
+ * 0b100 as the only marker still free. C is SWP_RMAP_CACHE_ONLY, the one
+ * bit left at the top.
+ */
+#define SWP_TB_PTR_MARK			0b100UL
+#define SWP_TB_PTR_OFF_BITS		53
+#define SWP_TB_PTR_TYPE_BITS		7
+#define SWP_TB_PTR_OFF_SHIFT		3
+#define SWP_TB_PTR_TYPE_SHIFT		(SWP_TB_PTR_OFF_SHIFT + \
+					 SWP_TB_PTR_OFF_BITS)
+#define SWP_TB_PTR_OFF_MASK		((1UL << SWP_TB_PTR_OFF_BITS) - 1)
+#define SWP_TB_PTR_TYPE_MASK		((1UL << SWP_TB_PTR_TYPE_BITS) - 1)
+
+/*
+ * Set when the xswap entry owning a physical slot has swap count 0 but its
+ * folio is still in the swap cache. The slot is redundant then, and the
+ * physical reclaim scanner may free it. The bit sits on the physical slot
+ * so that scanner can read it without the xswap cluster lock.
+ */
+#define SWP_RMAP_CACHE_ONLY		(1UL << (BITS_PER_LONG - 1))
+
+/* swp_type() must fit, and SWP_RMAP_CACHE_ONLY must own the top bit. */
+static_assert(BITS_PER_LONG - SWP_TYPE_SHIFT <= SWP_TB_PTR_TYPE_BITS,
+	      "xswap rmap type field is too narrow");
+static_assert(SWP_TB_PTR_TYPE_SHIFT + SWP_TB_PTR_TYPE_BITS == BITS_PER_LONG - 1,
+	      "xswap rmap fields do not pack");
+
+static inline void swap_rmap_mark_cache_only(struct swap_cluster_info *ci,
+					     unsigned int off)
+{
+	atomic_long_t *table = rcu_dereference_check(ci->table, true);
+
+	atomic_long_or(SWP_RMAP_CACHE_ONLY, &table[off]);
+}
+
+static inline void swap_rmap_clear_cache_only(struct swap_cluster_info *ci,
+					      unsigned int off)
+{
+	atomic_long_t *table = rcu_dereference_check(ci->table, true);
+
+	atomic_long_and(~SWP_RMAP_CACHE_ONLY, &table[off]);
+}
+
+static inline bool swp_tb_is_pointer(unsigned long swp_tb)
+{
+	return (swp_tb & (BIT(3) - 1)) == SWP_TB_PTR_MARK;
+}
+
+static inline unsigned long xswap_entry_to_rmap(swp_entry_t entry)
+{
+	unsigned long type = swp_type(entry);
+	unsigned long off = swp_offset(entry);
+
+	VM_WARN_ON_ONCE(type > SWP_TB_PTR_TYPE_MASK);
+	VM_WARN_ON_ONCE(off > SWP_TB_PTR_OFF_MASK);
+	return (type << SWP_TB_PTR_TYPE_SHIFT) |
+	       (off << SWP_TB_PTR_OFF_SHIFT) |
+	       SWP_TB_PTR_MARK;
+}
+
+static inline swp_entry_t xswap_rmap_to_entry(unsigned long swp_tb)
+{
+	unsigned long type = (swp_tb >> SWP_TB_PTR_TYPE_SHIFT) &
+			     SWP_TB_PTR_TYPE_MASK;
+	unsigned long off = (swp_tb >> SWP_TB_PTR_OFF_SHIFT) &
+			    SWP_TB_PTR_OFF_MASK;
+
+	return swp_entry(type, off);
+}
+#else /* !CONFIG_XSWAP */
+static inline bool swp_tb_is_pointer(unsigned long swp_tb)
+{
+	return false;
+}
+#endif /* CONFIG_XSWAP */
 
 /* Macro for shadow offset calculation */
 #define SWAP_COUNT_SHIFT	SWP_TB_FLAGS_BITS
