@@ -1197,11 +1197,17 @@ err:
  * With vswap disabled, all zswap entries use directly mapped physical swap
  * entries. With vswap enabled, such entries are rare.
  *
- * A zswap-backed vswap entry needs physical swap capacity for writeback.
+ * A zswap-backed vswap entry needs physical swap capacity for writeback
+ * and cgroup swap margin where applicable. @memcg may be NULL to check
+ * device capacity alone.
  */
-static bool zswap_writeback_possible(void)
+static bool zswap_writeback_possible(struct mem_cgroup *memcg)
 {
-	return !vswap_is_enabled() || get_nr_swap_pages() > 0;
+	if (!vswap_is_enabled())
+		return true;
+	if (!memcg)
+		return get_nr_swap_pages() > 0;
+	return mem_cgroup_get_nr_swap_pages(memcg) > 0;
 }
 
 /*
@@ -1341,7 +1347,7 @@ static unsigned long zswap_shrinker_count(struct shrinker *shrinker,
 	if (!zswap_shrinker_enabled || !mem_cgroup_zswap_writeback_enabled(memcg))
 		return 0;
 
-	if (!zswap_writeback_possible())
+	if (!zswap_writeback_possible(memcg))
 		return 0;
 
 	/*
@@ -1428,7 +1434,7 @@ static struct shrinker *zswap_alloc_shrinker(void)
  * writeback disabled, is a zombie cgroup, or has empty zswap LRUs.
  *
  * Also returns -ENOENT when vswap is enabled and there is no physical
- * swap to write back to.
+ * swap for @memcg to write back to.
  */
 static int shrink_memcg(struct mem_cgroup *memcg)
 {
@@ -1437,7 +1443,7 @@ static int shrink_memcg(struct mem_cgroup *memcg)
 	if (!mem_cgroup_zswap_writeback_enabled(memcg))
 		return -ENOENT;
 
-	if (!zswap_writeback_possible())
+	if (!zswap_writeback_possible(memcg))
 		return -ENOENT;
 
 	/*
@@ -1468,7 +1474,7 @@ static void shrink_worker(struct work_struct *w)
 	int ret, failures = 0, attempts = 0;
 	unsigned long thr;
 
-	if (!zswap_writeback_possible())
+	if (!zswap_writeback_possible(NULL))
 		return;
 
 	/* Reclaim down to the accept threshold */
@@ -1549,7 +1555,7 @@ static void shrink_worker(struct work_struct *w)
 			break;
 resched:
 		cond_resched();
-	} while (zswap_total_pages() > thr && zswap_writeback_possible());
+	} while (zswap_total_pages() > thr && zswap_writeback_possible(NULL));
 }
 
 /*********************************
