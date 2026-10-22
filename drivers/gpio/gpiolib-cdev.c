@@ -234,13 +234,6 @@ static long linehandle_ioctl(struct file *file, unsigned int cmd,
 
 		return 0;
 	case GPIOHANDLE_SET_LINE_VALUES_IOCTL:
-		/*
-		 * All line descriptors were created at once with the same
-		 * flags so just check if the first one is really output.
-		 */
-		if (!test_bit(GPIOD_FLAG_IS_OUT, &lh->descs[0]->flags))
-			return -EPERM;
-
 		if (copy_from_user(&ghd, ip, sizeof(ghd)))
 			return -EFAULT;
 
@@ -715,6 +708,8 @@ static int hte_edge_setup(struct line *line, u64 eflags)
 			   line->desc);
 
 	ret = hte_ts_get(NULL, hdesc, 0);
+	if (ret == -ENODEV)
+		return -EOPNOTSUPP;
 	if (ret)
 		return ret;
 
@@ -1228,11 +1223,6 @@ static void gpio_v2_line_config_flags_to_desc_flags(u64 lflags,
 
 	assign_bit(GPIOD_FLAG_ACTIVE_LOW, &flags,
 		   lflags & GPIO_V2_LINE_FLAG_ACTIVE_LOW);
-
-	if (lflags & GPIO_V2_LINE_FLAG_OUTPUT)
-		set_bit(GPIOD_FLAG_IS_OUT, &flags);
-	else if (lflags & GPIO_V2_LINE_FLAG_INPUT)
-		clear_bit(GPIOD_FLAG_IS_OUT, &flags);
 
 	assign_bit(GPIOD_FLAG_EDGE_RISING, &flags,
 		   lflags & GPIO_V2_LINE_FLAG_EDGE_RISING);

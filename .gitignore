@@ -12,6 +12,7 @@
 #
 .*
 *.a
+*.apispec.h
 *.asn1.[ch]
 *.bc
 *.bin
@@ -73,6 +74,7 @@ modules.order
 /vmlinux.symvers
 /vmlinux.thinlto-index
 /vmlinux.unstripped
+/vmlinux.BTF.inline
 /vmlinux-gdb.py
 /vmlinuz
 /System.map
