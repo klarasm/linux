@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/acpi.h>
 #include <linux/acpi_iort.h>
+#include <linux/acpi_iovt.h>
 #include <linux/acpi_rimt.h>
 #include <linux/acpi_viot.h>
 #include <linux/iommu.h>
@@ -1626,6 +1627,8 @@ static int acpi_iommu_configure_id(struct device *dev, const u32 *id_in)
 	if (err && err != -EPROBE_DEFER)
 		err = rimt_iommu_configure_id(dev, id_in);
 	if (err && err != -EPROBE_DEFER)
+		err = iovt_iommu_configure_id(dev, id_in);
+	if (err && err != -EPROBE_DEFER)
 		err = viot_iommu_configure(dev);
 
 	mutex_unlock(&iommu_probe_device_lock);
@@ -1763,6 +1766,7 @@ static bool acpi_device_enumeration_by_parent(struct acpi_device *device)
 		/* Non-conforming _HID for Cirrus Logic already released */
 		{"CLSA0100", },
 		{"CLSA0101", },
+		{"CLSA0102", },
 	/*
 	 * Some ACPI devs contain SerialBus resources even though they are not
 	 * attached to a serial bus at all.
