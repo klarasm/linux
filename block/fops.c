@@ -6,6 +6,7 @@
  */
 #include <linux/init.h>
 #include <linux/mm.h>
+#include <linux/writeback.h>
 #include <linux/blkdev.h>
 #include <linux/blk-integrity.h>
 #include <linux/buffer_head.h>
@@ -723,6 +724,9 @@ static ssize_t blkdev_buffered_write(struct kiocb *iocb, struct iov_iter *from)
 {
 	struct inode *inode = bdev_file_inode(iocb->ki_filp);
 	ssize_t ret;
+
+	if (unlikely(iov_iter_is_dmabuf_map(from)))
+		return -EOPNOTSUPP;
 
 	/* Buffered fallback waits for writeback, which NOWAIT cannot allow. */
 	if (iocb->ki_flags & IOCB_NOWAIT)
